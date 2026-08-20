@@ -172,13 +172,13 @@ HGLOBAL CreateFileDropClipboardData(const std::filesystem::path& path) {
     return memory;
 }
 
-void FreeClipboardCandidate(HBITMAP bitmap) {
+void FreeBitmapCandidate(HBITMAP bitmap) {
     if (bitmap) {
         DeleteObject(bitmap);
     }
 }
 
-void FreeClipboardCandidate(HGLOBAL memory) {
+void FreeGlobalCandidate(HGLOBAL memory) {
     if (memory) {
         GlobalFree(memory);
     }
@@ -330,24 +330,24 @@ bool CopyBitmapToClipboard(
     HGLOBAL fileDrop = CreateFileDropClipboardData(savedFile);
 
     if (!bitmapCopy && !dibData && !pngData) {
-        FreeClipboardCandidate(fileDrop);
+        FreeGlobalCandidate(fileDrop);
         return false;
     }
 
     if (!OpenClipboard(owner)) {
-        FreeClipboardCandidate(bitmapCopy);
-        FreeClipboardCandidate(dibData);
-        FreeClipboardCandidate(pngData);
-        FreeClipboardCandidate(fileDrop);
+        FreeBitmapCandidate(bitmapCopy);
+        FreeGlobalCandidate(dibData);
+        FreeGlobalCandidate(pngData);
+        FreeGlobalCandidate(fileDrop);
         return false;
     }
 
     if (!EmptyClipboard()) {
         CloseClipboard();
-        FreeClipboardCandidate(bitmapCopy);
-        FreeClipboardCandidate(dibData);
-        FreeClipboardCandidate(pngData);
-        FreeClipboardCandidate(fileDrop);
+        FreeBitmapCandidate(bitmapCopy);
+        FreeGlobalCandidate(dibData);
+        FreeGlobalCandidate(pngData);
+        FreeGlobalCandidate(fileDrop);
         return false;
     }
 
@@ -383,10 +383,10 @@ bool CopyBitmapToClipboard(
 
     CloseClipboard();
 
-    FreeClipboardCandidate(bitmapCopy);
-    FreeClipboardCandidate(dibData);
-    FreeClipboardCandidate(pngData);
-    FreeClipboardCandidate(fileDrop);
+    FreeBitmapCandidate(bitmapCopy);
+    FreeGlobalCandidate(dibData);
+    FreeGlobalCandidate(pngData);
+    FreeGlobalCandidate(fileDrop);
     return imagePlaced;
 }
 
