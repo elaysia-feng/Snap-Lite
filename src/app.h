@@ -2,6 +2,9 @@
 
 #include <windows.h>
 #include <shellapi.h>
+#include <objidl.h>
+#include <propidl.h>
+#include <gdiplus.h>
 
 namespace snaplite {
 
