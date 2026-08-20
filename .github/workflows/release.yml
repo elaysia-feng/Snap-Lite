@@ -16,8 +16,8 @@ jobs:
   release:
     runs-on: windows-latest
     env:
-      VERSION: 0.1.0-alpha
-      TAG: v0.1.0-alpha
+      VERSION: 0.2.0-alpha
+      TAG: v0.2.0-alpha
 
     steps:
       - name: Checkout
@@ -50,11 +50,15 @@ jobs:
           body: |
             Windows 11 x64 lightweight screenshot + pin tool.
 
-            Highlights:
-            - F1 smart region capture
-            - annotation editor
-            - F3 pin image
-            - clipboard formats for AI CLI image paste
+            v0.2.0-alpha highlights:
+            - Snipaste-style gray capture overlay
+            - blue resizable selection with 8 handles
+            - live pixel-size label
+            - floating annotation toolbar
+            - rectangle / arrow / pen / mosaic / text
+            - undo / redo
+            - pin / save / direct-copy actions
+            - clipboard formats compatible with AI CLI image paste
             - multi-monitor and Per-Monitor V2 DPI
           files: |
             dist/SnapLite.exe
