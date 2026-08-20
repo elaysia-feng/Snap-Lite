@@ -172,13 +172,15 @@ void SnipWindow::PaintMagnifier(HDC dc, POINT clientPoint) {
     constexpr int lensSize = sampleSize * zoom;
     constexpr int panelHeight = lensSize + 28;
 
-    int panelX = clientPoint.x + 24;
-    int panelY = clientPoint.y + 24;
+    const int clientX = static_cast<int>(clientPoint.x);
+    const int clientY = static_cast<int>(clientPoint.y);
+    int panelX = clientX + 24;
+    int panelY = clientY + 24;
     if (panelX + lensSize + 4 > screen_.width) {
-        panelX = clientPoint.x - lensSize - 28;
+        panelX = clientX - lensSize - 28;
     }
     if (panelY + panelHeight + 4 > screen_.height) {
-        panelY = clientPoint.y - panelHeight - 28;
+        panelY = clientY - panelHeight - 28;
     }
     panelX = std::max(4, panelX);
     panelY = std::max(4, panelY);
@@ -187,8 +189,8 @@ void SnipWindow::PaintMagnifier(HDC dc, POINT clientPoint) {
     const HGDIOBJ old = SelectObject(memory, capture_);
     SetStretchBltMode(dc, COLORONCOLOR);
 
-    const int sourceX = std::clamp(clientPoint.x - sampleRadius, 0, std::max(0, screen_.width - sampleSize));
-    const int sourceY = std::clamp(clientPoint.y - sampleRadius, 0, std::max(0, screen_.height - sampleSize));
+    const int sourceX = std::clamp(clientX - sampleRadius, 0, std::max(0, screen_.width - sampleSize));
+    const int sourceY = std::clamp(clientY - sampleRadius, 0, std::max(0, screen_.height - sampleSize));
 
     StretchBlt(
         dc,
@@ -218,7 +220,7 @@ void SnipWindow::PaintMagnifier(HDC dc, POINT clientPoint) {
     DeleteObject(centerPen);
     DeleteObject(border);
 
-    const COLORREF color = GetPixel(memory, clientPoint.x, clientPoint.y);
+    const COLORREF color = GetPixel(memory, clientX, clientY);
     SelectObject(memory, old);
     DeleteDC(memory);
 
