@@ -3,6 +3,7 @@
 #include <windows.h>
 
 #include <functional>
+#include <vector>
 
 #include "capture.h"
 
@@ -10,12 +11,41 @@ namespace snaplite {
 
 class SnipWindow {
 public:
-    using CaptureCallback = std::function<void(HBITMAP)>;
+    enum class FinishAction {
+        Copy,
+        Save,
+        Pin,
+    };
+
+    using CaptureCallback = std::function<void(HBITMAP, FinishAction)>;
 
     static bool Register(HINSTANCE instance);
     static bool Start(HINSTANCE instance, HWND owner, CaptureCallback callback);
 
 private:
+    enum class Tool {
+        None,
+        Rectangle,
+        Arrow,
+        Pen,
+        Mosaic,
+        Text,
+    };
+
+    enum class DragMode {
+        None,
+        NewSelection,
+        Move,
+        ResizeTopLeft,
+        ResizeTop,
+        ResizeTopRight,
+        ResizeRight,
+        ResizeBottomRight,
+        ResizeBottom,
+        ResizeBottomLeft,
+        ResizeLeft,
+    };
+
     SnipWindow(HINSTANCE instance, HWND owner, CaptureCallback callback);
     ~SnipWindow();
 
@@ -25,9 +55,38 @@ private:
     void UpdateHover();
     void Paint();
     void PaintMagnifier(HDC dc, POINT clientPoint);
-    void FinishSelection(const RECT& selection);
+    void PaintSelection(HDC dc);
+    void PaintToolbar(HDC dc);
+    void PaintToolbarIcon(HDC dc, int index, const RECT& rect, bool active);
+    void PaintPreview(HDC dc);
+
+    RECT ToolbarRect() const;
+    RECT NormalizedSelection() const;
+    DragMode HitSelection(POINT point) const;
+    int HitToolbar(POINT point) const;
+    void SetCursorForPoint(POINT point);
+
+    void BeginSelectionDrag(POINT point);
+    void UpdateSelectionDrag(POINT point);
+    void FinishSelectionDrag(POINT point);
+    void ClampSelection();
+    void ClearHistory();
+
+    void BeginEdit();
+    void Undo();
+    void Redo();
+    HBITMAP SnapshotSelection() const;
+    void RestoreSelection(HBITMAP snapshot);
+    void DrawShape(HDC dc, Tool tool, POINT from, POINT to);
+    void DrawPenSegment(POINT from, POINT to);
+    void ApplyMosaic(POINT point);
+
+    void BeginTextEdit(POINT point);
+    void CommitTextEdit();
+
+    void HandleToolbarClick(int index);
+    void Finish(FinishAction action);
     void CopyCurrentColor();
-    RECT CurrentFocusRect() const;
 
     HINSTANCE instance_{};
     HWND owner_{};
@@ -36,12 +95,28 @@ private:
     VirtualScreen screen_{};
     CaptureCallback callback_;
 
-    bool dragging_{false};
+    bool selected_{false};
     bool hasHover_{false};
-    POINT dragStart_{};
-    POINT dragCurrent_{};
+    bool edited_{false};
+    bool dragging_{false};
+    bool drawing_{false};
+    RECT selection_{};
     RECT hoverRect_{};
     RECT pressedHoverRect_{};
+    RECT dragOrigin_{};
+    POINT dragStart_{};
+    POINT dragCurrent_{};
+    DragMode dragMode_{DragMode::None};
+
+    Tool tool_{Tool::None};
+    POINT drawStart_{};
+    POINT drawCurrent_{};
+    std::vector<HBITMAP> undo_;
+    std::vector<HBITMAP> redo_;
+
+    HWND textEdit_{};
+    POINT textOrigin_{};
+    HFONT textFont_{};
 };
 
 }  // namespace snaplite
