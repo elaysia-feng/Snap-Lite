@@ -1,6 +1,8 @@
 #pragma once
 
 #include <windows.h>
+#include <objidl.h>
+#include <propidl.h>
 
 #include <filesystem>
 #include <string>
