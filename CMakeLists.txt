@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(SnapLite LANGUAGES CXX)
+project(SnapLite VERSION 0.1.0 LANGUAGES CXX)
 
 add_executable(SnapLite WIN32
     src/main.cpp
@@ -11,7 +11,11 @@ add_executable(SnapLite WIN32
 )
 
 target_compile_features(SnapLite PRIVATE cxx_std_17)
-target_compile_definitions(SnapLite PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_compile_definitions(
+    SnapLite PRIVATE
+    UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN
+    SNAP_LITE_VERSION=L"${PROJECT_VERSION}"
+)
 target_link_libraries(SnapLite PRIVATE user32 gdi32 gdiplus shell32 ole32 uuid)
 
 if(MSVC)
