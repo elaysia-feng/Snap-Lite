@@ -1,7 +1,6 @@
 #include "app.h"
 
 #include "capture.h"
-#include "editor_window.h"
 #include "pin_window.h"
 #include "snip_window.h"
 
@@ -54,7 +53,7 @@ bool App::Initialize() {
     if (!RegisterClassExW(&wc) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
         return false;
     }
-    if (!SnipWindow::Register(instance_) || !PinWindow::Register(instance_) || !EditorWindow::Register(instance_)) {
+    if (!SnipWindow::Register(instance_) || !PinWindow::Register(instance_)) {
         return false;
     }
 
@@ -154,11 +153,34 @@ void App::ShowTrayMenu() {
 }
 
 void App::StartSnip() {
-    const bool started = SnipWindow::Start(instance_, hwnd_, [this](HBITMAP bitmap) {
-        if (!EditorWindow::Open(instance_, bitmap, [this](HBITMAP edited) { CommitCapture(edited); })) {
-            ShowNotice(L"无法打开标注编辑器");
-        }
-    });
+    const bool started = SnipWindow::Start(
+        instance_,
+        hwnd_,
+        [this](HBITMAP bitmap, SnipWindow::FinishAction action) {
+            if (!bitmap) {
+                ShowNotice(L"截图失败");
+                return;
+            }
+
+            if (action == SnipWindow::FinishAction::Save) {
+                const auto path = NextScreenshotPath();
+                const bool saved = SaveBitmapPng(bitmap, path);
+                DeleteObject(bitmap);
+                if (saved) {
+                    const std::wstring message = L"截图已保存：\n" + path.wstring();
+                    ShowNotice(message.c_str());
+                } else {
+                    ShowNotice(L"截图保存失败");
+                }
+                return;
+            }
+
+            const bool pinAfter = action == SnipWindow::FinishAction::Pin;
+            CommitCapture(bitmap);
+            if (pinAfter) {
+                PinClipboard();
+            }
+        });
 
     if (!started) {
         ShowNotice(L"无法启动截图");
