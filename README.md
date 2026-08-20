@@ -4,6 +4,22 @@
 
 目标不是只做一个 `BitBlt` 截图 Demo，而是保留 Snipaste 类工具真正高频的能力，同时坚持：**原生、快速、低占用、无 Electron / Python / .NET Runtime**。
 
+## 下载
+
+优先从 GitHub Releases 获取预编译版本，不需要安装 CMake、Visual Studio 或其他运行时。
+
+首个测试版本：`v0.1.0-alpha`
+
+Release Assets：
+
+```text
+SnapLite.exe                         直接运行
+SnapLite-0.1.0-alpha-win-x64.zip    便携压缩包
+SHA256SUMS.txt                       文件校验
+```
+
+当前 Release 面向 **Windows 11 x64**。
+
 ## 当前已实现
 
 ### 截图
@@ -173,6 +189,7 @@ build/Release/SnapLite.exe
 ```text
 Snap-Lite/
 ├── .github/workflows/build.yml
+├── .github/workflows/release.yml
 ├── CMakeLists.txt
 ├── README.md
 └── src/
