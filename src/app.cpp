@@ -1,6 +1,7 @@
 #include "app.h"
 
 #include "capture.h"
+#include "editor_window.h"
 #include "pin_window.h"
 #include "snip_window.h"
 
@@ -53,7 +54,7 @@ bool App::Initialize() {
     if (!RegisterClassExW(&wc) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
         return false;
     }
-    if (!SnipWindow::Register(instance_) || !PinWindow::Register(instance_)) {
+    if (!SnipWindow::Register(instance_) || !PinWindow::Register(instance_) || !EditorWindow::Register(instance_)) {
         return false;
     }
 
@@ -153,7 +154,13 @@ void App::ShowTrayMenu() {
 }
 
 void App::StartSnip() {
-    if (!SnipWindow::Start(instance_, hwnd_, [this](HBITMAP bitmap) { CommitCapture(bitmap); })) {
+    const bool started = SnipWindow::Start(instance_, hwnd_, [this](HBITMAP bitmap) {
+        if (!EditorWindow::Open(instance_, bitmap, [this](HBITMAP edited) { CommitCapture(edited); })) {
+            ShowNotice(L"无法打开标注编辑器");
+        }
+    });
+
+    if (!started) {
         ShowNotice(L"无法启动截图");
     }
 }
