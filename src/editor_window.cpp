@@ -15,17 +15,6 @@ constexpr int kToolbarHeight = 44;
 constexpr int kButtonWidth = 72;
 constexpr int kToolbarButtons = 9;
 
-const wchar_t* ToolLabel(EditorWindow::Tool tool) {
-    switch (tool) {
-    case EditorWindow::Tool::Rectangle: return L"矩形";
-    case EditorWindow::Tool::Ellipse: return L"椭圆";
-    case EditorWindow::Tool::Arrow: return L"箭头";
-    case EditorWindow::Tool::Pen: return L"画笔";
-    case EditorWindow::Tool::Mosaic: return L"马赛克";
-    }
-    return L"";
-}
-
 void DeleteBitmaps(std::vector<HBITMAP>& bitmaps) {
     for (HBITMAP bitmap : bitmaps) {
         if (bitmap) {
@@ -33,6 +22,15 @@ void DeleteBitmaps(std::vector<HBITMAP>& bitmaps) {
         }
     }
     bitmaps.clear();
+}
+
+RECT NormalizeRect(POINT a, POINT b) {
+    return {
+        std::min(a.x, b.x),
+        std::min(a.y, b.y),
+        std::max(a.x, b.x),
+        std::max(a.y, b.y),
+    };
 }
 
 }  // namespace
@@ -82,9 +80,10 @@ bool EditorWindow::Open(HINSTANCE instance, HBITMAP bitmap, DoneCallback callbac
 
     POINT cursor{};
     GetCursorPos(&cursor);
-
-    const int x = std::max(0, cursor.x - self->windowWidth_ / 2);
-    const int y = std::max(0, cursor.y - self->imageHeight_ / 2);
+    const int cursorX = static_cast<int>(cursor.x);
+    const int cursorY = static_cast<int>(cursor.y);
+    const int x = std::max(0, cursorX - self->windowWidth_ / 2);
+    const int y = std::max(0, cursorY - self->imageHeight_ / 2);
 
     HWND hwnd = CreateWindowExW(
         WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
@@ -130,8 +129,7 @@ void EditorWindow::Undo() {
         return;
     }
 
-    HBITMAP current = CloneBitmap(bitmap_);
-    if (current) {
+    if (HBITMAP current = CloneBitmap(bitmap_)) {
         redo_.push_back(current);
     }
 
@@ -146,8 +144,7 @@ void EditorWindow::Redo() {
         return;
     }
 
-    HBITMAP current = CloneBitmap(bitmap_);
-    if (current) {
+    if (HBITMAP current = CloneBitmap(bitmap_)) {
         undo_.push_back(current);
     }
 
@@ -162,15 +159,20 @@ void EditorWindow::DrawShape(HDC dc, Tool tool, POINT from, POINT to) {
     const HGDIOBJ oldPen = SelectObject(dc, pen);
     const HGDIOBJ oldBrush = SelectObject(dc, GetStockObject(NULL_BRUSH));
 
-    if (tool == Tool::Rectangle) {
-        Rectangle(dc, from.x, from.y, to.x, to.y);
-    } else if (tool == Tool::Ellipse) {
-        Ellipse(dc, from.x, from.y, to.x, to.y);
+    if (tool == Tool::Rectangle || tool == Tool::Ellipse) {
+        const RECT rect = NormalizeRect(from, to);
+        if (tool == Tool::Rectangle) {
+            Rectangle(dc, rect.left, rect.top, rect.right, rect.bottom);
+        } else {
+            Ellipse(dc, rect.left, rect.top, rect.right, rect.bottom);
+        }
     } else if (tool == Tool::Arrow) {
         MoveToEx(dc, from.x, from.y, nullptr);
         LineTo(dc, to.x, to.y);
 
-        const double angle = std::atan2(static_cast<double>(to.y - from.y), static_cast<double>(to.x - from.x));
+        const double angle = std::atan2(
+            static_cast<double>(to.y - from.y),
+            static_cast<double>(to.x - from.x));
         constexpr double spread = 0.55;
         constexpr double length = 18.0;
         POINT arrow[3] = {
@@ -180,6 +182,7 @@ void EditorWindow::DrawShape(HDC dc, Tool tool, POINT from, POINT to) {
             {static_cast<LONG>(to.x - length * std::cos(angle + spread)),
              static_cast<LONG>(to.y - length * std::sin(angle + spread))},
         };
+
         HBRUSH brush = CreateSolidBrush(RGB(255, 72, 72));
         SelectObject(dc, brush);
         Polygon(dc, arrow, 3);
@@ -207,15 +210,19 @@ void EditorWindow::DrawPenSegment(POINT from, POINT to) {
 
 void EditorWindow::ApplyMosaic(POINT point) {
     constexpr int block = 14;
-    const int left = std::clamp((point.x / block) * block, 0, std::max(0, imageWidth_ - 1));
-    const int top = std::clamp((point.y / block) * block, 0, std::max(0, imageHeight_ - 1));
+    const int px = static_cast<int>(point.x);
+    const int py = static_cast<int>(point.y);
+    const int left = std::clamp((px / block) * block, 0, std::max(0, imageWidth_ - 1));
+    const int top = std::clamp((py / block) * block, 0, std::max(0, imageHeight_ - 1));
     const int right = std::min(imageWidth_, left + block);
     const int bottom = std::min(imageHeight_, top + block);
 
     HDC dc = CreateCompatibleDC(nullptr);
     const HGDIOBJ oldBitmap = SelectObject(dc, bitmap_);
-    const COLORREF color = GetPixel(dc, std::min(imageWidth_ - 1, left + block / 2),
-                                   std::min(imageHeight_ - 1, top + block / 2));
+    const COLORREF color = GetPixel(
+        dc,
+        std::min(imageWidth_ - 1, left + block / 2),
+        std::min(imageHeight_ - 1, top + block / 2));
     HBRUSH brush = CreateSolidBrush(color == CLR_INVALID ? RGB(128, 128, 128) : color);
     RECT rect{left, top, right, bottom};
     FillRect(dc, &rect, brush);
@@ -245,7 +252,6 @@ void EditorWindow::PaintToolbar(HDC dc) {
 
     for (int i = 0; i < kToolbarButtons; ++i) {
         RECT button{i * kButtonWidth, imageHeight_, (i + 1) * kButtonWidth, imageHeight_ + kToolbarHeight};
-
         const bool selected =
             (i == 1 && tool_ == Tool::Rectangle) ||
             (i == 2 && tool_ == Tool::Ellipse) ||
@@ -287,6 +293,7 @@ void EditorWindow::Finish() {
     bitmap_ = nullptr;
     auto callback = callback_;
     DestroyWindow(hwnd_);
+
     if (callback) {
         callback(result);
     } else if (result) {
@@ -297,16 +304,16 @@ void EditorWindow::Finish() {
 void EditorWindow::HandleToolbarClick(int x) {
     const int index = x / kButtonWidth;
     switch (index) {
-    case 0: Finish(); break;
+    case 0: Finish(); return;
     case 1: tool_ = Tool::Rectangle; break;
     case 2: tool_ = Tool::Ellipse; break;
     case 3: tool_ = Tool::Arrow; break;
     case 4: tool_ = Tool::Pen; break;
     case 5: tool_ = Tool::Mosaic; break;
-    case 6: Undo(); break;
-    case 7: Redo(); break;
-    case 8: DestroyWindow(hwnd_); break;
-    default: break;
+    case 6: Undo(); return;
+    case 7: Redo(); return;
+    case 8: DestroyWindow(hwnd_); return;
+    default: return;
     }
     InvalidateRect(hwnd_, nullptr, FALSE);
 }
@@ -323,7 +330,7 @@ LRESULT EditorWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) 
     case WM_LBUTTONDOWN: {
         const POINT point{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
         if (point.y >= imageHeight_) {
-            HandleToolbarClick(point.x);
+            HandleToolbarClick(static_cast<int>(point.x));
             return 0;
         }
 
@@ -332,7 +339,6 @@ LRESULT EditorWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) 
         drawCurrent_ = point;
         BeginEdit();
         SetCapture(hwnd_);
-
         if (tool_ == Tool::Mosaic) {
             ApplyMosaic(point);
         }
