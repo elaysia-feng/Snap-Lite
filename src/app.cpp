@@ -187,15 +187,18 @@ void App::CommitCapture(HBITMAP bitmap) {
     }
 
     const auto path = NextScreenshotPath();
-    const bool copied = CopyBitmapToClipboard(hwnd_, bitmap);
     const bool saved = SaveBitmapPng(bitmap, path);
+    const bool copied = CopyBitmapToClipboard(
+        hwnd_,
+        bitmap,
+        saved ? path : std::filesystem::path{});
     DeleteObject(bitmap);
 
     if (copied && saved) {
-        const std::wstring message = L"已复制到剪贴板并保存：\n" + path.wstring();
+        const std::wstring message = L"已复制，可直接粘贴到支持图片的 CLI：\n" + path.wstring();
         ShowNotice(message.c_str());
     } else if (copied) {
-        ShowNotice(L"已复制到剪贴板");
+        ShowNotice(L"已复制到图片剪贴板");
     } else if (saved) {
         ShowNotice(L"截图已保存");
     } else {
