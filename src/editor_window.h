@@ -11,10 +11,6 @@ class EditorWindow {
 public:
     using DoneCallback = std::function<void(HBITMAP)>;
 
-    static bool Register(HINSTANCE instance);
-    static bool Open(HINSTANCE instance, HBITMAP bitmap, DoneCallback callback);
-
-private:
     enum class Tool {
         Rectangle,
         Ellipse,
@@ -23,6 +19,10 @@ private:
         Mosaic,
     };
 
+    static bool Register(HINSTANCE instance);
+    static bool Open(HINSTANCE instance, HBITMAP bitmap, DoneCallback callback);
+
+private:
     EditorWindow(HINSTANCE instance, HBITMAP bitmap, DoneCallback callback);
     ~EditorWindow();
 
