@@ -12,7 +12,7 @@ add_executable(SnapLite WIN32
 
 target_compile_features(SnapLite PRIVATE cxx_std_17)
 target_compile_definitions(SnapLite PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
-target_link_libraries(SnapLite PRIVATE user32 gdi32 gdiplus shell32 ole32)
+target_link_libraries(SnapLite PRIVATE user32 gdi32 gdiplus shell32 ole32 uuid)
 
 if(MSVC)
     target_compile_options(SnapLite PRIVATE /W4 /permissive- /utf-8)
