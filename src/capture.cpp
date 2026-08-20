@@ -1,9 +1,12 @@
 #include "capture.h"
 
 #include <gdiplus.h>
+#include <objidl.h>
+#include <shellapi.h>
 #include <shlobj.h>
 
 #include <cstdlib>
+#include <cstring>
 #include <cwchar>
 
 #pragma comment(lib, "gdiplus.lib")
@@ -35,6 +38,150 @@ int GetEncoderClsid(const wchar_t* mimeType, CLSID* clsid) {
 
     std::free(codecs);
     return -1;
+}
+
+HGLOBAL CreateDibClipboardData(HBITMAP bitmap) {
+    BITMAP info{};
+    if (!bitmap || GetObjectW(bitmap, sizeof(info), &info) == 0) {
+        return nullptr;
+    }
+
+    const int width = info.bmWidth;
+    const int height = std::abs(info.bmHeight);
+    if (width <= 0 || height <= 0) {
+        return nullptr;
+    }
+
+    BITMAPINFO bmi{};
+    bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bmi.bmiHeader.biWidth = width;
+    bmi.bmiHeader.biHeight = height;
+    bmi.bmiHeader.biPlanes = 1;
+    bmi.bmiHeader.biBitCount = 32;
+    bmi.bmiHeader.biCompression = BI_RGB;
+    bmi.bmiHeader.biSizeImage = static_cast<DWORD>(width * 4ULL * height);
+
+    const SIZE_T pixelBytes = static_cast<SIZE_T>(width) * 4ULL * height;
+    const SIZE_T totalBytes = sizeof(BITMAPINFOHEADER) + pixelBytes;
+    HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, totalBytes);
+    if (!memory) {
+        return nullptr;
+    }
+
+    void* target = GlobalLock(memory);
+    if (!target) {
+        GlobalFree(memory);
+        return nullptr;
+    }
+
+    HDC dc = GetDC(nullptr);
+    if (!dc) {
+        GlobalUnlock(memory);
+        GlobalFree(memory);
+        return nullptr;
+    }
+
+    auto* pixels = static_cast<BYTE*>(target) + sizeof(BITMAPINFOHEADER);
+    const int lines = GetDIBits(
+        dc,
+        bitmap,
+        0,
+        static_cast<UINT>(height),
+        pixels,
+        &bmi,
+        DIB_RGB_COLORS);
+    ReleaseDC(nullptr, dc);
+
+    if (lines == 0) {
+        GlobalUnlock(memory);
+        GlobalFree(memory);
+        return nullptr;
+    }
+
+    std::memcpy(target, &bmi.bmiHeader, sizeof(BITMAPINFOHEADER));
+    GlobalUnlock(memory);
+    return memory;
+}
+
+HGLOBAL CreatePngClipboardData(HBITMAP bitmap) {
+    if (!bitmap) {
+        return nullptr;
+    }
+
+    CLSID encoder{};
+    if (GetEncoderClsid(L"image/png", &encoder) < 0) {
+        return nullptr;
+    }
+
+    IStream* stream = nullptr;
+    if (FAILED(CreateStreamOnHGlobal(nullptr, FALSE, &stream)) || !stream) {
+        return nullptr;
+    }
+
+    Gdiplus::Bitmap image(bitmap, nullptr);
+    const Gdiplus::Status status = image.Save(stream, &encoder, nullptr);
+    stream->Commit(STGC_DEFAULT);
+
+    HGLOBAL memory = nullptr;
+    GetHGlobalFromStream(stream, &memory);
+    stream->Release();
+
+    if (status != Gdiplus::Ok || !memory) {
+        if (memory) {
+            GlobalFree(memory);
+        }
+        return nullptr;
+    }
+    return memory;
+}
+
+HGLOBAL CreateFileDropClipboardData(const std::filesystem::path& path) {
+    if (path.empty()) {
+        return nullptr;
+    }
+
+    std::error_code error;
+    if (!std::filesystem::exists(path, error) || error) {
+        return nullptr;
+    }
+
+    const std::wstring file = path.wstring();
+    const SIZE_T chars = file.size() + 2;
+    const SIZE_T totalBytes = sizeof(DROPFILES) + chars * sizeof(wchar_t);
+    HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, totalBytes);
+    if (!memory) {
+        return nullptr;
+    }
+
+    auto* drop = static_cast<DROPFILES*>(GlobalLock(memory));
+    if (!drop) {
+        GlobalFree(memory);
+        return nullptr;
+    }
+
+    drop->pFiles = sizeof(DROPFILES);
+    drop->fWide = TRUE;
+
+    auto* names = reinterpret_cast<wchar_t*>(
+        reinterpret_cast<BYTE*>(drop) + sizeof(DROPFILES));
+    std::memcpy(names, file.c_str(), file.size() * sizeof(wchar_t));
+    names[file.size()] = L'\0';
+    names[file.size() + 1] = L'\0';
+
+    GlobalUnlock(memory);
+    return memory;
+}
+
+void FreeClipboardCandidate(HBITMAP bitmap) {
+    if (bitmap) {
+        DeleteObject(bitmap);
+    }
+}
+
+void FreeClipboardCandidate(HGLOBAL memory) {
+    if (memory) {
+        GlobalFree(memory);
+    }
 }
 
 }  // namespace
@@ -169,30 +316,78 @@ COLORREF ReadBitmapPixel(HBITMAP bitmap, int x, int y) {
     return color;
 }
 
-bool CopyBitmapToClipboard(HWND owner, HBITMAP bitmap) {
+bool CopyBitmapToClipboard(
+    HWND owner,
+    HBITMAP bitmap,
+    const std::filesystem::path& savedFile) {
     if (!bitmap) {
         return false;
     }
 
-    HBITMAP copy = CloneBitmap(bitmap);
-    if (!copy) {
+    HBITMAP bitmapCopy = CloneBitmap(bitmap);
+    HGLOBAL dibData = CreateDibClipboardData(bitmap);
+    HGLOBAL pngData = CreatePngClipboardData(bitmap);
+    HGLOBAL fileDrop = CreateFileDropClipboardData(savedFile);
+
+    if (!bitmapCopy && !dibData && !pngData) {
+        FreeClipboardCandidate(fileDrop);
         return false;
     }
 
     if (!OpenClipboard(owner)) {
-        DeleteObject(copy);
+        FreeClipboardCandidate(bitmapCopy);
+        FreeClipboardCandidate(dibData);
+        FreeClipboardCandidate(pngData);
+        FreeClipboardCandidate(fileDrop);
         return false;
     }
 
-    EmptyClipboard();
-    const HANDLE result = SetClipboardData(CF_BITMAP, copy);
+    if (!EmptyClipboard()) {
+        CloseClipboard();
+        FreeClipboardCandidate(bitmapCopy);
+        FreeClipboardCandidate(dibData);
+        FreeClipboardCandidate(pngData);
+        FreeClipboardCandidate(fileDrop);
+        return false;
+    }
+
+    bool imagePlaced = false;
+
+    if (bitmapCopy) {
+        if (SetClipboardData(CF_BITMAP, bitmapCopy)) {
+            imagePlaced = true;
+            bitmapCopy = nullptr;
+        }
+    }
+
+    if (dibData) {
+        if (SetClipboardData(CF_DIB, dibData)) {
+            imagePlaced = true;
+            dibData = nullptr;
+        }
+    }
+
+    if (pngData) {
+        const UINT pngFormat = RegisterClipboardFormatW(L"PNG");
+        if (pngFormat != 0 && SetClipboardData(pngFormat, pngData)) {
+            imagePlaced = true;
+            pngData = nullptr;
+        }
+    }
+
+    if (fileDrop) {
+        if (SetClipboardData(CF_HDROP, fileDrop)) {
+            fileDrop = nullptr;
+        }
+    }
+
     CloseClipboard();
 
-    if (!result) {
-        DeleteObject(copy);
-        return false;
-    }
-    return true;
+    FreeClipboardCandidate(bitmapCopy);
+    FreeClipboardCandidate(dibData);
+    FreeClipboardCandidate(pngData);
+    FreeClipboardCandidate(fileDrop);
+    return imagePlaced;
 }
 
 bool CopyTextToClipboard(HWND owner, const std::wstring& text) {
@@ -215,7 +410,7 @@ bool CopyTextToClipboard(HWND owner, const std::wstring& text) {
         return false;
     }
 
-    memcpy(target, text.c_str(), bytes);
+    std::memcpy(target, text.c_str(), bytes);
     GlobalUnlock(memory);
 
     const HANDLE result = SetClipboardData(CF_UNICODETEXT, memory);
