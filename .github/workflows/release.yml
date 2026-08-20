@@ -22,8 +22,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Configure
         run: cmake -S . -B build -A x64
@@ -40,41 +38,24 @@ jobs:
           $hash = (Get-FileHash dist/SnapLite.exe -Algorithm SHA256).Hash.ToLower()
           "$hash  SnapLite.exe" | Out-File dist/SHA256SUMS.txt -Encoding ascii
 
-      - name: Create GitHub Release
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release view $env:TAG *> $null
-          if ($LASTEXITCODE -eq 0) {
-            Write-Host "Release $env:TAG already exists; skipping."
-            exit 0
-          }
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG }}
+          target_commitish: ${{ github.sha }}
+          name: Snap-Lite ${{ env.TAG }}
+          prerelease: true
+          generate_release_notes: true
+          body: |
+            Windows 11 x64 lightweight screenshot + pin tool.
 
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag $env:TAG $env:GITHUB_SHA
-          git push origin $env:TAG
-
-          $notes = @"
-          Snap-Lite $env:TAG
-
-          Windows 11 x64 lightweight screenshot + pin tool.
-
-          Highlights:
-          - F1 smart region capture
-          - annotation editor
-          - F3 pin image
-          - clipboard formats for AI CLI image paste
-          - multi-monitor and Per-Monitor V2 DPI
-
-          This is an alpha release for testing.
-          "@
-
-          gh release create $env:TAG `
-            dist/SnapLite.exe `
-            "dist/SnapLite-$env:VERSION-win-x64.zip" `
-            dist/SHA256SUMS.txt `
-            --title "Snap-Lite $env:TAG" `
-            --notes $notes `
-            --prerelease
+            Highlights:
+            - F1 smart region capture
+            - annotation editor
+            - F3 pin image
+            - clipboard formats for AI CLI image paste
+            - multi-monitor and Per-Monitor V2 DPI
+          files: |
+            dist/SnapLite.exe
+            dist/SnapLite-${{ env.VERSION }}-win-x64.zip
+            dist/SHA256SUMS.txt
