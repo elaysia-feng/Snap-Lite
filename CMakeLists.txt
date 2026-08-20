@@ -5,6 +5,7 @@ add_executable(SnapLite WIN32
     src/main.cpp
     src/app.cpp
     src/capture.cpp
+    src/editor_window.cpp
     src/pin_window.cpp
     src/snip_window.cpp
 )
