@@ -46,6 +46,7 @@ jobs:
           name: Snap-Lite ${{ env.TAG }}
           prerelease: true
           generate_release_notes: true
+          fail_on_unmatched_files: true
           body: |
             Windows 11 x64 lightweight screenshot + pin tool.
 
