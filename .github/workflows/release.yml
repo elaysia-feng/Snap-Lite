@@ -13,7 +13,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: rolling-v0.2.0-alpha
+  group: snaplite-v0.2.0-alpha-release
   cancel-in-progress: true
 
 jobs:
@@ -42,11 +42,9 @@ jobs:
           $hash = (Get-FileHash dist/SnapLite.exe -Algorithm SHA256).Hash.ToLower()
           "$hash  SnapLite.exe" | Out-File dist/SHA256SUMS.txt -Encoding ascii
 
-      - name: Move prerelease tag to current commit
+      - name: Move prerelease tag to current build
         shell: pwsh
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag -f "$env:TAG" "$env:GITHUB_SHA"
           git push origin "refs/tags/$env:TAG" --force
 
@@ -57,14 +55,15 @@ jobs:
           target_commitish: ${{ github.sha }}
           name: Snap-Lite ${{ env.TAG }}
           prerelease: true
-          overwrite_files: true
+          generate_release_notes: true
           fail_on_unmatched_files: true
+          overwrite_files: true
           body: |
             Windows 11 x64 lightweight screenshot + pin tool.
 
             v0.2.0-alpha highlights:
             - Snipaste-style semi-transparent capture overlay
-            - fixed selection overlay incorrectly covering the desktop with solid gray
+            - buffered overlay painting to eliminate drag-time gray block flicker
             - blue resizable selection with 8 handles
             - live pixel-size label
             - floating annotation toolbar
