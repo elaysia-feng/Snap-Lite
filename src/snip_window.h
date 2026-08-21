@@ -26,6 +26,7 @@ private:
     enum class Tool {
         None,
         Rectangle,
+        Ellipse,
         Arrow,
         Pen,
         Mosaic,
@@ -54,19 +55,24 @@ private:
 
     void UpdateHover();
     void EnsureFonts();
+    void RecreateTextFont();
     void Paint();
     void PaintMagnifier(HDC dc, POINT clientPoint);
     void PaintSelection(HDC dc);
     void PaintHint(HDC dc);
     void PaintToolbar(HDC dc);
     void PaintToolbarIcon(HDC dc, int index, const RECT& rect, bool active, bool hovered);
+    void PaintStyleBar(HDC dc);
+    void PaintTooltip(HDC dc);
     void PaintPreview(HDC dc);
 
     RECT ToolbarRect() const;
     RECT ToolbarButtonRect(const RECT& bar, int index) const;
+    RECT StyleBarRect() const;
     RECT NormalizedSelection() const;
     DragMode HitSelection(POINT point) const;
     int HitToolbar(POINT point) const;
+    int HitStyle(POINT point) const;
     void SetCursorForPoint(POINT point);
 
     void BeginSelectionDrag(POINT point);
@@ -88,6 +94,7 @@ private:
     void CommitTextEdit();
 
     void HandleToolbarClick(int index);
+    void HandleStyleClick(int index);
     void Finish(FinishAction action);
     void CopyCurrentColor();
 
@@ -118,6 +125,11 @@ private:
     std::vector<HBITMAP> redo_;
 
     int hoverToolbar_{-1};
+    int hoverStyle_{-1};
+    COLORREF annotationColor_{RGB(235, 70, 70)};
+    int strokeWidth_{3};
+    int fontSize_{20};
+    int mosaicBlock_{12};
 
     HWND textEdit_{};
     POINT textOrigin_{};
