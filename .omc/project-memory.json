@@ -1,0 +1,111 @@
+{
+  "version": "1.0.0",
+  "lastScanned": 1787278961542,
+  "projectRoot": "F:\\myInterestingProgram\\Snap-Lite",
+  "techStack": {
+    "languages": [
+      {
+        "name": "C/C++",
+        "version": null,
+        "confidence": "high",
+        "markers": [
+          "CMakeLists.txt"
+        ]
+      }
+    ],
+    "frameworks": [],
+    "packageManager": null,
+    "runtime": null
+  },
+  "build": {
+    "buildCommand": null,
+    "testCommand": null,
+    "lintCommand": null,
+    "devCommand": null,
+    "scripts": {}
+  },
+  "conventions": {
+    "namingStyle": null,
+    "importStyle": null,
+    "testPattern": null,
+    "fileOrganization": null
+  },
+  "structure": {
+    "isMonorepo": false,
+    "workspaces": [],
+    "mainDirectories": [
+      "src"
+    ],
+    "gitBranches": {
+      "defaultBranch": "main",
+      "branchingStrategy": null
+    }
+  },
+  "customNotes": [],
+  "directoryMap": {
+    "src": {
+      "path": "src",
+      "purpose": "Source code",
+      "fileCount": 11,
+      "lastAccessed": 1787278961473,
+      "keyFiles": [
+        "app.cpp",
+        "app.h",
+        "capture.cpp",
+        "capture.h",
+        "editor_window.cpp"
+      ]
+    }
+  },
+  "hotPaths": [
+    {
+      "path": "src/snip_window.cpp",
+      "accessCount": 28,
+      "lastAccessed": 1787281554127,
+      "type": "file"
+    },
+    {
+      "path": "src/snip_window.h",
+      "accessCount": 4,
+      "lastAccessed": 1787280608035,
+      "type": "file"
+    },
+    {
+      "path": "C:/Users/seele/.claude/projects/F--myInterestingProgram-Snap-Lite/a503b547-6715-45c0-8e3a-6b6345d41b2c/tool-results/ba4uic861.txt",
+      "accessCount": 3,
+      "lastAccessed": 1787280719847,
+      "type": "file"
+    },
+    {
+      "path": "src",
+      "accessCount": 2,
+      "lastAccessed": 1787280779907,
+      "type": "directory"
+    },
+    {
+      "path": "README.md",
+      "accessCount": 1,
+      "lastAccessed": 1787279198625,
+      "type": "file"
+    },
+    {
+      "path": "src/paint_block.inc",
+      "accessCount": 1,
+      "lastAccessed": 1787280231126,
+      "type": "file"
+    },
+    {
+      "path": "src/app.cpp",
+      "accessCount": 1,
+      "lastAccessed": 1787280798778,
+      "type": "directory"
+    },
+    {
+      "path": "src/capture.h",
+      "accessCount": 1,
+      "lastAccessed": 1787280988353,
+      "type": "file"
+    }
+  ],
+  "userDirectives": []
+}

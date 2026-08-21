@@ -53,14 +53,17 @@ private:
     LRESULT HandleMessage(UINT message, WPARAM wParam, LPARAM lParam);
 
     void UpdateHover();
+    void EnsureFonts();
     void Paint();
     void PaintMagnifier(HDC dc, POINT clientPoint);
     void PaintSelection(HDC dc);
+    void PaintHint(HDC dc);
     void PaintToolbar(HDC dc);
-    void PaintToolbarIcon(HDC dc, int index, const RECT& rect, bool active);
+    void PaintToolbarIcon(HDC dc, int index, const RECT& rect, bool active, bool hovered);
     void PaintPreview(HDC dc);
 
     RECT ToolbarRect() const;
+    RECT ToolbarButtonRect(const RECT& bar, int index) const;
     RECT NormalizedSelection() const;
     DragMode HitSelection(POINT point) const;
     int HitToolbar(POINT point) const;
@@ -114,9 +117,13 @@ private:
     std::vector<HBITMAP> undo_;
     std::vector<HBITMAP> redo_;
 
+    int hoverToolbar_{-1};
+
     HWND textEdit_{};
     POINT textOrigin_{};
     HFONT textFont_{};
+    HFONT uiFont_{};
+    HFONT monoFont_{};
 };
 
 }  // namespace snaplite
