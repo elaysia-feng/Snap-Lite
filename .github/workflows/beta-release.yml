@@ -64,11 +64,14 @@ jobs:
 
             Test highlights:
             - Chinese hover tooltips for screenshot toolbar actions
+            - polished unified vector icons with rounded active states and a highlighted Done button
             - ellipse annotation tool
             - rectangle / ellipse / arrow / pen color and stroke-width controls
             - text color and font-size controls
             - selectable mosaic block size
             - pin-to-desktop integrated into the screenshot completion toolbar
+            - pinned image right-click menu: copy / save / opacity presets / close
+            - mouse wheel adjusts pin opacity; Ctrl + wheel adjusts pin zoom
             - F3 retained for pinning arbitrary clipboard images
             - existing buffered painting, multi-monitor and Per-Monitor V2 DPI support
 
