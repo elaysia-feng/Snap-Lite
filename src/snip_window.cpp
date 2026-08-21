@@ -391,7 +391,10 @@ RECT SnipWindow::StyleBarRect() const {
     const RECT mainBar = ToolbarRect();
     const RECT selection = NormalizedSelection();
     const int width = tool_ == Tool::Mosaic ? 190 : 342;
-    const int x = std::clamp(mainBar.left, 8, std::max(8, screen_.width - width - 8));
+    const int x = std::clamp(
+        static_cast<int>(mainBar.left),
+        8,
+        std::max(8, screen_.width - width - 8));
 
     int y{};
     if (mainBar.top >= selection.bottom) {
