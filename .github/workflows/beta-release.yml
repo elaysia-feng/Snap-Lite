@@ -64,16 +64,19 @@ jobs:
 
             Test highlights:
             - Chinese hover tooltips for screenshot toolbar actions
-            - polished unified vector icons with rounded active states and a highlighted Done button
+            - polished unified vector icons with more spacing, rounded active states and a highlighted Done button
             - ellipse annotation tool
             - rectangle / ellipse / arrow / pen color and stroke-width controls
             - text color and font-size controls
             - selectable mosaic block size
-            - pin-to-desktop integrated into the screenshot completion toolbar
+            - screenshot pin opens at the exact original desktop position instead of jumping near the cursor
+            - multi-monitor virtual-screen coordinates are preserved for original-position pinning
+            - pin-to-desktop remains integrated into the screenshot completion toolbar
             - pinned image right-click menu: copy / save / opacity presets / close
-            - mouse wheel adjusts pin opacity; Ctrl + wheel adjusts pin zoom
-            - F3 retained for pinning arbitrary clipboard images
-            - existing buffered painting, multi-monitor and Per-Monitor V2 DPI support
+            - mouse wheel adjusts pin opacity and shows a temporary percentage + progress HUD
+            - Ctrl + wheel adjusts pin zoom
+            - F3 retained for pinning arbitrary clipboard images near the cursor
+            - existing buffered painting and Per-Monitor V2 DPI support
 
             This is a prerelease built from feature/tencent-style-toolbar for interaction testing before merging into main.
           files: |
