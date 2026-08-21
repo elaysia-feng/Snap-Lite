@@ -60,23 +60,25 @@ jobs:
           fail_on_unmatched_files: true
           overwrite_files: true
           body: |
-            Snap-Lite v0.3.0-beta — Tencent/QQ-style screenshot interaction test build.
+            Snap-Lite v0.3.0-beta — screenshot interaction test build.
 
             Test highlights:
+            - blue Fluent-style UI accent replaces the previous yellow accent
+            - custom blue anime-eye app and tray icon with screenshot-frame motif
+            - final primary action is explicitly “Copy (Enter)” instead of “Done and Copy”
+            - polished unified vector toolbar icons with rounded active states
             - Chinese hover tooltips for screenshot toolbar actions
-            - polished unified vector icons with more spacing, rounded active states and a highlighted Done button
             - ellipse annotation tool
             - rectangle / ellipse / arrow / pen color and stroke-width controls
             - text color and font-size controls
             - selectable mosaic block size
-            - screenshot pin opens at the exact original desktop position instead of jumping near the cursor
+            - screenshot pin opens at the exact original desktop position
             - multi-monitor virtual-screen coordinates are preserved for original-position pinning
-            - pin-to-desktop remains integrated into the screenshot completion toolbar
             - pinned image right-click menu: copy / save / opacity presets / close
             - mouse wheel adjusts pin opacity and shows a temporary percentage + progress HUD
             - Ctrl + wheel adjusts pin zoom
-            - F3 retained for pinning arbitrary clipboard images near the cursor
-            - existing buffered painting and Per-Monitor V2 DPI support
+            - F3 retains arbitrary clipboard-image pinning near the cursor
+            - buffered painting and Per-Monitor V2 DPI support
 
             This is a prerelease built from feature/tencent-style-toolbar for interaction testing before merging into main.
           files: |
