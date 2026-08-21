@@ -12,6 +12,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: rolling-v0.2.0-alpha
+  cancel-in-progress: true
+
 jobs:
   release:
     runs-on: windows-latest
@@ -37,6 +41,14 @@ jobs:
           Compress-Archive -Path dist/SnapLite.exe -DestinationPath "dist/SnapLite-$env:VERSION-win-x64.zip" -Force
           $hash = (Get-FileHash dist/SnapLite.exe -Algorithm SHA256).Hash.ToLower()
           "$hash  SnapLite.exe" | Out-File dist/SHA256SUMS.txt -Encoding ascii
+
+      - name: Move prerelease tag to current commit
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -f "$env:TAG" "$env:GITHUB_SHA"
+          git push origin "refs/tags/$env:TAG" --force
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v3
