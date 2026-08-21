@@ -17,6 +17,7 @@ constexpr UINT WM_TRAYICON = WM_APP + 1;
 constexpr int HOTKEY_SNIP = 1;
 constexpr int HOTKEY_PIN = 2;
 constexpr int HOTKEY_FULLSCREEN = 3;
+constexpr int HOTKEY_PIN_FALLBACK = 4;
 
 constexpr UINT CMD_SNIP = 1001;
 constexpr UINT CMD_FULLSCREEN = 1002;
@@ -74,11 +75,27 @@ bool App::Initialize() {
         return false;
     }
 
-    RegisterHotKey(hwnd_, HOTKEY_SNIP, MOD_NOREPEAT, VK_F1);
-    RegisterHotKey(hwnd_, HOTKEY_PIN, MOD_NOREPEAT, VK_F3);
-    RegisterHotKey(hwnd_, HOTKEY_FULLSCREEN, MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT, 'F');
+    const bool snipHotkeyRegistered =
+        RegisterHotKey(hwnd_, HOTKEY_SNIP, MOD_NOREPEAT, VK_F1) != FALSE;
+    const bool pinHotkeyRegistered =
+        RegisterHotKey(hwnd_, HOTKEY_PIN, MOD_NOREPEAT, VK_F3) != FALSE;
+    const bool fullscreenHotkeyRegistered =
+        RegisterHotKey(hwnd_, HOTKEY_FULLSCREEN, MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT, 'F') != FALSE;
+    const bool pinFallbackRegistered = pinHotkeyRegistered ||
+        RegisterHotKey(hwnd_, HOTKEY_PIN_FALLBACK, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, 'P') != FALSE;
 
     AddTrayIcon();
+
+    if (!pinHotkeyRegistered) {
+        if (pinFallbackRegistered) {
+            ShowNotice(L"F3 热键被其他程序占用，贴图备用快捷键已切换为 Ctrl+Alt+P");
+        } else {
+            ShowNotice(L"F3 热键注册失败，可右键托盘图标选择“贴图”");
+        }
+    } else if (!snipHotkeyRegistered || !fullscreenHotkeyRegistered) {
+        ShowNotice(L"部分全局快捷键注册失败，可能被其他程序占用");
+    }
+
     return true;
 }
 
@@ -87,6 +104,7 @@ void App::Shutdown() {
         UnregisterHotKey(hwnd_, HOTKEY_SNIP);
         UnregisterHotKey(hwnd_, HOTKEY_PIN);
         UnregisterHotKey(hwnd_, HOTKEY_FULLSCREEN);
+        UnregisterHotKey(hwnd_, HOTKEY_PIN_FALLBACK);
     }
 
     if (tray_.hWnd) {
@@ -198,7 +216,7 @@ void App::CaptureFullscreen() {
 
 void App::PinClipboard() {
     if (!PinWindow::CreateFromClipboard(instance_)) {
-        ShowNotice(L"剪贴板中没有可贴出的图片");
+        ShowNotice(L"剪贴板中没有可贴出的图片，支持截图、PNG/DIB 图片和复制的图片文件");
     }
 }
 
@@ -233,7 +251,7 @@ LRESULT App::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
     case WM_HOTKEY:
         if (wParam == HOTKEY_SNIP) {
             StartSnip();
-        } else if (wParam == HOTKEY_PIN) {
+        } else if (wParam == HOTKEY_PIN || wParam == HOTKEY_PIN_FALLBACK) {
             PinClipboard();
         } else if (wParam == HOTKEY_FULLSCREEN) {
             CaptureFullscreen();
