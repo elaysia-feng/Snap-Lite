@@ -26,12 +26,12 @@ Gdiplus::Color Danger() { return {255, 255, 107, 91}; }
 
 constexpr int kHandleRadius = 4;
 constexpr int kHandleHitRadius = 9;
-constexpr int kToolbarButton = 36;
-constexpr int kToolbarHeight = 40;
+constexpr int kToolbarButton = 38;
+constexpr int kToolbarHeight = 42;
 constexpr int kToolbarButtons = 12;
 constexpr int kToolbarPadX = 6;
 constexpr int kToolbarGroupGap = 11;
-constexpr int kToolbarRadius = 10;
+constexpr int kToolbarRadius = 11;
 constexpr int kStyleHeight = 38;
 constexpr int kMinSelection = 8;
 
@@ -740,11 +740,11 @@ void SnipWindow::PaintToolbarIcon(HDC dc, int index, const RECT& rect, bool acti
     const bool primary = index == 11;
 
     if (primary) {
-        FillRoundRect(graphics, Accent(hovered ? 255 : 235), chip, 8.0f);
+        FillRoundRect(graphics, Accent(hovered ? 255 : 238), chip, 9.0f);
     } else if (active) {
-        FillRoundRect(graphics, Gdiplus::Color(42, 255, 197, 61), chip, 8.0f);
+        FillRoundRect(graphics, Gdiplus::Color(46, 255, 197, 61), chip, 9.0f);
         Gdiplus::GraphicsPath activePath;
-        AddRoundRect(activePath, chip, 8.0f);
+        AddRoundRect(activePath, chip, 9.0f);
         Gdiplus::Pen activeRing(Accent(210), 1.0f);
         graphics.DrawPath(&activeRing, &activePath);
     } else if (hovered) {
@@ -753,7 +753,7 @@ void SnipWindow::PaintToolbarIcon(HDC dc, int index, const RECT& rect, bool acti
             cancel ? Gdiplus::Color(32, 255, 107, 91)
                    : Gdiplus::Color(28, 255, 255, 255),
             chip,
-            8.0f);
+            9.0f);
     }
 
     Gdiplus::Color tone = Ink(hovered ? 255 : 220);
@@ -761,7 +761,7 @@ void SnipWindow::PaintToolbarIcon(HDC dc, int index, const RECT& rect, bool acti
     if (active) tone = Accent();
     if (primary) tone = Gdiplus::Color(255, 28, 30, 34);
 
-    Gdiplus::Pen pen(tone, 1.9f);
+    Gdiplus::Pen pen(tone, 1.85f);
     pen.SetStartCap(Gdiplus::LineCapRound);
     pen.SetEndCap(Gdiplus::LineCapRound);
     pen.SetLineJoin(Gdiplus::LineJoinRound);
@@ -1372,11 +1372,17 @@ void SnipWindow::HandleToolbarClick(int index) {
 void SnipWindow::Finish(FinishAction action) {
     CommitTextEdit();
     if (!selected_) return;
-    HBITMAP result = CloneBitmapRegion(capture_, NormalizedSelection());
+
+    const RECT selection = NormalizedSelection();
+    HBITMAP result = CloneBitmapRegion(capture_, selection);
     if (!result) return;
+
+    RECT sourceScreenRect = selection;
+    OffsetRect(&sourceScreenRect, screen_.x, screen_.y);
+
     auto callback = callback_;
     DestroyWindow(hwnd_);
-    if (callback) callback(result, action);
+    if (callback) callback(result, action, sourceScreenRect);
     else DeleteObject(result);
 }
 
