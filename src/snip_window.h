@@ -17,7 +17,7 @@ public:
         Pin,
     };
 
-    using CaptureCallback = std::function<void(HBITMAP, FinishAction)>;
+    using CaptureCallback = std::function<void(HBITMAP, FinishAction, const RECT&)>;
 
     static bool Register(HINSTANCE instance);
     static bool Start(HINSTANCE instance, HWND owner, CaptureCallback callback);
