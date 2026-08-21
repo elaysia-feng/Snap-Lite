@@ -64,7 +64,7 @@ jobs:
 
             Test highlights:
             - blue Fluent-style UI accent replaces the previous yellow accent
-            - custom blue anime-eye app and tray icon with screenshot-frame motif
+            - custom blue anime-eye screenshot icon is embedded into SnapLite.exe and reused by window/tray UI
             - final primary action is explicitly “Copy (Enter)” instead of “Done and Copy”
             - polished unified vector toolbar icons with rounded active states
             - Chinese hover tooltips for screenshot toolbar actions
