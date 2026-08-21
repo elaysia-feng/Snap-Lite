@@ -1,6 +1,7 @@
 #include "snip_window.h"
 
 #include <windowsx.h>
+#include <gdiplus.h>
 
 #include <algorithm>
 #include <cmath>
@@ -384,16 +385,23 @@ void SnipWindow::PaintSelection(HDC dc) {
     }
 
     const RECT r = NormalizedSelection();
-    HBRUSH dim = CreateSolidBrush(RGB(118, 118, 118));
-    RECT top{0, 0, screen_.width, r.top};
-    RECT bottom{0, r.bottom, screen_.width, screen_.height};
-    RECT left{0, r.top, r.left, r.bottom};
-    RECT right{r.right, r.top, screen_.width, r.bottom};
-    FillRect(dc, &top, dim);
-    FillRect(dc, &bottom, dim);
-    FillRect(dc, &left, dim);
-    FillRect(dc, &right, dim);
-    DeleteObject(dim);
+    Gdiplus::Graphics graphics(dc);
+    Gdiplus::SolidBrush dimBrush(Gdiplus::Color(105, 0, 0, 0));
+    const auto fillDim = [&](LONG x, LONG y, LONG width, LONG height) {
+        if (width > 0 && height > 0) {
+            graphics.FillRectangle(
+                &dimBrush,
+                static_cast<INT>(x),
+                static_cast<INT>(y),
+                static_cast<INT>(width),
+                static_cast<INT>(height));
+        }
+    };
+
+    fillDim(0, 0, screen_.width, r.top);
+    fillDim(0, r.bottom, screen_.width, screen_.height - r.bottom);
+    fillDim(0, r.top, r.left, r.bottom - r.top);
+    fillDim(r.right, r.top, screen_.width - r.right, r.bottom - r.top);
 
     HPEN border = CreatePen(PS_SOLID, 2, kAccent);
     const HGDIOBJ oldPen = SelectObject(dc, border);
