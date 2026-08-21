@@ -2,7 +2,14 @@
 
 #include "capture.h"
 
+#include <gdiplus.h>
+#include <objidl.h>
+#include <shellapi.h>
+
 #include <algorithm>
+#include <cstring>
+#include <filesystem>
+#include <vector>
 
 namespace snaplite {
 namespace {
@@ -11,7 +18,221 @@ constexpr UINT CMD_OPACITY_100 = 2001;
 constexpr UINT CMD_OPACITY_80 = 2002;
 constexpr UINT CMD_OPACITY_60 = 2003;
 constexpr UINT CMD_CLOSE = 2004;
+
+bool OpenClipboardWithRetry() {
+    for (int attempt = 0; attempt < 8; ++attempt) {
+        if (OpenClipboard(nullptr)) {
+            return true;
+        }
+        Sleep(15);
+    }
+    return false;
 }
+
+HBITMAP BitmapFromPngClipboard() {
+    const UINT pngFormat = RegisterClipboardFormatW(L"PNG");
+    if (pngFormat == 0) {
+        return nullptr;
+    }
+
+    HGLOBAL source = static_cast<HGLOBAL>(GetClipboardData(pngFormat));
+    if (!source) {
+        return nullptr;
+    }
+
+    const SIZE_T size = GlobalSize(source);
+    if (size == 0) {
+        return nullptr;
+    }
+
+    const void* sourceBytes = GlobalLock(source);
+    if (!sourceBytes) {
+        return nullptr;
+    }
+
+    HGLOBAL copy = GlobalAlloc(GMEM_MOVEABLE, size);
+    if (!copy) {
+        GlobalUnlock(source);
+        return nullptr;
+    }
+
+    void* targetBytes = GlobalLock(copy);
+    if (!targetBytes) {
+        GlobalFree(copy);
+        GlobalUnlock(source);
+        return nullptr;
+    }
+
+    std::memcpy(targetBytes, sourceBytes, size);
+    GlobalUnlock(copy);
+    GlobalUnlock(source);
+
+    IStream* stream = nullptr;
+    if (FAILED(CreateStreamOnHGlobal(copy, TRUE, &stream)) || !stream) {
+        GlobalFree(copy);
+        return nullptr;
+    }
+
+    HBITMAP bitmap = nullptr;
+    {
+        Gdiplus::Bitmap image(stream);
+        if (image.GetLastStatus() == Gdiplus::Ok) {
+            image.GetHBITMAP(Gdiplus::Color(255, 255, 255, 255), &bitmap);
+        }
+    }
+    stream->Release();
+    return bitmap;
+}
+
+HBITMAP BitmapFromDibClipboard(UINT format) {
+    HGLOBAL memory = static_cast<HGLOBAL>(GetClipboardData(format));
+    if (!memory) {
+        return nullptr;
+    }
+
+    const SIZE_T totalBytes = GlobalSize(memory);
+    const auto* base = static_cast<const BYTE*>(GlobalLock(memory));
+    if (!base || totalBytes < sizeof(BITMAPINFOHEADER)) {
+        if (base) GlobalUnlock(memory);
+        return nullptr;
+    }
+
+    const auto* header = reinterpret_cast<const BITMAPINFOHEADER*>(base);
+    if (header->biSize < sizeof(BITMAPINFOHEADER) || header->biWidth == 0 || header->biHeight == 0) {
+        GlobalUnlock(memory);
+        return nullptr;
+    }
+
+    SIZE_T pixelOffset = header->biSize;
+    if (header->biSize == sizeof(BITMAPINFOHEADER)) {
+        if (header->biCompression == BI_BITFIELDS) {
+            pixelOffset += 3 * sizeof(DWORD);
+        }
+#ifdef BI_ALPHABITFIELDS
+        else if (header->biCompression == BI_ALPHABITFIELDS) {
+            pixelOffset += 4 * sizeof(DWORD);
+        }
+#endif
+    }
+
+    if (header->biBitCount <= 8) {
+        const DWORD colorCount = header->biClrUsed != 0
+            ? header->biClrUsed
+            : (1u << header->biBitCount);
+        pixelOffset += static_cast<SIZE_T>(colorCount) * sizeof(RGBQUAD);
+    }
+
+    if (pixelOffset >= totalBytes) {
+        GlobalUnlock(memory);
+        return nullptr;
+    }
+
+    const int width = std::abs(header->biWidth);
+    const int height = std::abs(header->biHeight);
+    if (width <= 0 || height <= 0) {
+        GlobalUnlock(memory);
+        return nullptr;
+    }
+
+    const void* pixels = base + pixelOffset;
+    const auto* info = reinterpret_cast<const BITMAPINFO*>(base);
+
+    HDC screenDc = GetDC(nullptr);
+    HDC memoryDc = screenDc ? CreateCompatibleDC(screenDc) : nullptr;
+    HBITMAP bitmap = screenDc ? CreateCompatibleBitmap(screenDc, width, height) : nullptr;
+
+    bool ok = false;
+    if (memoryDc && bitmap) {
+        const HGDIOBJ old = SelectObject(memoryDc, bitmap);
+        const int result = StretchDIBits(
+            memoryDc,
+            0,
+            0,
+            width,
+            height,
+            0,
+            0,
+            width,
+            height,
+            pixels,
+            info,
+            DIB_RGB_COLORS,
+            SRCCOPY);
+        SelectObject(memoryDc, old);
+        ok = result != GDI_ERROR && result != 0;
+    }
+
+    if (memoryDc) DeleteDC(memoryDc);
+    if (screenDc) ReleaseDC(nullptr, screenDc);
+    GlobalUnlock(memory);
+
+    if (!ok) {
+        if (bitmap) DeleteObject(bitmap);
+        return nullptr;
+    }
+    return bitmap;
+}
+
+HBITMAP BitmapFromFileDropClipboard() {
+    HDROP drop = static_cast<HDROP>(GetClipboardData(CF_HDROP));
+    if (!drop) {
+        return nullptr;
+    }
+
+    const UINT count = DragQueryFileW(drop, 0xFFFFFFFF, nullptr, 0);
+    if (count == 0) {
+        return nullptr;
+    }
+
+    const UINT length = DragQueryFileW(drop, 0, nullptr, 0);
+    if (length == 0) {
+        return nullptr;
+    }
+
+    std::vector<wchar_t> path(length + 1, L'\0');
+    if (DragQueryFileW(drop, 0, path.data(), static_cast<UINT>(path.size())) == 0) {
+        return nullptr;
+    }
+
+    const std::filesystem::path file(path.data());
+    std::error_code error;
+    if (!std::filesystem::is_regular_file(file, error) || error) {
+        return nullptr;
+    }
+
+    Gdiplus::Bitmap image(file.c_str());
+    if (image.GetLastStatus() != Gdiplus::Ok) {
+        return nullptr;
+    }
+
+    HBITMAP bitmap = nullptr;
+    image.GetHBITMAP(Gdiplus::Color(255, 255, 255, 255), &bitmap);
+    return bitmap;
+}
+
+HBITMAP BitmapFromClipboard() {
+    HBITMAP bitmap = nullptr;
+
+    if (HBITMAP source = static_cast<HBITMAP>(GetClipboardData(CF_BITMAP))) {
+        bitmap = CloneBitmap(source);
+    }
+    if (!bitmap) {
+        bitmap = BitmapFromPngClipboard();
+    }
+    if (!bitmap && IsClipboardFormatAvailable(CF_DIBV5)) {
+        bitmap = BitmapFromDibClipboard(CF_DIBV5);
+    }
+    if (!bitmap && IsClipboardFormatAvailable(CF_DIB)) {
+        bitmap = BitmapFromDibClipboard(CF_DIB);
+    }
+    if (!bitmap && IsClipboardFormatAvailable(CF_HDROP)) {
+        bitmap = BitmapFromFileDropClipboard();
+    }
+
+    return bitmap;
+}
+
+}  // namespace
 
 PinWindow::PinWindow(HINSTANCE instance, HBITMAP bitmap)
     : instance_(instance), bitmap_(bitmap) {
@@ -92,19 +313,18 @@ bool PinWindow::Create(HINSTANCE instance, HBITMAP bitmap) {
 }
 
 bool PinWindow::CreateFromClipboard(HINSTANCE instance) {
-    if (!OpenClipboard(nullptr)) {
+    if (!OpenClipboardWithRetry()) {
         return false;
     }
 
-    HBITMAP source = static_cast<HBITMAP>(GetClipboardData(CF_BITMAP));
-    HBITMAP copy = source ? CloneBitmap(source) : nullptr;
+    HBITMAP bitmap = BitmapFromClipboard();
     CloseClipboard();
 
-    if (!copy) {
+    if (!bitmap) {
         return false;
     }
 
-    return Create(instance, copy);
+    return Create(instance, bitmap);
 }
 
 void PinWindow::ResizeForZoom() {
