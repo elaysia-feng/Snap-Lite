@@ -15,10 +15,13 @@
 namespace snaplite {
 namespace {
 constexpr wchar_t kPinClass[] = L"SnapLitePinWindow";
-constexpr UINT CMD_OPACITY_100 = 2001;
-constexpr UINT CMD_OPACITY_80 = 2002;
-constexpr UINT CMD_OPACITY_60 = 2003;
-constexpr UINT CMD_CLOSE = 2004;
+constexpr UINT CMD_COPY = 2001;
+constexpr UINT CMD_SAVE = 2002;
+constexpr UINT CMD_OPACITY_100 = 2010;
+constexpr UINT CMD_OPACITY_80 = 2011;
+constexpr UINT CMD_OPACITY_60 = 2012;
+constexpr UINT CMD_OPACITY_40 = 2013;
+constexpr UINT CMD_CLOSE = 2099;
 
 bool OpenClipboardWithRetry() {
     for (int attempt = 0; attempt < 8; ++attempt) {
@@ -366,11 +369,21 @@ void PinWindow::ShowContextMenu() {
         return;
     }
 
-    AppendMenuW(menu, MF_STRING, CMD_OPACITY_100, L"透明度 100%");
-    AppendMenuW(menu, MF_STRING, CMD_OPACITY_80, L"透明度 80%");
-    AppendMenuW(menu, MF_STRING, CMD_OPACITY_60, L"透明度 60%");
+    AppendMenuW(menu, MF_STRING, CMD_COPY, L"复制图片\tCtrl+C");
+    AppendMenuW(menu, MF_STRING, CMD_SAVE, L"保存图片\tCtrl+S");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(menu, MF_STRING, CMD_CLOSE, L"关闭贴图");
+
+    wchar_t opacityLabel[64]{};
+    const int opacityPercent = static_cast<int>((static_cast<unsigned int>(opacity_) * 100u + 127u) / 255u);
+    swprintf_s(opacityLabel, L"当前透明度 %d%%（滚轮调整）", opacityPercent);
+    AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, opacityLabel);
+
+    AppendMenuW(menu, MF_STRING | (opacity_ == 255 ? MF_CHECKED : 0), CMD_OPACITY_100, L"100%");
+    AppendMenuW(menu, MF_STRING | (opacity_ == 204 ? MF_CHECKED : 0), CMD_OPACITY_80, L"80%");
+    AppendMenuW(menu, MF_STRING | (opacity_ == 153 ? MF_CHECKED : 0), CMD_OPACITY_60, L"60%");
+    AppendMenuW(menu, MF_STRING | (opacity_ == 102 ? MF_CHECKED : 0), CMD_OPACITY_40, L"40%");
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(menu, MF_STRING, CMD_CLOSE, L"关闭贴图\tEsc");
 
     POINT cursor{};
     GetCursorPos(&cursor);
@@ -409,10 +422,13 @@ LRESULT PinWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
     }
 
     case WM_MOUSEWHEEL:
+        // A pin is usually already the right size; opacity is the frequent
+        // adjustment. Keep zoom available behind Ctrl so the plain wheel does
+        // the thing users expect most often while reading through the pin.
         if (GetKeyState(VK_CONTROL) & 0x8000) {
-            AdjustOpacity(GET_WHEEL_DELTA_WPARAM(wParam));
-        } else {
             AdjustZoom(GET_WHEEL_DELTA_WPARAM(wParam));
+        } else {
+            AdjustOpacity(GET_WHEEL_DELTA_WPARAM(wParam));
         }
         return 0;
 
@@ -429,8 +445,32 @@ LRESULT PinWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
         ShowContextMenu();
         return 0;
 
+    case WM_KEYDOWN:
+        if ((GetKeyState(VK_CONTROL) & 0x8000) && wParam == 'C') {
+            CopyBitmapToClipboard(hwnd_, bitmap_);
+            return 0;
+        }
+        if ((GetKeyState(VK_CONTROL) & 0x8000) && wParam == 'S') {
+            const auto path = NextScreenshotPath();
+            SaveBitmapPng(bitmap_, path);
+            return 0;
+        }
+        if (wParam == VK_ESCAPE) {
+            DestroyWindow(hwnd_);
+            return 0;
+        }
+        break;
+
     case WM_COMMAND:
         switch (LOWORD(wParam)) {
+        case CMD_COPY:
+            CopyBitmapToClipboard(hwnd_, bitmap_);
+            return 0;
+        case CMD_SAVE: {
+            const auto path = NextScreenshotPath();
+            SaveBitmapPng(bitmap_, path);
+            return 0;
+        }
         case CMD_OPACITY_100:
             opacity_ = 255;
             SetLayeredWindowAttributes(hwnd_, 0, opacity_, LWA_ALPHA);
@@ -441,6 +481,10 @@ LRESULT PinWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
             return 0;
         case CMD_OPACITY_60:
             opacity_ = 153;
+            SetLayeredWindowAttributes(hwnd_, 0, opacity_, LWA_ALPHA);
+            return 0;
+        case CMD_OPACITY_40:
+            opacity_ = 102;
             SetLayeredWindowAttributes(hwnd_, 0, opacity_, LWA_ALPHA);
             return 0;
         case CMD_CLOSE:
