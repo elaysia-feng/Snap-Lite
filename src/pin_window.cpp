@@ -492,7 +492,7 @@ void PinWindow::PaintOpacityHud(HDC dc, const RECT& client) {
             barY,
             std::max(6.0f, barWidth * progress),
             barHeight);
-        FillRoundRect(graphics, Gdiplus::Color(255, 255, 197, 61), fill, 3.0f);
+        FillRoundRect(graphics, Gdiplus::Color(255, 69, 142, 255), fill, 3.0f);
     }
 }
 

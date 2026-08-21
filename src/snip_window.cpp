@@ -20,7 +20,7 @@ constexpr BYTE kDimIdle = 66;
 Gdiplus::Color Chrome(BYTE alpha = 242) { return {alpha, 27, 30, 35}; }
 Gdiplus::Color ChromeLine() { return {56, 255, 255, 255}; }
 Gdiplus::Color ChromeShade() { return {110, 0, 0, 0}; }
-Gdiplus::Color Accent(BYTE alpha = 255) { return {alpha, 255, 197, 61}; }
+Gdiplus::Color Accent(BYTE alpha = 255) { return {alpha, 69, 142, 255}; }
 Gdiplus::Color Ink(BYTE alpha = 255) { return {alpha, 236, 239, 244}; }
 Gdiplus::Color Danger() { return {255, 255, 107, 91}; }
 
@@ -59,7 +59,7 @@ constexpr const wchar_t* kToolbarTips[kToolbarButtons] = {
     L"取消 (Esc)",
     L"贴到桌面",
     L"保存图片",
-    L"完成并复制 (Enter)",
+    L"复制 (Enter)",
 };
 
 constexpr bool GroupBreakAfter(int index) {
@@ -837,11 +837,16 @@ void SnipWindow::PaintToolbarIcon(HDC dc, int index, const RECT& rect, bool acti
         graphics.DrawLine(&pen, cx - 7.5f, cy + 7.0f, cx - 7.5f, cy + 4.0f);
         graphics.DrawLine(&pen, cx + 7.5f, cy + 7.0f, cx + 7.5f, cy + 4.0f);
         break;
-    case 11:  // done + copy
-        pen.SetWidth(2.4f);
-        graphics.DrawLine(&pen, cx - 6.0f, cy + 0.5f, cx - 1.5f, cy + 5.0f);
-        graphics.DrawLine(&pen, cx - 1.5f, cy + 5.0f, cx + 7.0f, cy - 5.0f);
+    case 11: {  // copy
+        pen.SetWidth(1.9f);
+        Gdiplus::GraphicsPath back;
+        AddRoundRect(back, Gdiplus::RectF(cx - 7.0f, cy - 7.0f, 10.5f, 10.5f), 2.0f);
+        graphics.DrawPath(&pen, &back);
+        Gdiplus::GraphicsPath front;
+        AddRoundRect(front, Gdiplus::RectF(cx - 2.5f, cy - 2.5f, 10.5f, 10.5f), 2.0f);
+        graphics.DrawPath(&pen, &front);
         break;
+    }
     default:
         break;
     }
@@ -910,12 +915,12 @@ void SnipWindow::PaintStyleBar(HDC dc) {
                 graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
                 if (active || hoverStyle_ == 100 + i) {
                     Gdiplus::RectF chip(static_cast<float>(item.left), static_cast<float>(item.top), static_cast<float>(item.right - item.left), static_cast<float>(item.bottom - item.top));
-                    FillRoundRect(graphics, active ? Gdiplus::Color(42, 255, 197, 61) : Gdiplus::Color(24, 255, 255, 255), chip, 5.0f);
+                    FillRoundRect(graphics, active ? Gdiplus::Color(48, 69, 142, 255) : Gdiplus::Color(24, 255, 255, 255), chip, 5.0f);
                 }
             }
             wchar_t text[8]{};
             swprintf_s(text, L"%d", kMosaicBlocks[i]);
-            SetTextColor(dc, active ? RGB(255, 210, 95) : kInk);
+            SetTextColor(dc, active ? RGB(125, 185, 255) : kInk);
             DrawTextW(dc, text, -1, &item, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         }
         SelectObject(dc, oldFont);
@@ -953,7 +958,7 @@ void SnipWindow::PaintStyleBar(HDC dc) {
             graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
             if (active || hoverStyle_ == 100 + i) {
                 Gdiplus::RectF chip(static_cast<float>(item.left), static_cast<float>(item.top), static_cast<float>(item.right - item.left), static_cast<float>(item.bottom - item.top));
-                FillRoundRect(graphics, active ? Gdiplus::Color(42, 255, 197, 61) : Gdiplus::Color(24, 255, 255, 255), chip, 5.0f);
+                FillRoundRect(graphics, active ? Gdiplus::Color(48, 69, 142, 255) : Gdiplus::Color(24, 255, 255, 255), chip, 5.0f);
             }
             if (tool_ != Tool::Text) {
                 Gdiplus::Pen sample(active ? Accent() : Ink(), static_cast<float>(kStrokeWidths[i]));
@@ -965,7 +970,7 @@ void SnipWindow::PaintStyleBar(HDC dc) {
         if (tool_ == Tool::Text) {
             wchar_t text[8]{};
             swprintf_s(text, L"%d", kFontSizes[i]);
-            SetTextColor(dc, active ? RGB(255, 210, 95) : kInk);
+            SetTextColor(dc, active ? RGB(125, 185, 255) : kInk);
             DrawTextW(dc, text, -1, &item, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         }
     }
