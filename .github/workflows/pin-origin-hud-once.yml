@@ -1,0 +1,566 @@
+name: pin-origin-hud-once
+
+on:
+  push:
+    branches:
+      - feature/tencent-style-toolbar
+    paths:
+      - '.github/workflows/pin-origin-hud-once.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/tencent-style-toolbar
+          fetch-depth: 0
+
+      - name: Patch pin origin, opacity HUD and toolbar icons
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          # ---------------- pin_window.h ----------------
+          Path('src/pin_window.h').write_text(r'''#pragma once
+
+#include <windows.h>
+
+namespace snaplite {
+
+class PinWindow {
+public:
+    static bool Register(HINSTANCE instance);
+    static bool Create(HINSTANCE instance, HBITMAP bitmap);
+    static bool CreateAt(HINSTANCE instance, HBITMAP bitmap, const RECT& screenRect);
+    static bool CreateFromClipboard(HINSTANCE instance);
+
+private:
+    PinWindow(HINSTANCE instance, HBITMAP bitmap);
+    ~PinWindow();
+
+    static bool CreateInternal(
+        HINSTANCE instance,
+        HBITMAP bitmap,
+        const RECT* initialScreenRect);
+    static LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
+    LRESULT HandleMessage(UINT message, WPARAM wParam, LPARAM lParam);
+
+    void ResizeForZoom();
+    void AdjustZoom(int wheelDelta);
+    void AdjustOpacity(int wheelDelta);
+    void SetOpacity(BYTE opacity, bool showHud);
+    void PaintOpacityHud(HDC dc, const RECT& client);
+    void ShowContextMenu();
+
+    HINSTANCE instance_{};
+    HWND hwnd_{};
+    HBITMAP bitmap_{};
+    int bitmapWidth_{};
+    int bitmapHeight_{};
+    double zoom_{1.0};
+    BYTE opacity_{255};
+    bool opacityHudVisible_{false};
+};
+
+}  // namespace snaplite
+''', encoding='utf-8', newline='\n')
+
+          # ---------------- pin_window.cpp ----------------
+          path = Path('src/pin_window.cpp')
+          text = path.read_text(encoding='utf-8')
+
+          text = text.replace(
+              'constexpr UINT CMD_CLOSE = 2099;\n',
+              'constexpr UINT CMD_CLOSE = 2099;\n'
+              'constexpr UINT_PTR TIMER_OPACITY_HUD = 1;\n'
+              'constexpr UINT OPACITY_HUD_MS = 1200;\n'
+          )
+
+          helper_anchor = 'bool OpenClipboardWithRetry() {'
+          helpers = r'''void AddRoundRect(Gdiplus::GraphicsPath& path, const Gdiplus::RectF& rect, float radius) {
+    path.Reset();
+    const float diameter = radius * 2.0f;
+    path.AddArc(rect.X, rect.Y, diameter, diameter, 180.0f, 90.0f);
+    path.AddArc(rect.GetRight() - diameter, rect.Y, diameter, diameter, 270.0f, 90.0f);
+    path.AddArc(rect.GetRight() - diameter, rect.GetBottom() - diameter, diameter, diameter, 0.0f, 90.0f);
+    path.AddArc(rect.X, rect.GetBottom() - diameter, diameter, diameter, 90.0f, 90.0f);
+    path.CloseFigure();
+}
+
+void FillRoundRect(
+    Gdiplus::Graphics& graphics,
+    const Gdiplus::Color& color,
+    const Gdiplus::RectF& rect,
+    float radius) {
+    Gdiplus::GraphicsPath path;
+    AddRoundRect(path, rect, radius);
+    Gdiplus::SolidBrush brush(color);
+    graphics.FillPath(&brush, &path);
+}
+
+'''
+          if helpers not in text:
+              text = text.replace(helper_anchor, helpers + helper_anchor)
+
+          start = text.index('bool PinWindow::Create(HINSTANCE instance, HBITMAP bitmap) {')
+          end = text.index('\nbool PinWindow::CreateFromClipboard(HINSTANCE instance) {', start)
+          create_block = r'''bool PinWindow::Create(HINSTANCE instance, HBITMAP bitmap) {
+    return CreateInternal(instance, bitmap, nullptr);
+}
+
+bool PinWindow::CreateAt(HINSTANCE instance, HBITMAP bitmap, const RECT& screenRect) {
+    return CreateInternal(instance, bitmap, &screenRect);
+}
+
+bool PinWindow::CreateInternal(
+    HINSTANCE instance,
+    HBITMAP bitmap,
+    const RECT* initialScreenRect) {
+    if (!bitmap) {
+        return false;
+    }
+
+    auto* self = new PinWindow(instance, bitmap);
+    if (self->bitmapWidth_ <= 0 || self->bitmapHeight_ <= 0) {
+        delete self;
+        return false;
+    }
+
+    int x{};
+    int y{};
+    int width{};
+    int height{};
+
+    if (initialScreenRect &&
+        initialScreenRect->right > initialScreenRect->left &&
+        initialScreenRect->bottom > initialScreenRect->top) {
+        // A screenshot pin should appear exactly where the selected pixels came
+        // from. SnipWindow passes virtual-screen coordinates, so negative
+        // coordinates on a monitor left of the primary display are valid here.
+        self->zoom_ = 1.0;
+        x = initialScreenRect->left;
+        y = initialScreenRect->top;
+        width = self->bitmapWidth_;
+        height = self->bitmapHeight_;
+    } else {
+        // Arbitrary clipboard pins do not have a source rectangle. Keep the
+        // existing behavior: constrain very large images and place near cursor.
+        const int maxWidth = static_cast<int>(GetSystemMetrics(SM_CXSCREEN) * 0.65);
+        const int maxHeight = static_cast<int>(GetSystemMetrics(SM_CYSCREEN) * 0.65);
+        self->zoom_ = std::min({1.0,
+            static_cast<double>(maxWidth) / self->bitmapWidth_,
+            static_cast<double>(maxHeight) / self->bitmapHeight_});
+
+        width = std::max(1, static_cast<int>(self->bitmapWidth_ * self->zoom_));
+        height = std::max(1, static_cast<int>(self->bitmapHeight_ * self->zoom_));
+
+        POINT cursor{};
+        GetCursorPos(&cursor);
+        x = cursor.x + 16;
+        y = cursor.y + 16;
+    }
+
+    HWND hwnd = CreateWindowExW(
+        WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED,
+        kPinClass,
+        L"Snap-Lite Pin",
+        WS_POPUP,
+        x,
+        y,
+        width,
+        height,
+        nullptr,
+        nullptr,
+        instance,
+        self);
+
+    if (!hwnd) {
+        delete self;
+        return false;
+    }
+
+    self->hwnd_ = hwnd;
+    SetLayeredWindowAttributes(hwnd, 0, self->opacity_, LWA_ALPHA);
+    ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+    UpdateWindow(hwnd);
+    return true;
+}
+'''
+          text = text[:start] + create_block + text[end:]
+
+          old_adjust = r'''void PinWindow::AdjustOpacity(int wheelDelta) {
+    int next = static_cast<int>(opacity_) + (wheelDelta > 0 ? 16 : -16);
+    opacity_ = static_cast<BYTE>(std::clamp(next, 48, 255));
+    SetLayeredWindowAttributes(hwnd_, 0, opacity_, LWA_ALPHA);
+}
+'''
+          new_adjust = r'''void PinWindow::SetOpacity(BYTE opacity, bool showHud) {
+    opacity_ = opacity;
+    SetLayeredWindowAttributes(hwnd_, 0, opacity_, LWA_ALPHA);
+
+    if (showHud) {
+        opacityHudVisible_ = true;
+        SetTimer(hwnd_, TIMER_OPACITY_HUD, OPACITY_HUD_MS, nullptr);
+        InvalidateRect(hwnd_, nullptr, FALSE);
+    }
+}
+
+void PinWindow::AdjustOpacity(int wheelDelta) {
+    const int stepCount = std::max(1, std::abs(wheelDelta) / WHEEL_DELTA);
+    const int delta = (wheelDelta > 0 ? 16 : -16) * stepCount;
+    const int next = std::clamp(static_cast<int>(opacity_) + delta, 48, 255);
+    SetOpacity(static_cast<BYTE>(next), true);
+}
+
+void PinWindow::PaintOpacityHud(HDC dc, const RECT& client) {
+    const int clientWidth = client.right - client.left;
+    const int clientHeight = client.bottom - client.top;
+    if (!opacityHudVisible_ || clientWidth < 84 || clientHeight < 34) {
+        return;
+    }
+
+    const int panelWidth = std::min(196, std::max(112, clientWidth - 20));
+    const int panelHeight = std::min(58, std::max(34, clientHeight - 8));
+    const int left = (clientWidth - panelWidth) / 2;
+    const int top = std::max(4, clientHeight - panelHeight - 14);
+
+    Gdiplus::Graphics graphics(dc);
+    graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    graphics.SetCompositingMode(Gdiplus::CompositingModeSourceOver);
+
+    const Gdiplus::RectF panel(
+        static_cast<float>(left),
+        static_cast<float>(top),
+        static_cast<float>(panelWidth),
+        static_cast<float>(panelHeight));
+    FillRoundRect(graphics, Gdiplus::Color(218, 24, 27, 32), panel, 10.0f);
+
+    Gdiplus::GraphicsPath panelPath;
+    AddRoundRect(panelPath, panel, 10.0f);
+    Gdiplus::Pen border(Gdiplus::Color(52, 255, 255, 255), 1.0f);
+    graphics.DrawPath(&border, &panelPath);
+
+    const int percent = static_cast<int>(
+        (static_cast<unsigned int>(opacity_) * 100u + 127u) / 255u);
+
+    HFONT font = CreateFontW(
+        -14, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
+        DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
+        CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE,
+        L"Microsoft YaHei UI");
+    const HGDIOBJ oldFont = font ? SelectObject(dc, font) : nullptr;
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, RGB(244, 246, 250));
+
+    wchar_t label[32]{};
+    swprintf_s(label, L"透明度 %d%%", percent);
+    RECT labelRect{
+        left + 12,
+        top + 5,
+        left + panelWidth - 12,
+        top + std::max(24, panelHeight - 16)};
+    DrawTextW(dc, label, -1, &labelRect, DT_CENTER | DT_TOP | DT_SINGLELINE);
+
+    if (oldFont) SelectObject(dc, oldFont);
+    if (font) DeleteObject(font);
+
+    const float progress = static_cast<float>(opacity_) / 255.0f;
+    const float barX = static_cast<float>(left + 14);
+    const float barY = static_cast<float>(top + panelHeight - 13);
+    const float barWidth = static_cast<float>(panelWidth - 28);
+    const float barHeight = 6.0f;
+    const Gdiplus::RectF track(barX, barY, barWidth, barHeight);
+    FillRoundRect(graphics, Gdiplus::Color(70, 255, 255, 255), track, 3.0f);
+
+    if (progress > 0.0f) {
+        const Gdiplus::RectF fill(barX, barY, std::max(6.0f, barWidth * progress), barHeight);
+        FillRoundRect(graphics, Gdiplus::Color(255, 255, 197, 61), fill, 3.0f);
+    }
+}
+'''
+          if old_adjust not in text:
+              raise SystemExit('AdjustOpacity block not found')
+          text = text.replace(old_adjust, new_adjust)
+
+          paint_anchor = '''        SelectObject(memory, old);\n        DeleteDC(memory);\n        EndPaint(hwnd_, &ps);'''
+          paint_replacement = '''        SelectObject(memory, old);\n        DeleteDC(memory);\n        PaintOpacityHud(dc, client);\n        EndPaint(hwnd_, &ps);'''
+          if paint_anchor not in text:
+              raise SystemExit('WM_PAINT anchor not found')
+          text = text.replace(paint_anchor, paint_replacement, 1)
+
+          mouse_anchor = '    case WM_MOUSEWHEEL:\n'
+          timer_block = '''    case WM_TIMER:\n        if (wParam == TIMER_OPACITY_HUD) {\n            KillTimer(hwnd_, TIMER_OPACITY_HUD);\n            opacityHudVisible_ = false;\n            InvalidateRect(hwnd_, nullptr, FALSE);\n            return 0;\n        }\n        break;\n\n'''
+          text = text.replace(mouse_anchor, timer_block + mouse_anchor, 1)
+
+          text = text.replace(
+              '''        case CMD_OPACITY_100:\n            opacity_ = 255;\n            SetLayeredWindowAttributes(hwnd_, 0, opacity_, LWA_ALPHA);\n            return 0;''',
+              '''        case CMD_OPACITY_100:\n            SetOpacity(255, true);\n            return 0;''')
+          text = text.replace(
+              '''        case CMD_OPACITY_80:\n            opacity_ = 204;\n            SetLayeredWindowAttributes(hwnd_, 0, opacity_, LWA_ALPHA);\n            return 0;''',
+              '''        case CMD_OPACITY_80:\n            SetOpacity(204, true);\n            return 0;''')
+          text = text.replace(
+              '''        case CMD_OPACITY_60:\n            opacity_ = 153;\n            SetLayeredWindowAttributes(hwnd_, 0, opacity_, LWA_ALPHA);\n            return 0;''',
+              '''        case CMD_OPACITY_60:\n            SetOpacity(153, true);\n            return 0;''')
+          text = text.replace(
+              '''        case CMD_OPACITY_40:\n            opacity_ = 102;\n            SetLayeredWindowAttributes(hwnd_, 0, opacity_, LWA_ALPHA);\n            return 0;''',
+              '''        case CMD_OPACITY_40:\n            SetOpacity(102, true);\n            return 0;''')
+
+          text = text.replace(
+              '''    case WM_NCDESTROY:\n        hwnd_ = nullptr;''',
+              '''    case WM_NCDESTROY:\n        KillTimer(hwnd_, TIMER_OPACITY_HUD);\n        hwnd_ = nullptr;''')
+
+          path.write_text(text, encoding='utf-8', newline='\n')
+
+          # ---------------- Snip callback carries original screen rectangle ----------------
+          path = Path('src/snip_window.h')
+          text = path.read_text(encoding='utf-8')
+          text = text.replace(
+              'using CaptureCallback = std::function<void(HBITMAP, FinishAction)>;',
+              'using CaptureCallback = std::function<void(HBITMAP, FinishAction, const RECT&)>;')
+          path.write_text(text, encoding='utf-8', newline='\n')
+
+          path = Path('src/snip_window.cpp')
+          text = path.read_text(encoding='utf-8')
+          old_finish = r'''void SnipWindow::Finish(FinishAction action) {
+    CommitTextEdit();
+    if (!selected_) return;
+    HBITMAP result = CloneBitmapRegion(capture_, NormalizedSelection());
+    if (!result) return;
+    auto callback = callback_;
+    DestroyWindow(hwnd_);
+    if (callback) callback(result, action);
+    else DeleteObject(result);
+}
+'''
+          new_finish = r'''void SnipWindow::Finish(FinishAction action) {
+    CommitTextEdit();
+    if (!selected_) return;
+
+    const RECT selection = NormalizedSelection();
+    HBITMAP result = CloneBitmapRegion(capture_, selection);
+    if (!result) return;
+
+    // selection is relative to the full virtual-screen snip window. Convert it
+    // back to desktop coordinates before this window destroys itself.
+    RECT sourceScreenRect = selection;
+    OffsetRect(&sourceScreenRect, screen_.x, screen_.y);
+
+    auto callback = callback_;
+    DestroyWindow(hwnd_);
+    if (callback) callback(result, action, sourceScreenRect);
+    else DeleteObject(result);
+}
+'''
+          if old_finish not in text:
+              raise SystemExit('SnipWindow::Finish block not found')
+          text = text.replace(old_finish, new_finish)
+
+          # A little more breathing room in the toolbar and a cleaner modern icon treatment.
+          text = text.replace('constexpr int kToolbarButton = 36;', 'constexpr int kToolbarButton = 38;')
+          text = text.replace('constexpr int kToolbarHeight = 40;', 'constexpr int kToolbarHeight = 42;')
+          text = text.replace('constexpr int kToolbarRadius = 10;', 'constexpr int kToolbarRadius = 11;')
+
+          start_marker = 'void SnipWindow::PaintToolbarIcon(HDC dc, int index, const RECT& rect, bool active, bool hovered) {'
+          end_marker = '\nvoid SnipWindow::PaintToolbar(HDC dc) {'
+          start = text.index(start_marker)
+          end = text.index(end_marker, start)
+          icon_renderer = r'''void SnipWindow::PaintToolbarIcon(HDC dc, int index, const RECT& rect, bool active, bool hovered) {
+    Gdiplus::Graphics graphics(dc);
+    graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+
+    const float cx = (rect.left + rect.right) / 2.0f;
+    const float cy = (rect.top + rect.bottom) / 2.0f;
+    const Gdiplus::RectF chip(
+        static_cast<float>(rect.left) + 3.0f,
+        static_cast<float>(rect.top) + 3.0f,
+        static_cast<float>(rect.right - rect.left) - 6.0f,
+        static_cast<float>(rect.bottom - rect.top) - 6.0f);
+
+    const bool cancel = index == 8;
+    const bool primary = index == 11;
+
+    if (primary) {
+        FillRoundRect(graphics, Accent(hovered ? 255 : 238), chip, 9.0f);
+        if (hovered) {
+            Gdiplus::GraphicsPath glowPath;
+            AddRoundRect(glowPath, chip, 9.0f);
+            Gdiplus::Pen glow(Gdiplus::Color(170, 255, 225, 125), 1.0f);
+            graphics.DrawPath(&glow, &glowPath);
+        }
+    } else if (active) {
+        FillRoundRect(graphics, Gdiplus::Color(46, 255, 197, 61), chip, 9.0f);
+        Gdiplus::GraphicsPath activePath;
+        AddRoundRect(activePath, chip, 9.0f);
+        Gdiplus::Pen activeRing(Accent(205), 1.0f);
+        graphics.DrawPath(&activeRing, &activePath);
+    } else if (hovered) {
+        FillRoundRect(
+            graphics,
+            cancel ? Gdiplus::Color(34, 255, 107, 91)
+                   : Gdiplus::Color(31, 255, 255, 255),
+            chip,
+            9.0f);
+    }
+
+    Gdiplus::Color tone = Ink(hovered ? 255 : 218);
+    if (cancel) tone = hovered ? Danger() : Ink(175);
+    if (active) tone = Accent();
+    if (primary) tone = Gdiplus::Color(255, 26, 28, 32);
+
+    Gdiplus::Pen pen(tone, 1.85f);
+    pen.SetStartCap(Gdiplus::LineCapRound);
+    pen.SetEndCap(Gdiplus::LineCapRound);
+    pen.SetLineJoin(Gdiplus::LineJoinRound);
+    Gdiplus::SolidBrush brush(tone);
+
+    switch (index) {
+    case 0: {  // rounded rectangle
+        Gdiplus::GraphicsPath path;
+        AddRoundRect(path, Gdiplus::RectF(cx - 8.0f, cy - 6.5f, 16.0f, 13.0f), 2.7f);
+        graphics.DrawPath(&pen, &path);
+        break;
+    }
+    case 1:  // ellipse
+        graphics.DrawEllipse(&pen, cx - 8.0f, cy - 6.5f, 16.0f, 13.0f);
+        break;
+    case 2:  // arrow
+        graphics.DrawLine(&pen, cx - 7.5f, cy + 6.0f, cx + 6.5f, cy - 7.0f);
+        graphics.DrawLine(&pen, cx - 0.5f, cy - 6.8f, cx + 6.5f, cy - 7.0f);
+        graphics.DrawLine(&pen, cx + 6.5f, cy - 7.0f, cx + 6.2f, cy + 0.2f);
+        break;
+    case 3: {  // pen / nib
+        Gdiplus::GraphicsPath nib;
+        const Gdiplus::PointF points[4] = {
+            {cx + 5.8f, cy - 7.2f},
+            {cx + 8.0f, cy - 5.0f},
+            {cx - 3.5f, cy + 6.5f},
+            {cx - 6.8f, cy + 7.5f},
+        };
+        nib.AddPolygon(points, 4);
+        nib.CloseFigure();
+        graphics.DrawPath(&pen, &nib);
+        graphics.DrawLine(&pen, cx + 2.0f, cy - 3.5f, cx + 4.2f, cy - 1.3f);
+        graphics.DrawLine(&pen, cx - 6.8f, cy + 7.5f, cx - 1.4f, cy + 6.3f);
+        break;
+    }
+    case 4: {  // mosaic
+        for (int row = 0; row < 3; ++row) {
+            for (int col = 0; col < 3; ++col) {
+                const float x = cx - 8.0f + col * 6.0f;
+                const float y = cy - 8.0f + row * 6.0f;
+                Gdiplus::RectF cell(x, y, 4.5f, 4.5f);
+                if ((row + col) % 2 == 0) {
+                    FillRoundRect(graphics, tone, cell, 1.2f);
+                } else {
+                    Gdiplus::GraphicsPath path;
+                    AddRoundRect(path, cell, 1.2f);
+                    graphics.DrawPath(&pen, &path);
+                }
+            }
+        }
+        break;
+    }
+    case 5:  // text
+        graphics.DrawLine(&pen, cx - 7.2f, cy - 7.0f, cx + 7.2f, cy - 7.0f);
+        graphics.DrawLine(&pen, cx, cy - 7.0f, cx, cy + 7.2f);
+        graphics.DrawLine(&pen, cx - 3.4f, cy + 7.2f, cx + 3.4f, cy + 7.2f);
+        break;
+    case 6:  // undo
+        graphics.DrawArc(&pen, cx - 7.5f, cy - 6.2f, 15.5f, 13.5f, 190.0f, 255.0f);
+        graphics.DrawLine(&pen, cx - 8.0f, cy - 0.8f, cx - 8.0f, cy + 5.2f);
+        graphics.DrawLine(&pen, cx - 8.0f, cy + 5.2f, cx - 2.0f, cy + 5.2f);
+        break;
+    case 7:  // redo
+        graphics.DrawArc(&pen, cx - 8.0f, cy - 6.2f, 15.5f, 13.5f, 95.0f, 255.0f);
+        graphics.DrawLine(&pen, cx + 8.0f, cy - 0.8f, cx + 8.0f, cy + 5.2f);
+        graphics.DrawLine(&pen, cx + 8.0f, cy + 5.2f, cx + 2.0f, cy + 5.2f);
+        break;
+    case 8:  // cancel
+        pen.SetWidth(2.0f);
+        graphics.DrawLine(&pen, cx - 5.8f, cy - 5.8f, cx + 5.8f, cy + 5.8f);
+        graphics.DrawLine(&pen, cx + 5.8f, cy - 5.8f, cx - 5.8f, cy + 5.8f);
+        break;
+    case 9: {  // pin
+        Gdiplus::GraphicsPath pin;
+        const Gdiplus::PointF pinPoints[5] = {
+            {cx - 5.2f, cy - 7.0f},
+            {cx + 5.2f, cy - 7.0f},
+            {cx + 3.5f, cy - 1.0f},
+            {cx, cy + 1.5f},
+            {cx - 3.5f, cy - 1.0f},
+        };
+        pin.AddPolygon(pinPoints, 5);
+        pin.CloseFigure();
+        graphics.DrawPath(&pen, &pin);
+        graphics.DrawLine(&pen, cx, cy + 1.5f, cx, cy + 8.0f);
+        break;
+    }
+    case 10:  // save
+        graphics.DrawLine(&pen, cx, cy - 7.5f, cx, cy + 2.5f);
+        graphics.DrawLine(&pen, cx - 4.2f, cy - 1.5f, cx, cy + 2.8f);
+        graphics.DrawLine(&pen, cx + 4.2f, cy - 1.5f, cx, cy + 2.8f);
+        graphics.DrawLine(&pen, cx - 7.2f, cy + 7.0f, cx + 7.2f, cy + 7.0f);
+        graphics.DrawLine(&pen, cx - 7.2f, cy + 7.0f, cx - 7.2f, cy + 4.0f);
+        graphics.DrawLine(&pen, cx + 7.2f, cy + 7.0f, cx + 7.2f, cy + 4.0f);
+        break;
+    case 11:  // done / copy
+        pen.SetWidth(2.5f);
+        graphics.DrawLine(&pen, cx - 6.2f, cy + 0.2f, cx - 1.6f, cy + 4.8f);
+        graphics.DrawLine(&pen, cx - 1.6f, cy + 4.8f, cx + 7.0f, cy - 5.2f);
+        break;
+    default:
+        break;
+    }
+}
+'''
+          text = text[:start] + icon_renderer + text[end:]
+          path.write_text(text, encoding='utf-8', newline='\n')
+
+          # ---------------- app.cpp: pin directly from screenshot clone ----------------
+          path = Path('src/app.cpp')
+          text = path.read_text(encoding='utf-8')
+          text = text.replace(
+              '[this](HBITMAP bitmap, SnipWindow::FinishAction action) {',
+              '[this](HBITMAP bitmap, SnipWindow::FinishAction action, const RECT& sourceScreenRect) {')
+
+          old_pin = r'''            const bool pinAfter = action == SnipWindow::FinishAction::Pin;
+            CommitCapture(bitmap);
+            if (pinAfter) {
+                PinClipboard();
+            }
+'''
+          new_pin = r'''            if (action == SnipWindow::FinishAction::Pin) {
+                // Preserve the existing save + clipboard behavior, but create
+                // the pin directly from a clone so its original screen position
+                // is not lost through a clipboard round trip.
+                HBITMAP pinBitmap = CloneBitmap(bitmap);
+                CommitCapture(bitmap);
+                if (!pinBitmap || !PinWindow::CreateAt(instance_, pinBitmap, sourceScreenRect)) {
+                    ShowNotice(L"贴图创建失败");
+                }
+                return;
+            }
+
+            CommitCapture(bitmap);
+'''
+          if old_pin not in text:
+              raise SystemExit('App pin block not found')
+          text = text.replace(old_pin, new_pin)
+          path.write_text(text, encoding='utf-8', newline='\n')
+          PY
+
+      - name: Commit feature changes and remove one-shot workflow
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          rm .github/workflows/pin-origin-hud-once.yml
+          git add src/app.cpp src/pin_window.cpp src/pin_window.h src/snip_window.cpp src/snip_window.h .github/workflows/pin-origin-hud-once.yml
+          git commit -m "Improve pin placement opacity feedback and toolbar icons"
+          git push origin HEAD:feature/tencent-style-toolbar
