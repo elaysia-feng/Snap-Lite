@@ -174,7 +174,7 @@ void App::StartSnip() {
     const bool started = SnipWindow::Start(
         instance_,
         hwnd_,
-        [this](HBITMAP bitmap, SnipWindow::FinishAction action) {
+        [this](HBITMAP bitmap, SnipWindow::FinishAction action, const RECT& sourceScreenRect) {
             if (!bitmap) {
                 ShowNotice(L"截图失败");
                 return;
@@ -193,11 +193,19 @@ void App::StartSnip() {
                 return;
             }
 
-            const bool pinAfter = action == SnipWindow::FinishAction::Pin;
-            CommitCapture(bitmap);
-            if (pinAfter) {
-                PinClipboard();
+            if (action == SnipWindow::FinishAction::Pin) {
+                // Keep the normal save + clipboard behavior, but create the pin
+                // directly from a clone so the screenshot's desktop position is
+                // preserved instead of being lost through a clipboard round trip.
+                HBITMAP pinBitmap = CloneBitmap(bitmap);
+                CommitCapture(bitmap);
+                if (!pinBitmap || !PinWindow::CreateAt(instance_, pinBitmap, sourceScreenRect)) {
+                    ShowNotice(L"贴图创建失败");
+                }
+                return;
             }
+
+            CommitCapture(bitmap);
         });
 
     if (!started) {
