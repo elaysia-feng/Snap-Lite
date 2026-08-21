@@ -1,0 +1,215 @@
+name: embed-anime-icon-once
+
+on:
+  push:
+    branches:
+      - feature/tencent-style-toolbar
+    paths:
+      - '.github/workflows/embed-anime-icon-once.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch-build-push:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/tencent-style-toolbar
+          fetch-depth: 0
+
+      - name: Add embedded blue anime icon resources
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path resources | Out-Null
+
+          @'
+          #pragma once
+          #define IDI_SNAPLITE 101
+          '@ | Set-Content -Encoding UTF8 resources/resource.h
+
+          @'
+          IDI_SNAPLITE ICON "@SNAP_LITE_ICON_PATH@"
+          '@ | Set-Content -Encoding UTF8 resources/SnapLite.rc.in
+
+          @'
+          param(
+              [Parameter(Mandatory=$true)]
+              [string]$OutputPath
+          )
+
+          Add-Type -AssemblyName System.Drawing
+          Add-Type @"
+          using System;
+          using System.Runtime.InteropServices;
+          public static class SnapLiteNativeIcon {
+              [DllImport("user32.dll", CharSet = CharSet.Auto)]
+              public static extern bool DestroyIcon(IntPtr handle);
+          }
+          "@
+
+          $size = 256
+          $bitmap = New-Object System.Drawing.Bitmap($size, $size, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+          $g = [System.Drawing.Graphics]::FromImage($bitmap)
+          $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+          $g.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+
+          $bounds = New-Object System.Drawing.Rectangle(0, 0, $size, $size)
+          $bg = New-Object System.Drawing.Drawing2D.LinearGradientBrush(
+              $bounds,
+              [System.Drawing.Color]::FromArgb(255, 76, 172, 255),
+              [System.Drawing.Color]::FromArgb(255, 22, 91, 235),
+              45.0
+          )
+          $g.FillRectangle($bg, $bounds)
+
+          # soft cyan glow
+          $glow = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(42, 160, 238, 255))
+          $g.FillEllipse($glow, 20, 18, 210, 210)
+
+          # screenshot corner brackets
+          $framePen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(242, 250, 253, 255), 16)
+          $framePen.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
+          $framePen.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
+          $g.DrawLine($framePen, 34, 78, 34, 34)
+          $g.DrawLine($framePen, 34, 34, 78, 34)
+          $g.DrawLine($framePen, 178, 34, 222, 34)
+          $g.DrawLine($framePen, 222, 34, 222, 78)
+          $g.DrawLine($framePen, 34, 178, 34, 222)
+          $g.DrawLine($framePen, 34, 222, 78, 222)
+
+          # anime hair silhouette
+          $hairPen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(235, 225, 244, 255), 18)
+          $hairPen.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
+          $hairPen.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
+          $g.DrawBezier($hairPen, 57, 108, 88, 42, 164, 34, 204, 92)
+          $g.DrawBezier($hairPen, 70, 112, 99, 65, 133, 55, 139, 106)
+          $g.DrawBezier($hairPen, 188, 74, 210, 113, 203, 166, 178, 196)
+
+          # eye white shape
+          $eyePath = New-Object System.Drawing.Drawing2D.GraphicsPath
+          $eyePath.StartFigure()
+          $eyePath.AddBezier(54, 142, 87, 94, 168, 92, 205, 137)
+          $eyePath.AddBezier(205, 137, 166, 188, 91, 188, 54, 142)
+          $eyePath.CloseFigure()
+          $eyeWhite = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(248, 249, 253, 255))
+          $g.FillPath($eyeWhite, $eyePath)
+
+          # iris layers
+          $irisOuter = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(255, 13, 71, 166))
+          $irisMid = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(255, 44, 177, 255))
+          $irisInner = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(255, 80, 235, 255))
+          $g.FillEllipse($irisOuter, 105, 103, 72, 72)
+          $g.FillEllipse($irisMid, 112, 111, 58, 58)
+          $g.FillEllipse($irisInner, 119, 133, 44, 31)
+          $pupil = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(255, 10, 36, 94))
+          $g.FillEllipse($pupil, 132, 119, 22, 41)
+          $shine = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::White)
+          $g.FillEllipse($shine, 122, 116, 17, 17)
+          $g.FillEllipse($shine, 151, 139, 8, 8)
+
+          # upper lash
+          $lashPen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(255, 9, 30, 84), 9)
+          $lashPen.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
+          $lashPen.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
+          $g.DrawBezier($lashPen, 54, 141, 89, 94, 170, 94, 207, 136)
+
+          # little capture target + pointer in lower-right
+          $dashPen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(235, 255, 255, 255), 6)
+          $dashPen.DashPattern = @(1.2, 1.2)
+          $g.DrawRectangle($dashPen, 172, 169, 54, 50)
+          $cursorBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::White)
+          [System.Drawing.Point[]]$cursor = @(
+              (New-Object System.Drawing.Point(202, 188)),
+              (New-Object System.Drawing.Point(231, 211)),
+              (New-Object System.Drawing.Point(216, 214)),
+              (New-Object System.Drawing.Point(226, 233)),
+              (New-Object System.Drawing.Point(216, 238)),
+              (New-Object System.Drawing.Point(207, 219)),
+              (New-Object System.Drawing.Point(197, 231))
+          )
+          $g.FillPolygon($cursorBrush, $cursor)
+
+          # sparkles
+          $spark = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(220, 224, 249, 255), 5)
+          $spark.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
+          $spark.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
+          $g.DrawLine($spark, 54, 104, 54, 126)
+          $g.DrawLine($spark, 43, 115, 65, 115)
+
+          $g.Dispose()
+          $bg.Dispose(); $glow.Dispose(); $framePen.Dispose(); $hairPen.Dispose()
+          $eyeWhite.Dispose(); $irisOuter.Dispose(); $irisMid.Dispose(); $irisInner.Dispose()
+          $pupil.Dispose(); $shine.Dispose(); $lashPen.Dispose(); $dashPen.Dispose(); $cursorBrush.Dispose(); $spark.Dispose(); $eyePath.Dispose()
+
+          $directory = Split-Path -Parent $OutputPath
+          if ($directory) { New-Item -ItemType Directory -Force -Path $directory | Out-Null }
+          $hIcon = $bitmap.GetHicon()
+          $icon = [System.Drawing.Icon]::FromHandle($hIcon)
+          $stream = [System.IO.File]::Open($OutputPath, [System.IO.FileMode]::Create)
+          $icon.Save($stream)
+          $stream.Dispose()
+          $icon.Dispose()
+          [SnapLiteNativeIcon]::DestroyIcon($hIcon) | Out-Null
+          $bitmap.Dispose()
+          '@ | Set-Content -Encoding UTF8 resources/generate_icon.ps1
+
+      - name: Patch CMake and app icon loading
+        shell: pwsh
+        run: |
+          @'
+          from pathlib import Path
+          import re
+
+          cmake = Path('CMakeLists.txt')
+          s = cmake.read_text(encoding='utf-8')
+          s = s.replace('project(SnapLite VERSION 0.2.0 LANGUAGES CXX)', 'project(SnapLite VERSION 0.3.0 LANGUAGES CXX RC)')
+          if 'SNAP_LITE_GENERATED_ICON' not in s:
+              insert = '''\nset(SNAP_LITE_GENERATED_ICON "${CMAKE_CURRENT_BINARY_DIR}/SnapLite.ico")\nexecute_process(\n    COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass\n            -File "${CMAKE_CURRENT_SOURCE_DIR}/resources/generate_icon.ps1"\n            -OutputPath "${SNAP_LITE_GENERATED_ICON}"\n    RESULT_VARIABLE SNAP_LITE_ICON_RESULT\n)\nif(NOT SNAP_LITE_ICON_RESULT EQUAL 0)\n    message(FATAL_ERROR "Failed to generate Snap-Lite application icon")\nendif()\nset(SNAP_LITE_ICON_PATH "${SNAP_LITE_GENERATED_ICON}")\nconfigure_file(\n    "${CMAKE_CURRENT_SOURCE_DIR}/resources/SnapLite.rc.in"\n    "${CMAKE_CURRENT_BINARY_DIR}/SnapLite.rc"\n    @ONLY\n)\n'''
+              s = s.replace('\nadd_executable(SnapLite WIN32\n', insert + '\nadd_executable(SnapLite WIN32\n')
+              s = s.replace('    src/snip_window.cpp\n)', '    src/snip_window.cpp\n    "${CMAKE_CURRENT_BINARY_DIR}/SnapLite.rc"\n)')
+              s = s.replace('target_compile_features(SnapLite PRIVATE cxx_std_17)', 'target_compile_features(SnapLite PRIVATE cxx_std_17)\ntarget_include_directories(SnapLite PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/resources")')
+          cmake.write_text(s, encoding='utf-8', newline='\n')
+
+          app = Path('src/app.cpp')
+          s = app.read_text(encoding='utf-8')
+          if '#include "resource.h"' not in s:
+              s = s.replace('#include "snip_window.h"', '#include "snip_window.h"\n#include "resource.h"')
+
+          s, count = re.subn(
+              r'HICON CreateSnapLiteIcon\(int size\) \{.*?\n\}\n\}\n\nApp::App',
+              '}\n\nApp::App',
+              s,
+              count=1,
+              flags=re.S,
+          )
+          if count != 1:
+              raise SystemExit('CreateSnapLiteIcon block not found')
+
+          old = '    appIcon_ = CreateSnapLiteIcon(32);'
+          new = '''    appIcon_ = static_cast<HICON>(LoadImageW(\n        instance_,\n        MAKEINTRESOURCEW(IDI_SNAPLITE),\n        IMAGE_ICON,\n        32,\n        32,\n        LR_DEFAULTCOLOR));'''
+          if old not in s:
+              raise SystemExit('app icon initialization marker not found')
+          s = s.replace(old, new)
+          app.write_text(s, encoding='utf-8', newline='\n')
+          '@ | Set-Content -Encoding UTF8 patch_embed_icon.py
+          python patch_embed_icon.py
+          Remove-Item patch_embed_icon.py
+
+      - name: Configure
+        run: cmake -S . -B build -A x64
+
+      - name: Build Release
+        run: cmake --build build --config Release
+
+      - name: Commit validated embedded icon
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/embed-anime-icon-once.yml
+          git add CMakeLists.txt src/app.cpp resources/resource.h resources/SnapLite.rc.in resources/generate_icon.ps1
+          git commit -m "Embed blue anime screenshot app icon"
+          git push origin HEAD:feature/tencent-style-toolbar
