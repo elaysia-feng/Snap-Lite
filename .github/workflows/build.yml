@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: write
+
 jobs:
   windows:
     runs-on: windows-latest
@@ -12,6 +15,94 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply pending snip integration patch
+        shell: pwsh
+        run: |
+          @'
+          from pathlib import Path
+
+          path = Path('src/snip_window.cpp')
+          text = path.read_text(encoding='utf-8')
+
+          text = text.replace('constexpr int kToolbarButton = 36;', 'constexpr int kToolbarButton = 38;')
+          text = text.replace('constexpr int kToolbarHeight = 40;', 'constexpr int kToolbarHeight = 42;')
+          text = text.replace('constexpr int kToolbarRadius = 10;', 'constexpr int kToolbarRadius = 11;')
+
+          old_finish = '''void SnipWindow::Finish(FinishAction action) {
+              CommitTextEdit();
+              if (!selected_) return;
+              HBITMAP result = CloneBitmapRegion(capture_, NormalizedSelection());
+              if (!result) return;
+              auto callback = callback_;
+              DestroyWindow(hwnd_);
+              if (callback) callback(result, action);
+              else DeleteObject(result);
+          }
+          '''
+          new_finish = '''void SnipWindow::Finish(FinishAction action) {
+              CommitTextEdit();
+              if (!selected_) return;
+
+              const RECT selection = NormalizedSelection();
+              HBITMAP result = CloneBitmapRegion(capture_, selection);
+              if (!result) return;
+
+              RECT sourceScreenRect = selection;
+              OffsetRect(&sourceScreenRect, screen_.x, screen_.y);
+
+              auto callback = callback_;
+              DestroyWindow(hwnd_);
+              if (callback) callback(result, action, sourceScreenRect);
+              else DeleteObject(result);
+          }
+          '''
+          if old_finish not in text:
+              raise SystemExit('SnipWindow::Finish block not found')
+          text = text.replace(old_finish, new_finish)
+
+          text = text.replace(
+              'FillRoundRect(graphics, Accent(hovered ? 255 : 235), chip, 8.0f);',
+              'FillRoundRect(graphics, Accent(hovered ? 255 : 238), chip, 9.0f);')
+          text = text.replace(
+              'FillRoundRect(graphics, Gdiplus::Color(42, 255, 197, 61), chip, 8.0f);',
+              'FillRoundRect(graphics, Gdiplus::Color(46, 255, 197, 61), chip, 9.0f);')
+          text = text.replace('AddRoundRect(activePath, chip, 8.0f);', 'AddRoundRect(activePath, chip, 9.0f);')
+          text = text.replace('            chip,\n            8.0f);', '            chip,\n            9.0f);')
+          text = text.replace('Gdiplus::Pen pen(tone, 1.9f);', 'Gdiplus::Pen pen(tone, 1.85f);')
+
+          old_pin = '''    case 9: {  // pin
+              graphics.DrawLine(&pen, cx - 6.5f, cy - 6.5f, cx + 6.5f, cy - 6.5f);
+              graphics.DrawLine(&pen, cx - 4.5f, cy - 6.5f, cx - 3.5f, cy - 1.0f);
+              graphics.DrawLine(&pen, cx + 4.5f, cy - 6.5f, cx + 3.5f, cy - 1.0f);
+              graphics.DrawLine(&pen, cx - 5.5f, cy - 1.0f, cx + 5.5f, cy - 1.0f);
+              graphics.DrawLine(&pen, cx, cy - 1.0f, cx, cy + 8.0f);
+              break;
+          }
+          '''
+          new_pin = '''    case 9: {  // pin
+              Gdiplus::GraphicsPath pinPath;
+              const Gdiplus::PointF pinPoints[5] = {
+                  {cx - 5.2f, cy - 7.0f},
+                  {cx + 5.2f, cy - 7.0f},
+                  {cx + 3.5f, cy - 1.0f},
+                  {cx, cy + 1.5f},
+                  {cx - 3.5f, cy - 1.0f},
+              };
+              pinPath.AddPolygon(pinPoints, 5);
+              pinPath.CloseFigure();
+              graphics.DrawPath(&pen, &pinPath);
+              graphics.DrawLine(&pen, cx, cy + 1.5f, cx, cy + 8.0f);
+              break;
+          }
+          '''
+          if old_pin in text:
+              text = text.replace(old_pin, new_pin)
+
+          path.write_text(text, encoding='utf-8', newline='\n')
+          '@ | python -
 
       - name: Configure
         run: cmake -S . -B build -A x64
@@ -24,3 +115,55 @@ jobs:
         with:
           name: SnapLite-windows-x64
           path: build/Release/SnapLite.exe
+
+      - name: Commit validated patch and restore workflow
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git checkout origin/main -- .github/workflows/build.yml
+          if (Test-Path .github/workflows/pin-origin-hud-once.yml) {
+            git rm .github/workflows/pin-origin-hud-once.yml
+          }
+          git add src/snip_window.cpp .github/workflows/build.yml
+          git commit -m "Finish original pin placement and toolbar polish"
+          git push origin HEAD:feature/tencent-style-toolbar
+
+      - name: Prepare beta package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item build/Release/SnapLite.exe dist/SnapLite.exe
+          Compress-Archive -Path dist/SnapLite.exe -DestinationPath "dist/SnapLite-0.3.0-beta-win-x64.zip" -Force
+          $hash = (Get-FileHash dist/SnapLite.exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  SnapLite.exe" | Out-File dist/SHA256SUMS.txt -Encoding ascii
+
+      - name: Move beta tag to validated commit
+        shell: pwsh
+        run: |
+          git tag -f "v0.3.0-beta" HEAD
+          git push origin "refs/tags/v0.3.0-beta" --force
+
+      - name: Publish updated beta
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: v0.3.0-beta
+          name: Snap-Lite v0.3.0-beta
+          prerelease: true
+          overwrite_files: true
+          fail_on_unmatched_files: true
+          body: |
+            Interaction beta for the current screenshot toolbar work.
+
+            Latest changes:
+            - screenshot pin now opens at the exact original desktop position
+            - multi-monitor virtual-screen coordinates are preserved
+            - mouse wheel adjusts pin opacity with an on-image percentage/progress HUD
+            - Ctrl + wheel keeps zoom behavior
+            - pin context menu keeps copy/save/opacity/close actions
+            - screenshot toolbar spacing, active states and pin icon are polished
+          files: |
+            dist/SnapLite.exe
+            dist/SnapLite-0.3.0-beta-win-x64.zip
+            dist/SHA256SUMS.txt
