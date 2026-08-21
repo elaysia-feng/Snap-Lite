@@ -13,46 +13,57 @@
 namespace snaplite {
 namespace {
 constexpr wchar_t kSnipClass[] = L"SnapLiteSnipWindow";
-
-// ---------------------------------------------------------------------------
-// Design tokens.
-//
-// The overlay always sits on top of someone else's screen, so every piece of
-// chrome has to stay legible over white documents, dark editors and photos
-// alike. Two rules follow from that and drive everything below:
-//   1. Chrome is always graphite, never light. A light bar disappears on light
-//      desktops and glares on dark ones; one dark tone reads on both.
-//   2. Every hairline is two-tone - a dark stroke outside, a bright stroke
-//      inside - so no edge can vanish into whatever is underneath it.
-// Amber is reserved for chrome (selection frame, active tool). Annotation ink
-// belongs to the user and stays in its own colour, so the two never collide.
-// ---------------------------------------------------------------------------
 constexpr COLORREF kInk = RGB(236, 239, 244);
-
-constexpr BYTE kDimSelected = 148;  // 58% scrim: the selection is the only lit area
-constexpr BYTE kDimIdle = 66;       // lighter scrim before a selection exists
+constexpr BYTE kDimSelected = 148;
+constexpr BYTE kDimIdle = 66;
 
 Gdiplus::Color Chrome(BYTE alpha = 242) { return {alpha, 27, 30, 35}; }
-Gdiplus::Color ChromeLine() { return {56, 255, 255, 255}; }   // bright half of a hairline
-Gdiplus::Color ChromeShade() { return {110, 0, 0, 0}; }       // dark half of a hairline
-Gdiplus::Color Accent(BYTE alpha = 255) { return {alpha, 255, 197, 61}; }
+Gdiplus::Color ChromeLine() { return {56, 255, 255, 255}; }
+Gdiplus::Color ChromeShade() { return {110, 0, 0, 0}; }
+Gdiplus::Color Accent(BYTE alpha = 255) { return {alpha, 69, 142, 255}; }
 Gdiplus::Color Ink(BYTE alpha = 255) { return {alpha, 236, 239, 244}; }
 Gdiplus::Color Danger() { return {255, 255, 107, 91}; }
 
 constexpr int kHandleRadius = 4;
 constexpr int kHandleHitRadius = 9;
-constexpr int kToolbarButton = 36;
-constexpr int kToolbarHeight = 40;
-constexpr int kToolbarButtons = 11;
+constexpr int kToolbarButton = 38;
+constexpr int kToolbarHeight = 42;
+constexpr int kToolbarButtons = 12;
 constexpr int kToolbarPadX = 6;
 constexpr int kToolbarGroupGap = 11;
-constexpr int kToolbarRadius = 10;
+constexpr int kToolbarRadius = 11;
+constexpr int kStyleHeight = 38;
 constexpr int kMinSelection = 8;
 
-// Toolbar buttons are grouped by what they do - draw | history | cancel |
-// finish - and the gaps encode that grouping rather than decorate it.
+constexpr COLORREF kAnnotationColors[] = {
+    RGB(235, 70, 70),
+    RGB(255, 145, 45),
+    RGB(250, 205, 55),
+    RGB(65, 190, 105),
+    RGB(68, 145, 245),
+    RGB(245, 245, 245),
+};
+constexpr int kStrokeWidths[] = {2, 4, 7};
+constexpr int kFontSizes[] = {16, 22, 30};
+constexpr int kMosaicBlocks[] = {8, 12, 18};
+
+constexpr const wchar_t* kToolbarTips[kToolbarButtons] = {
+    L"矩形 (R)",
+    L"椭圆 (O)",
+    L"箭头 (A)",
+    L"画笔 (P)",
+    L"马赛克 (M)",
+    L"文字 (T)",
+    L"撤销 (Ctrl+Z)",
+    L"重做 (Ctrl+Y)",
+    L"取消 (Esc)",
+    L"贴到桌面",
+    L"保存图片",
+    L"复制 (Enter)",
+};
+
 constexpr bool GroupBreakAfter(int index) {
-    return index == 4 || index == 6 || index == 7;
+    return index == 5 || index == 7 || index == 8;
 }
 
 constexpr int ToolbarButtonOffset(int index) {
@@ -90,8 +101,6 @@ void FillRoundRect(Gdiplus::Graphics& g, const Gdiplus::Color& color, const Gdip
     g.FillPath(&brush, &path);
 }
 
-// A hairline that carries its own contrast: `tone` on the inside, a dark
-// stroke hugging it on the outside. Readable over any background.
 void TwoToneRoundRect(Gdiplus::Graphics& g, const Gdiplus::Color& tone, const Gdiplus::RectF& r, float radius) {
     Gdiplus::GraphicsPath path;
     Gdiplus::RectF outer(r.X - 1.0f, r.Y - 1.0f, r.Width + 2.0f, r.Height + 2.0f);
@@ -115,8 +124,6 @@ void DropShadow(Gdiplus::Graphics& g, const Gdiplus::RectF& r, float radius, int
     }
 }
 
-// Dark rounded plate used by every floating label (size badge, hex readout,
-// hint strip) so they read as one family.
 void Plate(Gdiplus::Graphics& g, const RECT& r, float radius) {
     Gdiplus::RectF box(
         static_cast<float>(r.left) + 0.5f,
@@ -214,6 +221,10 @@ void DeleteBitmaps(std::vector<HBITMAP>& bitmaps) {
         }
     }
     bitmaps.clear();
+}
+
+Gdiplus::Color ToGdiColor(COLORREF color, BYTE alpha = 255) {
+    return Gdiplus::Color(alpha, GetRValue(color), GetGValue(color), GetBValue(color));
 }
 
 }  // namespace
@@ -372,6 +383,35 @@ RECT SnipWindow::ToolbarButtonRect(const RECT& bar, int index) const {
     return {left, bar.top + 2, left + kToolbarButton, bar.bottom - 2};
 }
 
+RECT SnipWindow::StyleBarRect() const {
+    if (!selected_ || tool_ == Tool::None) {
+        return {};
+    }
+
+    const RECT mainBar = ToolbarRect();
+    const RECT selection = NormalizedSelection();
+    const int width = tool_ == Tool::Mosaic ? 190 : 342;
+    const int x = std::clamp(
+        static_cast<int>(mainBar.left),
+        8,
+        std::max(8, screen_.width - width - 8));
+
+    int y{};
+    if (mainBar.top >= selection.bottom) {
+        y = mainBar.bottom + 6;
+        if (y + kStyleHeight > screen_.height - 8) {
+            y = mainBar.top - kStyleHeight - 6;
+        }
+    } else {
+        y = mainBar.top - kStyleHeight - 6;
+        if (y < 8) {
+            y = mainBar.bottom + 6;
+        }
+    }
+    y = std::clamp(y, 8, std::max(8, screen_.height - kStyleHeight - 8));
+    return {x, y, x + width, y + kStyleHeight};
+}
+
 SnipWindow::DragMode SnipWindow::HitSelection(POINT point) const {
     if (!selected_ || edited_) {
         return DragMode::None;
@@ -413,15 +453,44 @@ int SnipWindow::HitToolbar(POINT point) const {
     }
     for (int i = 0; i < kToolbarButtons; ++i) {
         const RECT button = ToolbarButtonRect(bar, i);
-        if (point.x >= button.left && point.x < button.right) {
+        if (PtInRect(&button, point)) {
             return i;
         }
     }
-    return -1;  // landed on a group divider
+    return -1;
+}
+
+int SnipWindow::HitStyle(POINT point) const {
+    const RECT bar = StyleBarRect();
+    if (bar.right <= bar.left || !PtInRect(&bar, point)) {
+        return -1;
+    }
+
+    if (tool_ == Tool::Mosaic) {
+        const int start = bar.left + 54;
+        for (int i = 0; i < 3; ++i) {
+            RECT item{start + i * 40, bar.top + 4, start + i * 40 + 36, bar.bottom - 4};
+            if (PtInRect(&item, point)) return 100 + i;
+        }
+        return -1;
+    }
+
+    const int colorStart = bar.left + 48;
+    for (int i = 0; i < static_cast<int>(std::size(kAnnotationColors)); ++i) {
+        RECT item{colorStart + i * 25, bar.top + 5, colorStart + i * 25 + 22, bar.bottom - 5};
+        if (PtInRect(&item, point)) return i;
+    }
+
+    const int optionStart = bar.left + 232;
+    for (int i = 0; i < 3; ++i) {
+        RECT item{optionStart + i * 34, bar.top + 4, optionStart + i * 34 + 30, bar.bottom - 4};
+        if (PtInRect(&item, point)) return 100 + i;
+    }
+    return -1;
 }
 
 void SnipWindow::SetCursorForPoint(POINT point) {
-    if (HitToolbar(point) >= 0) {
+    if (HitToolbar(point) >= 0 || HitStyle(point) >= 0) {
         SetCursor(LoadCursorW(nullptr, IDC_HAND));
         return;
     }
@@ -460,11 +529,24 @@ void SnipWindow::EnsureFonts() {
             DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
     }
     if (!monoFont_) {
-        // Tabular figures: the size badge must not reflow while dragging.
         monoFont_ = CreateFontW(
             -12, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
             OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
             FIXED_PITCH | FF_MODERN, L"Consolas");
+    }
+}
+
+void SnipWindow::RecreateTextFont() {
+    if (textFont_) {
+        DeleteObject(textFont_);
+        textFont_ = nullptr;
+    }
+    textFont_ = CreateFontW(
+        -fontSize_, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+        CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+    if (textEdit_ && textFont_) {
+        SendMessageW(textEdit_, WM_SETFONT, reinterpret_cast<WPARAM>(textFont_), TRUE);
     }
 }
 
@@ -482,19 +564,13 @@ void SnipWindow::PaintMagnifier(HDC dc, POINT clientPoint) {
     const int clientY = static_cast<int>(clientPoint.y);
     int panelX = clientX + 22;
     int panelY = clientY + 22;
-    if (panelX + panelW + 6 > screen_.width) {
-        panelX = clientX - panelW - 22;
-    }
-    if (panelY + panelH + 6 > screen_.height) {
-        panelY = clientY - panelH - 22;
-    }
+    if (panelX + panelW + 6 > screen_.width) panelX = clientX - panelW - 22;
+    if (panelY + panelH + 6 > screen_.height) panelY = clientY - panelH - 22;
     panelX = std::max(6, panelX);
     panelY = std::max(6, panelY);
 
     HDC memory = CreateCompatibleDC(dc);
-    if (!memory) {
-        return;
-    }
+    if (!memory) return;
     const HGDIOBJ old = SelectObject(memory, capture_);
     const COLORREF color = GetPixel(memory, clientX, clientY);
 
@@ -517,34 +593,18 @@ void SnipWindow::PaintMagnifier(HDC dc, POINT clientPoint) {
 
     {
         Gdiplus::Graphics graphics(dc);
-        // Aliased on purpose: the lattice has to stay exactly one pixel wide.
-        // Mid-grey rather than white - a white lattice is invisible over light
-        // content, which is most of what gets magnified.
         graphics.SetSmoothingMode(Gdiplus::SmoothingModeNone);
         Gdiplus::Pen grid(Gdiplus::Color(90, 128, 128, 128), 1.0f);
         for (int i = 1; i < sampleSize; ++i) {
             const float offset = static_cast<float>(i * zoom);
-            graphics.DrawLine(
-                &grid, lensX + offset, static_cast<float>(lensY), lensX + offset,
-                static_cast<float>(lensY + lensSize));
-            graphics.DrawLine(
-                &grid, static_cast<float>(lensX), lensY + offset,
-                static_cast<float>(lensX + lensSize), lensY + offset);
+            graphics.DrawLine(&grid, lensX + offset, static_cast<float>(lensY), lensX + offset, static_cast<float>(lensY + lensSize));
+            graphics.DrawLine(&grid, static_cast<float>(lensX), lensY + offset, static_cast<float>(lensX + lensSize), lensY + offset);
         }
-
-        // The sampled pixel, marked with the same two-tone rule as every other
-        // edge in the overlay so it reads against whatever it is sitting on.
         const float cell = static_cast<float>(sampleRadius * zoom);
-        const float cellX = lensX + cell;
-        const float cellY = lensY + cell;
-        Gdiplus::Pen shade(ChromeShade(), 1.0f);
-        graphics.DrawRectangle(&shade, cellX - 1.0f, cellY - 1.0f, zoom + 2.0f, zoom + 2.0f);
         Gdiplus::Pen mark(Accent(), 1.0f);
-        graphics.DrawRectangle(&mark, cellX, cellY, static_cast<float>(zoom), static_cast<float>(zoom));
-
+        graphics.DrawRectangle(&mark, lensX + cell, lensY + cell, static_cast<float>(zoom), static_cast<float>(zoom));
         Gdiplus::Pen edge(ChromeLine(), 1.0f);
-        graphics.DrawRectangle(
-            &edge, lensX - 1.0f, lensY - 1.0f, lensSize + 1.0f, lensSize + 1.0f);
+        graphics.DrawRectangle(&edge, lensX - 1.0f, lensY - 1.0f, lensSize + 1.0f, lensSize + 1.0f);
     }
 
     EnsureFonts();
@@ -556,22 +616,7 @@ void SnipWindow::PaintMagnifier(HDC dc, POINT clientPoint) {
     }
 
     const int rowY = lensY + lensSize + pad;
-    {
-        Gdiplus::Graphics graphics(dc);
-        graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
-        Gdiplus::RectF chip(
-            static_cast<float>(panelX + pad), static_cast<float>(rowY + 7), 10.0f, 10.0f);
-        if (color != CLR_INVALID) {
-            FillRoundRect(
-                graphics,
-                Gdiplus::Color(255, GetRValue(color), GetGValue(color), GetBValue(color)),
-                chip,
-                2.0f);
-        }
-        TwoToneRoundRect(graphics, ChromeLine(), chip, 2.0f);
-    }
-
-    RECT row{panelX + pad + 16, rowY, panelX + panelW - pad, rowY + readout};
+    RECT row{panelX + pad, rowY, panelX + panelW - pad, rowY + readout};
     SetBkMode(dc, TRANSPARENT);
     const HGDIOBJ oldFont = SelectObject(dc, monoFont_);
     SetTextColor(dc, kInk);
@@ -583,9 +628,7 @@ void SnipWindow::PaintMagnifier(HDC dc, POINT clientPoint) {
 }
 
 void SnipWindow::PaintSelection(HDC dc) {
-    if (!selected_) {
-        return;
-    }
+    if (!selected_) return;
 
     const RECT r = NormalizedSelection();
     {
@@ -593,22 +636,14 @@ void SnipWindow::PaintSelection(HDC dc) {
         Gdiplus::SolidBrush dimBrush(Gdiplus::Color(kDimSelected, 0, 0, 0));
         const auto fillDim = [&](LONG x, LONG y, LONG width, LONG height) {
             if (width > 0 && height > 0) {
-                graphics.FillRectangle(
-                    &dimBrush,
-                    static_cast<INT>(x),
-                    static_cast<INT>(y),
-                    static_cast<INT>(width),
-                    static_cast<INT>(height));
+                graphics.FillRectangle(&dimBrush, static_cast<INT>(x), static_cast<INT>(y), static_cast<INT>(width), static_cast<INT>(height));
             }
         };
-
         fillDim(0, 0, screen_.width, r.top);
         fillDim(0, r.bottom, screen_.width, screen_.height - r.bottom);
         fillDim(0, r.top, r.left, r.bottom - r.top);
         fillDim(r.right, r.top, screen_.width - r.right, r.bottom - r.top);
 
-        // Two-tone frame: dark stroke outside, amber inside. Neither half can
-        // vanish into the captured content, whatever that content happens to be.
         graphics.SetSmoothingMode(Gdiplus::SmoothingModeNone);
         const float left = static_cast<float>(r.left);
         const float top = static_cast<float>(r.top);
@@ -619,8 +654,6 @@ void SnipWindow::PaintSelection(HDC dc) {
         Gdiplus::Pen frame(Accent(), 1.0f);
         graphics.DrawRectangle(&frame, left, top, width - 1.0f, height - 1.0f);
 
-        // Small squared handles read as tooling marks rather than UI bubbles,
-        // and they cover less of the pixels being selected.
         graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
         const LONG cx = (r.left + r.right) / 2;
         const LONG cy = (r.top + r.bottom) / 2;
@@ -646,15 +679,12 @@ void SnipWindow::PaintSelection(HDC dc) {
     EnsureFonts();
     wchar_t sizeText[64]{};
     swprintf_s(sizeText, L"%ld × %ld", r.right - r.left, r.bottom - r.top);
-
     SetBkMode(dc, TRANSPARENT);
     const HGDIOBJ oldFont = SelectObject(dc, monoFont_);
     constexpr int badgeHeight = 24;
     const int badgeWidth = MeasureText(dc, sizeText) + 26;
-
     RECT badge{r.left, r.top - badgeHeight - 8, r.left + badgeWidth, r.top - 8};
     if (badge.top < 6) {
-        // Hugging the top of the screen: tuck the badge inside the selection.
         badge.left = r.left + 8;
         badge.right = badge.left + badgeWidth;
         badge.top = r.top + 8;
@@ -665,49 +695,30 @@ void SnipWindow::PaintSelection(HDC dc) {
         badge.left -= shift;
         badge.right -= shift;
     }
-    if (badge.left < 6) {
-        const int shift = 6 - badge.left;
-        badge.left += shift;
-        badge.right += shift;
-    }
-
     {
         Gdiplus::Graphics graphics(dc);
         graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
         Plate(graphics, badge, 6.0f);
-        Gdiplus::SolidBrush accent(Accent());
-        graphics.FillRectangle(
-            &accent,
-            static_cast<float>(badge.left + 9),
-            static_cast<float>((badge.top + badge.bottom) / 2 - 2),
-            4.0f,
-            4.0f);
     }
-
-    // Re-select after the GDI+ scope: a Graphics object may leave the DC's
-    // font, pen and brush in an implementation-defined state.
     SelectObject(dc, monoFont_);
-    SetBkMode(dc, TRANSPARENT);
-    RECT badgeText{badge.left + 19, badge.top, badge.right - 7, badge.bottom};
     SetTextColor(dc, kInk);
-    DrawTextW(dc, sizeText, -1, &badgeText, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    RECT badgeText{badge.left + 10, badge.top, badge.right - 7, badge.bottom};
+    DrawTextW(dc, sizeText, -1, &badgeText, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     SelectObject(dc, oldFont);
 }
 
 void SnipWindow::PaintHint(HDC dc) {
     EnsureFonts();
     static constexpr wchar_t kHint[] = L"单击窗口 / 控件     拖动自由选择     C 取色     Esc 取消";
-
     SetBkMode(dc, TRANSPARENT);
     const HGDIOBJ oldFont = SelectObject(dc, uiFont_);
-    RECT plate{18, 18, 18 + MeasureText(dc, kHint) + 30, 18 + 32};
+    RECT plate{18, 18, 18 + MeasureText(dc, kHint) + 30, 50};
     {
         Gdiplus::Graphics graphics(dc);
         graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
         Plate(graphics, plate, 8.0f);
     }
     SelectObject(dc, uiFont_);
-    SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, kInk);
     DrawTextW(dc, kHint, -1, &plate, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     SelectObject(dc, oldFont);
@@ -719,112 +730,121 @@ void SnipWindow::PaintToolbarIcon(HDC dc, int index, const RECT& rect, bool acti
 
     const float cx = (rect.left + rect.right) / 2.0f;
     const float cy = (rect.top + rect.bottom) / 2.0f;
+    const Gdiplus::RectF chip(
+        static_cast<float>(rect.left) + 3.0f,
+        static_cast<float>(rect.top) + 3.0f,
+        static_cast<float>(rect.right - rect.left) - 6.0f,
+        static_cast<float>(rect.bottom - rect.top) - 6.0f);
 
-    if (hovered) {
-        Gdiplus::RectF box(
-            static_cast<float>(rect.left) + 2.0f,
-            static_cast<float>(rect.top) + 2.0f,
-            static_cast<float>(rect.right - rect.left) - 4.0f,
-            static_cast<float>(rect.bottom - rect.top) - 4.0f);
-        FillRoundRect(graphics, Gdiplus::Color(26, 255, 255, 255), box, 6.0f);
+    const bool cancel = index == 8;
+    const bool primary = index == 11;
+
+    if (primary) {
+        FillRoundRect(graphics, Accent(hovered ? 255 : 238), chip, 9.0f);
+    } else if (active) {
+        FillRoundRect(graphics, Gdiplus::Color(46, 255, 197, 61), chip, 9.0f);
+        Gdiplus::GraphicsPath activePath;
+        AddRoundRect(activePath, chip, 9.0f);
+        Gdiplus::Pen activeRing(Accent(210), 1.0f);
+        graphics.DrawPath(&activeRing, &activePath);
+    } else if (hovered) {
+        FillRoundRect(
+            graphics,
+            cancel ? Gdiplus::Color(32, 255, 107, 91)
+                   : Gdiplus::Color(28, 255, 255, 255),
+            chip,
+            9.0f);
     }
 
-    // Active tools get an amber rule under the glyph instead of a filled chip,
-    // so the glyph keeps the same weight whether the tool is on or off.
-    if (active) {
-        Gdiplus::SolidBrush accent(Accent());
-        graphics.FillRectangle(&accent, cx - 9.0f, static_cast<float>(rect.bottom) - 6.0f, 18.0f, 2.0f);
-    }
+    Gdiplus::Color tone = Ink(hovered ? 255 : 220);
+    if (cancel) tone = hovered ? Danger() : Ink(180);
+    if (active) tone = Accent();
+    if (primary) tone = Gdiplus::Color(255, 28, 30, 34);
 
-    Gdiplus::Color tone = Ink(hovered ? 255 : 205);
-    if (index == 7) {
-        tone = hovered ? Danger() : Ink(170);          // cancel stays quiet until aimed at
-    } else if (index == 10) {
-        tone = Accent(hovered ? 255 : 225);            // copy is the primary exit
-    }
-    if (active) {
-        tone = Accent();
-    }
-
-    Gdiplus::Pen pen(tone, 1.7f);
+    Gdiplus::Pen pen(tone, 1.85f);
     pen.SetStartCap(Gdiplus::LineCapRound);
     pen.SetEndCap(Gdiplus::LineCapRound);
     pen.SetLineJoin(Gdiplus::LineJoinRound);
     Gdiplus::SolidBrush brush(tone);
 
     switch (index) {
-    case 0:  // rectangle
-        graphics.DrawRectangle(&pen, cx - 8.0f, cy - 6.5f, 16.0f, 13.0f);
-        break;
-    case 1: {  // arrow
-        graphics.DrawLine(&pen, cx - 8.0f, cy + 7.0f, cx + 5.5f, cy - 5.5f);
-        const Gdiplus::PointF head[3] = {
-            {cx + 8.0f, cy - 8.0f}, {cx + 0.5f, cy - 6.5f}, {cx + 6.5f, cy - 0.5f}};
-        graphics.FillPolygon(&brush, head, 3);
+    case 0: {  // rounded rectangle
+        Gdiplus::GraphicsPath path;
+        AddRoundRect(path, Gdiplus::RectF(cx - 8.0f, cy - 6.5f, 16.0f, 13.0f), 2.5f);
+        graphics.DrawPath(&pen, &path);
         break;
     }
-    case 2:  // pen
-        graphics.DrawLine(&pen, cx + 4.0f, cy - 8.0f, cx + 8.0f, cy - 4.0f);
-        graphics.DrawLine(&pen, cx + 4.0f, cy - 8.0f, cx - 6.0f, cy + 2.0f);
-        graphics.DrawLine(&pen, cx + 8.0f, cy - 4.0f, cx - 2.0f, cy + 6.0f);
-        graphics.DrawLine(&pen, cx - 6.0f, cy + 2.0f, cx - 7.5f, cy + 7.5f);
-        graphics.DrawLine(&pen, cx - 2.0f, cy + 6.0f, cx - 7.5f, cy + 7.5f);
+    case 1:  // ellipse
+        graphics.DrawEllipse(&pen, cx - 8.0f, cy - 6.5f, 16.0f, 13.0f);
         break;
-    case 3:  // mosaic
+    case 2:  // arrow
+        graphics.DrawLine(&pen, cx - 7.5f, cy + 6.5f, cx + 6.5f, cy - 6.5f);
+        graphics.DrawLine(&pen, cx + 0.5f, cy - 6.5f, cx + 6.5f, cy - 6.5f);
+        graphics.DrawLine(&pen, cx + 6.5f, cy - 6.5f, cx + 6.5f, cy - 0.5f);
+        break;
+    case 3:  // pen
+        graphics.DrawLine(&pen, cx - 6.5f, cy + 4.5f, cx + 4.5f, cy - 6.5f);
+        graphics.DrawLine(&pen, cx - 3.5f, cy + 7.5f, cx + 7.5f, cy - 3.5f);
+        graphics.DrawLine(&pen, cx + 4.5f, cy - 6.5f, cx + 7.5f, cy - 3.5f);
+        graphics.DrawLine(&pen, cx - 6.5f, cy + 4.5f, cx - 3.5f, cy + 7.5f);
+        graphics.DrawLine(&pen, cx - 7.0f, cy + 8.0f, cx - 2.0f, cy + 7.0f);
+        break;
+    case 4: {  // mosaic
         for (int row = 0; row < 3; ++row) {
             for (int col = 0; col < 3; ++col) {
-                if ((row + col) % 2 == 0) {
-                    graphics.FillRectangle(
-                        &brush, cx - 8.0f + col * 5.5f, cy - 8.0f + row * 5.5f, 4.5f, 4.5f);
-                }
+                const float x = cx - 8.0f + col * 6.0f;
+                const float y = cy - 8.0f + row * 6.0f;
+                Gdiplus::GraphicsPath cell;
+                AddRoundRect(cell, Gdiplus::RectF(x, y, 4.5f, 4.5f), 1.1f);
+                if ((row + col) % 2 == 0) graphics.FillPath(&brush, &cell);
+                else graphics.DrawPath(&pen, &cell);
             }
         }
         break;
-    case 4:  // text
+    }
+    case 5:  // text
         graphics.DrawLine(&pen, cx - 7.0f, cy - 7.0f, cx + 7.0f, cy - 7.0f);
-        graphics.DrawLine(&pen, cx, cy - 7.0f, cx, cy + 8.0f);
+        graphics.DrawLine(&pen, cx, cy - 7.0f, cx, cy + 7.5f);
+        graphics.DrawLine(&pen, cx - 3.5f, cy + 7.5f, cx + 3.5f, cy + 7.5f);
         break;
-    case 5: {  // undo - drawn as a path, not a glyph the system font may lack
-        graphics.DrawArc(&pen, cx - 8.0f, cy - 6.0f, 16.0f, 14.0f, 180.0f, 200.0f);
-        const Gdiplus::PointF head[3] = {
-            {cx - 11.5f, cy - 1.5f}, {cx - 4.5f, cy - 1.5f}, {cx - 8.0f, cy + 5.5f}};
-        graphics.FillPolygon(&brush, head, 3);
+    case 6:  // undo
+        graphics.DrawArc(&pen, cx - 7.0f, cy - 6.0f, 15.0f, 13.0f, 205.0f, 245.0f);
+        graphics.DrawLine(&pen, cx - 8.0f, cy - 1.0f, cx - 8.0f, cy + 5.0f);
+        graphics.DrawLine(&pen, cx - 8.0f, cy + 5.0f, cx - 2.0f, cy + 5.0f);
         break;
-    }
-    case 6: {  // redo
-        graphics.DrawArc(&pen, cx - 8.0f, cy - 6.0f, 16.0f, 14.0f, 0.0f, -200.0f);
-        const Gdiplus::PointF head[3] = {
-            {cx + 4.5f, cy - 1.5f}, {cx + 11.5f, cy - 1.5f}, {cx + 8.0f, cy + 5.5f}};
-        graphics.FillPolygon(&brush, head, 3);
+    case 7:  // redo
+        graphics.DrawArc(&pen, cx - 8.0f, cy - 6.0f, 15.0f, 13.0f, 90.0f, 245.0f);
+        graphics.DrawLine(&pen, cx + 8.0f, cy - 1.0f, cx + 8.0f, cy + 5.0f);
+        graphics.DrawLine(&pen, cx + 8.0f, cy + 5.0f, cx + 2.0f, cy + 5.0f);
         break;
-    }
-    case 7:  // cancel
-        graphics.DrawLine(&pen, cx - 6.5f, cy - 6.5f, cx + 6.5f, cy + 6.5f);
-        graphics.DrawLine(&pen, cx + 6.5f, cy - 6.5f, cx - 6.5f, cy + 6.5f);
+    case 8:  // cancel
+        graphics.DrawLine(&pen, cx - 6.0f, cy - 6.0f, cx + 6.0f, cy + 6.0f);
+        graphics.DrawLine(&pen, cx + 6.0f, cy - 6.0f, cx - 6.0f, cy + 6.0f);
         break;
-    case 8: {  // pin to desktop
-        Gdiplus::GraphicsPath cap;
-        AddRoundRect(cap, Gdiplus::RectF(cx - 7.0f, cy - 8.5f, 14.0f, 4.5f), 2.0f);
-        graphics.FillPath(&brush, &cap);
-        const Gdiplus::PointF body[4] = {
-            {cx - 4.5f, cy - 4.0f}, {cx + 4.5f, cy - 4.0f}, {cx + 6.5f, cy + 1.5f}, {cx - 6.5f, cy + 1.5f}};
-        graphics.FillPolygon(&brush, body, 4);
-        graphics.DrawLine(&pen, cx, cy + 1.5f, cx, cy + 8.5f);
+    case 9: {  // pin
+        graphics.DrawLine(&pen, cx - 6.5f, cy - 6.5f, cx + 6.5f, cy - 6.5f);
+        graphics.DrawLine(&pen, cx - 4.5f, cy - 6.5f, cx - 3.5f, cy - 1.0f);
+        graphics.DrawLine(&pen, cx + 4.5f, cy - 6.5f, cx + 3.5f, cy - 1.0f);
+        graphics.DrawLine(&pen, cx - 5.5f, cy - 1.0f, cx + 5.5f, cy - 1.0f);
+        graphics.DrawLine(&pen, cx, cy - 1.0f, cx, cy + 8.0f);
         break;
     }
-    case 9:  // save to disk
-        graphics.DrawLine(&pen, cx, cy - 8.0f, cx, cy + 2.5f);
-        graphics.DrawLine(&pen, cx - 4.5f, cy - 2.0f, cx, cy + 2.5f);
-        graphics.DrawLine(&pen, cx + 4.5f, cy - 2.0f, cx, cy + 2.5f);
-        graphics.DrawLine(&pen, cx - 8.0f, cy + 7.5f, cx + 8.0f, cy + 7.5f);
+    case 10:  // save / download
+        graphics.DrawLine(&pen, cx, cy - 7.5f, cx, cy + 3.0f);
+        graphics.DrawLine(&pen, cx - 4.0f, cy - 1.0f, cx, cy + 3.0f);
+        graphics.DrawLine(&pen, cx + 4.0f, cy - 1.0f, cx, cy + 3.0f);
+        graphics.DrawLine(&pen, cx - 7.5f, cy + 7.0f, cx + 7.5f, cy + 7.0f);
+        graphics.DrawLine(&pen, cx - 7.5f, cy + 7.0f, cx - 7.5f, cy + 4.0f);
+        graphics.DrawLine(&pen, cx + 7.5f, cy + 7.0f, cx + 7.5f, cy + 4.0f);
         break;
-    case 10: {  // copy to clipboard
-        Gdiplus::GraphicsPath path;
-        AddRoundRect(path, Gdiplus::RectF(cx - 3.0f, cy - 3.0f, 11.0f, 11.0f), 2.0f);
-        graphics.DrawPath(&pen, &path);
-        // Back sheet shown as its exposed corner only, so the two never muddle.
-        graphics.DrawLine(&pen, cx - 6.5f, cy + 1.0f, cx - 6.5f, cy - 6.5f);
-        graphics.DrawLine(&pen, cx - 6.5f, cy - 6.5f, cx + 1.0f, cy - 6.5f);
+    case 11: {  // copy
+        pen.SetWidth(1.9f);
+        Gdiplus::GraphicsPath back;
+        AddRoundRect(back, Gdiplus::RectF(cx - 7.0f, cy - 7.0f, 10.5f, 10.5f), 2.0f);
+        graphics.DrawPath(&pen, &back);
+        Gdiplus::GraphicsPath front;
+        AddRoundRect(front, Gdiplus::RectF(cx - 2.5f, cy - 2.5f, 10.5f, 10.5f), 2.0f);
+        graphics.DrawPath(&pen, &front);
         break;
     }
     default:
@@ -833,9 +853,7 @@ void SnipWindow::PaintToolbarIcon(HDC dc, int index, const RECT& rect, bool acti
 }
 
 void SnipWindow::PaintToolbar(HDC dc) {
-    if (!selected_) {
-        return;
-    }
+    if (!selected_) return;
 
     const RECT bar = ToolbarRect();
     {
@@ -849,16 +867,11 @@ void SnipWindow::PaintToolbar(HDC dc) {
         DropShadow(graphics, box, static_cast<float>(kToolbarRadius), 7);
         FillRoundRect(graphics, Chrome(244), box, static_cast<float>(kToolbarRadius));
         TwoToneRoundRect(graphics, ChromeLine(), box, static_cast<float>(kToolbarRadius));
-
         Gdiplus::Pen divider(Gdiplus::Color(38, 255, 255, 255), 1.0f);
         for (int i = 0; i < kToolbarButtons - 1; ++i) {
-            if (!GroupBreakAfter(i)) {
-                continue;
-            }
-            const float x = static_cast<float>(
-                bar.left + ToolbarButtonOffset(i) + kToolbarButton + kToolbarGroupGap / 2);
-            graphics.DrawLine(
-                &divider, x, static_cast<float>(bar.top) + 11.0f, x, static_cast<float>(bar.bottom) - 11.0f);
+            if (!GroupBreakAfter(i)) continue;
+            const float x = static_cast<float>(bar.left + ToolbarButtonOffset(i) + kToolbarButton + kToolbarGroupGap / 2);
+            graphics.DrawLine(&divider, x, static_cast<float>(bar.top) + 11.0f, x, static_cast<float>(bar.bottom) - 11.0f);
         }
     }
 
@@ -866,18 +879,131 @@ void SnipWindow::PaintToolbar(HDC dc) {
         const RECT button = ToolbarButtonRect(bar, i);
         const bool active =
             (i == 0 && tool_ == Tool::Rectangle) ||
-            (i == 1 && tool_ == Tool::Arrow) ||
-            (i == 2 && tool_ == Tool::Pen) ||
-            (i == 3 && tool_ == Tool::Mosaic) ||
-            (i == 4 && tool_ == Tool::Text);
+            (i == 1 && tool_ == Tool::Ellipse) ||
+            (i == 2 && tool_ == Tool::Arrow) ||
+            (i == 3 && tool_ == Tool::Pen) ||
+            (i == 4 && tool_ == Tool::Mosaic) ||
+            (i == 5 && tool_ == Tool::Text);
         PaintToolbarIcon(dc, i, button, active, hoverToolbar_ == i);
     }
 }
 
-void SnipWindow::PaintPreview(HDC dc) {
-    if (!drawing_ || (tool_ != Tool::Rectangle && tool_ != Tool::Arrow)) {
+void SnipWindow::PaintStyleBar(HDC dc) {
+    const RECT bar = StyleBarRect();
+    if (bar.right <= bar.left) return;
+
+    EnsureFonts();
+    {
+        Gdiplus::Graphics graphics(dc);
+        graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+        Plate(graphics, bar, 8.0f);
+    }
+
+    const HGDIOBJ oldFont = SelectObject(dc, uiFont_);
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, RGB(190, 195, 205));
+
+    if (tool_ == Tool::Mosaic) {
+        RECT label{bar.left + 10, bar.top, bar.left + 52, bar.bottom};
+        DrawTextW(dc, L"颗粒", -1, &label, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        const int start = bar.left + 54;
+        for (int i = 0; i < 3; ++i) {
+            RECT item{start + i * 40, bar.top + 4, start + i * 40 + 36, bar.bottom - 4};
+            const bool active = mosaicBlock_ == kMosaicBlocks[i];
+            {
+                Gdiplus::Graphics graphics(dc);
+                graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+                if (active || hoverStyle_ == 100 + i) {
+                    Gdiplus::RectF chip(static_cast<float>(item.left), static_cast<float>(item.top), static_cast<float>(item.right - item.left), static_cast<float>(item.bottom - item.top));
+                    FillRoundRect(graphics, active ? Gdiplus::Color(48, 69, 142, 255) : Gdiplus::Color(24, 255, 255, 255), chip, 5.0f);
+                }
+            }
+            wchar_t text[8]{};
+            swprintf_s(text, L"%d", kMosaicBlocks[i]);
+            SetTextColor(dc, active ? RGB(125, 185, 255) : kInk);
+            DrawTextW(dc, text, -1, &item, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        }
+        SelectObject(dc, oldFont);
         return;
     }
+
+    RECT colorLabel{bar.left + 10, bar.top, bar.left + 47, bar.bottom};
+    DrawTextW(dc, L"颜色", -1, &colorLabel, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    const int colorStart = bar.left + 48;
+    for (int i = 0; i < static_cast<int>(std::size(kAnnotationColors)); ++i) {
+        RECT item{colorStart + i * 25, bar.top + 5, colorStart + i * 25 + 22, bar.bottom - 5};
+        const bool active = annotationColor_ == kAnnotationColors[i];
+        Gdiplus::Graphics graphics(dc);
+        graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+        if (hoverStyle_ == i) {
+            Gdiplus::RectF hover(static_cast<float>(item.left - 2), static_cast<float>(item.top - 2), 26.0f, 30.0f);
+            FillRoundRect(graphics, Gdiplus::Color(24, 255, 255, 255), hover, 5.0f);
+        }
+        Gdiplus::RectF swatch(static_cast<float>(item.left + 4), static_cast<float>(item.top + 6), 14.0f, 14.0f);
+        FillRoundRect(graphics, ToGdiColor(kAnnotationColors[i]), swatch, 7.0f);
+        if (active) {
+            Gdiplus::Pen ring(Accent(), 2.0f);
+            graphics.DrawEllipse(&ring, swatch.X - 3.0f, swatch.Y - 3.0f, swatch.Width + 6.0f, swatch.Height + 6.0f);
+        }
+    }
+
+    RECT optionLabel{bar.left + 194, bar.top, bar.left + 231, bar.bottom};
+    DrawTextW(dc, tool_ == Tool::Text ? L"字号" : L"粗细", -1, &optionLabel, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    const int optionStart = bar.left + 232;
+    for (int i = 0; i < 3; ++i) {
+        RECT item{optionStart + i * 34, bar.top + 4, optionStart + i * 34 + 30, bar.bottom - 4};
+        const bool active = tool_ == Tool::Text ? fontSize_ == kFontSizes[i] : strokeWidth_ == kStrokeWidths[i];
+        {
+            Gdiplus::Graphics graphics(dc);
+            graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+            if (active || hoverStyle_ == 100 + i) {
+                Gdiplus::RectF chip(static_cast<float>(item.left), static_cast<float>(item.top), static_cast<float>(item.right - item.left), static_cast<float>(item.bottom - item.top));
+                FillRoundRect(graphics, active ? Gdiplus::Color(48, 69, 142, 255) : Gdiplus::Color(24, 255, 255, 255), chip, 5.0f);
+            }
+            if (tool_ != Tool::Text) {
+                Gdiplus::Pen sample(active ? Accent() : Ink(), static_cast<float>(kStrokeWidths[i]));
+                sample.SetStartCap(Gdiplus::LineCapRound);
+                sample.SetEndCap(Gdiplus::LineCapRound);
+                graphics.DrawLine(&sample, static_cast<float>(item.left + 6), static_cast<float>((item.top + item.bottom) / 2), static_cast<float>(item.right - 6), static_cast<float>((item.top + item.bottom) / 2));
+            }
+        }
+        if (tool_ == Tool::Text) {
+            wchar_t text[8]{};
+            swprintf_s(text, L"%d", kFontSizes[i]);
+            SetTextColor(dc, active ? RGB(125, 185, 255) : kInk);
+            DrawTextW(dc, text, -1, &item, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        }
+    }
+    SelectObject(dc, oldFont);
+}
+
+void SnipWindow::PaintTooltip(HDC dc) {
+    if (hoverToolbar_ < 0 || hoverToolbar_ >= kToolbarButtons) return;
+
+    EnsureFonts();
+    const wchar_t* text = kToolbarTips[hoverToolbar_];
+    const HGDIOBJ oldFont = SelectObject(dc, uiFont_);
+    SetBkMode(dc, TRANSPARENT);
+    const int width = MeasureText(dc, text) + 22;
+    const RECT button = ToolbarButtonRect(ToolbarRect(), hoverToolbar_);
+    int left = (button.left + button.right - width) / 2;
+    left = std::clamp(left, 6, std::max(6, screen_.width - width - 6));
+    int top = ToolbarRect().top - 34;
+    if (top < 6) top = ToolbarRect().bottom + 6;
+    RECT tip{left, top, left + width, top + 28};
+    {
+        Gdiplus::Graphics graphics(dc);
+        graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+        Plate(graphics, tip, 6.0f);
+    }
+    SelectObject(dc, uiFont_);
+    SetTextColor(dc, kInk);
+    DrawTextW(dc, text, -1, &tip, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    SelectObject(dc, oldFont);
+}
+
+void SnipWindow::PaintPreview(HDC dc) {
+    if (!drawing_ || (tool_ != Tool::Rectangle && tool_ != Tool::Ellipse && tool_ != Tool::Arrow)) return;
     DrawShape(dc, tool_, drawStart_, drawCurrent_);
 }
 
@@ -912,51 +1038,30 @@ void SnipWindow::Paint() {
         PaintSelection(frameDc);
         PaintPreview(frameDc);
         PaintToolbar(frameDc);
+        PaintStyleBar(frameDc);
+        PaintTooltip(frameDc);
     } else {
-        // Same gesture as the selection state, one step earlier: dim the desktop
-        // and leave the region under the cursor lit, so what a click would grab
-        // is obvious before the click happens.
         {
             Gdiplus::Graphics graphics(frameDc);
             Gdiplus::SolidBrush dimBrush(Gdiplus::Color(kDimIdle, 0, 0, 0));
             const auto fillDim = [&](LONG x, LONG y, LONG width, LONG height) {
                 if (width > 0 && height > 0) {
-                    graphics.FillRectangle(
-                        &dimBrush,
-                        static_cast<INT>(x),
-                        static_cast<INT>(y),
-                        static_cast<INT>(width),
-                        static_cast<INT>(height));
+                    graphics.FillRectangle(&dimBrush, static_cast<INT>(x), static_cast<INT>(y), static_cast<INT>(width), static_cast<INT>(height));
                 }
             };
-
             if (hasHover_) {
                 const RECT h = hoverRect_;
                 fillDim(0, 0, screen_.width, h.top);
                 fillDim(0, h.bottom, screen_.width, screen_.height - h.bottom);
                 fillDim(0, h.top, h.left, h.bottom - h.top);
                 fillDim(h.right, h.top, screen_.width - h.right, h.bottom - h.top);
-
                 graphics.SetSmoothingMode(Gdiplus::SmoothingModeNone);
-                Gdiplus::Pen shade(ChromeShade(), 1.0f);
-                graphics.DrawRectangle(
-                    &shade,
-                    static_cast<float>(h.left) - 1.0f,
-                    static_cast<float>(h.top) - 1.0f,
-                    static_cast<float>(h.right - h.left) + 1.0f,
-                    static_cast<float>(h.bottom - h.top) + 1.0f);
                 Gdiplus::Pen frame(Accent(), 1.0f);
-                graphics.DrawRectangle(
-                    &frame,
-                    static_cast<float>(h.left),
-                    static_cast<float>(h.top),
-                    static_cast<float>(h.right - h.left) - 1.0f,
-                    static_cast<float>(h.bottom - h.top) - 1.0f);
+                graphics.DrawRectangle(&frame, static_cast<float>(h.left), static_cast<float>(h.top), static_cast<float>(h.right - h.left) - 1.0f, static_cast<float>(h.bottom - h.top) - 1.0f);
             } else {
                 fillDim(0, 0, screen_.width, screen_.height);
             }
         }
-
         POINT cursor{};
         GetCursorPos(&cursor);
         POINT client{cursor.x - screen_.x, cursor.y - screen_.y};
@@ -965,7 +1070,6 @@ void SnipWindow::Paint() {
     }
 
     BitBlt(dc, 0, 0, screen_.width, screen_.height, frameDc, 0, 0, SRCCOPY);
-
     SelectObject(frameDc, oldFrame);
     DeleteObject(frameBitmap);
     DeleteDC(frameDc);
@@ -982,6 +1086,8 @@ void SnipWindow::BeginSelectionDrag(POINT point) {
     CommitTextEdit();
     ClearHistory();
     tool_ = Tool::None;
+    hoverToolbar_ = -1;
+    hoverStyle_ = -1;
     selected_ = false;
     dragging_ = true;
     dragMode_ = DragMode::NewSelection;
@@ -994,7 +1100,6 @@ void SnipWindow::BeginSelectionDrag(POINT point) {
 
 void SnipWindow::UpdateSelectionDrag(POINT point) {
     dragCurrent_ = point;
-
     if (dragMode_ == DragMode::NewSelection) {
         selection_ = NormalizeRect(dragStart_, point);
         ClampSelection();
@@ -1004,56 +1109,29 @@ void SnipWindow::UpdateSelectionDrag(POINT point) {
 
     RECT next = dragOrigin_;
     if (dragMode_ == DragMode::Move) {
-        const LONG dx = point.x - dragStart_.x;
-        const LONG dy = point.y - dragStart_.y;
-        OffsetRect(&next, dx, dy);
+        OffsetRect(&next, point.x - dragStart_.x, point.y - dragStart_.y);
         selection_ = next;
         ClampSelection();
         return;
     }
 
     switch (dragMode_) {
-    case DragMode::ResizeTopLeft:
-        next.left = point.x;
-        next.top = point.y;
-        break;
-    case DragMode::ResizeTop:
-        next.top = point.y;
-        break;
-    case DragMode::ResizeTopRight:
-        next.right = point.x;
-        next.top = point.y;
-        break;
-    case DragMode::ResizeRight:
-        next.right = point.x;
-        break;
-    case DragMode::ResizeBottomRight:
-        next.right = point.x;
-        next.bottom = point.y;
-        break;
-    case DragMode::ResizeBottom:
-        next.bottom = point.y;
-        break;
-    case DragMode::ResizeBottomLeft:
-        next.left = point.x;
-        next.bottom = point.y;
-        break;
-    case DragMode::ResizeLeft:
-        next.left = point.x;
-        break;
-    default:
-        break;
+    case DragMode::ResizeTopLeft: next.left = point.x; next.top = point.y; break;
+    case DragMode::ResizeTop: next.top = point.y; break;
+    case DragMode::ResizeTopRight: next.right = point.x; next.top = point.y; break;
+    case DragMode::ResizeRight: next.right = point.x; break;
+    case DragMode::ResizeBottomRight: next.right = point.x; next.bottom = point.y; break;
+    case DragMode::ResizeBottom: next.bottom = point.y; break;
+    case DragMode::ResizeBottomLeft: next.left = point.x; next.bottom = point.y; break;
+    case DragMode::ResizeLeft: next.left = point.x; break;
+    default: break;
     }
-
     selection_ = next;
     ClampSelection();
 }
 
 void SnipWindow::FinishSelectionDrag(POINT point) {
-    if (!dragging_) {
-        return;
-    }
-
+    if (!dragging_) return;
     UpdateSelectionDrag(point);
     dragging_ = false;
     ReleaseCapture();
@@ -1061,8 +1139,7 @@ void SnipWindow::FinishSelectionDrag(POINT point) {
     RECT r = NormalizedSelection();
     if (dragMode_ == DragMode::NewSelection &&
         r.right - r.left < 4 && r.bottom - r.top < 4 &&
-        pressedHoverRect_.right > pressedHoverRect_.left &&
-        pressedHoverRect_.bottom > pressedHoverRect_.top) {
+        pressedHoverRect_.right > pressedHoverRect_.left && pressedHoverRect_.bottom > pressedHoverRect_.top) {
         selection_ = pressedHoverRect_;
         r = selection_;
     }
@@ -1077,17 +1154,11 @@ void SnipWindow::FinishSelectionDrag(POINT point) {
 }
 
 HBITMAP SnipWindow::SnapshotSelection() const {
-    if (!selected_) {
-        return nullptr;
-    }
-    return CloneBitmapRegion(capture_, NormalizedSelection());
+    return selected_ ? CloneBitmapRegion(capture_, NormalizedSelection()) : nullptr;
 }
 
 void SnipWindow::RestoreSelection(HBITMAP snapshot) {
-    if (!snapshot || !selected_) {
-        return;
-    }
-
+    if (!snapshot || !selected_) return;
     const RECT r = NormalizedSelection();
     HDC screenDc = GetDC(nullptr);
     HDC sourceDc = CreateCompatibleDC(screenDc);
@@ -1117,14 +1188,8 @@ void SnipWindow::BeginEdit() {
 
 void SnipWindow::Undo() {
     CommitTextEdit();
-    if (undo_.empty()) {
-        return;
-    }
-
-    if (HBITMAP current = SnapshotSelection()) {
-        redo_.push_back(current);
-    }
-
+    if (undo_.empty()) return;
+    if (HBITMAP current = SnapshotSelection()) redo_.push_back(current);
     HBITMAP previous = undo_.back();
     undo_.pop_back();
     RestoreSelection(previous);
@@ -1135,14 +1200,8 @@ void SnipWindow::Undo() {
 
 void SnipWindow::Redo() {
     CommitTextEdit();
-    if (redo_.empty()) {
-        return;
-    }
-
-    if (HBITMAP current = SnapshotSelection()) {
-        undo_.push_back(current);
-    }
-
+    if (redo_.empty()) return;
+    if (HBITMAP current = SnapshotSelection()) undo_.push_back(current);
     HBITMAP next = redo_.back();
     redo_.pop_back();
     RestoreSelection(next);
@@ -1152,30 +1211,28 @@ void SnipWindow::Redo() {
 }
 
 void SnipWindow::DrawShape(HDC dc, Tool tool, POINT from, POINT to) {
-    HPEN pen = CreatePen(PS_SOLID, 3, RGB(235, 70, 70));
+    HPEN pen = CreatePen(PS_SOLID, strokeWidth_, annotationColor_);
     const HGDIOBJ oldPen = SelectObject(dc, pen);
     const HGDIOBJ oldBrush = SelectObject(dc, GetStockObject(NULL_BRUSH));
 
     if (tool == Tool::Rectangle) {
         const RECT rect = NormalizeRect(from, to);
         Rectangle(dc, rect.left, rect.top, rect.right, rect.bottom);
+    } else if (tool == Tool::Ellipse) {
+        const RECT rect = NormalizeRect(from, to);
+        ::Ellipse(dc, rect.left, rect.top, rect.right, rect.bottom);
     } else if (tool == Tool::Arrow) {
         MoveToEx(dc, from.x, from.y, nullptr);
         LineTo(dc, to.x, to.y);
-
-        const double angle = std::atan2(
-            static_cast<double>(to.y - from.y),
-            static_cast<double>(to.x - from.x));
+        const double angle = std::atan2(static_cast<double>(to.y - from.y), static_cast<double>(to.x - from.x));
         constexpr double spread = 0.55;
-        constexpr double length = 17.0;
+        const double length = 12.0 + strokeWidth_ * 1.8;
         POINT arrow[3] = {
             to,
-            {static_cast<LONG>(to.x - length * std::cos(angle - spread)),
-             static_cast<LONG>(to.y - length * std::sin(angle - spread))},
-            {static_cast<LONG>(to.x - length * std::cos(angle + spread)),
-             static_cast<LONG>(to.y - length * std::sin(angle + spread))},
+            {static_cast<LONG>(to.x - length * std::cos(angle - spread)), static_cast<LONG>(to.y - length * std::sin(angle - spread))},
+            {static_cast<LONG>(to.x - length * std::cos(angle + spread)), static_cast<LONG>(to.y - length * std::sin(angle + spread))},
         };
-        HBRUSH brush = CreateSolidBrush(RGB(235, 70, 70));
+        HBRUSH brush = CreateSolidBrush(annotationColor_);
         SelectObject(dc, brush);
         Polygon(dc, arrow, 3);
         SelectObject(dc, oldBrush);
@@ -1190,7 +1247,7 @@ void SnipWindow::DrawShape(HDC dc, Tool tool, POINT from, POINT to) {
 void SnipWindow::DrawPenSegment(POINT from, POINT to) {
     HDC dc = CreateCompatibleDC(nullptr);
     const HGDIOBJ oldBitmap = SelectObject(dc, capture_);
-    HPEN pen = CreatePen(PS_SOLID, 4, RGB(235, 70, 70));
+    HPEN pen = CreatePen(PS_SOLID, strokeWidth_, annotationColor_);
     const HGDIOBJ oldPen = SelectObject(dc, pen);
     MoveToEx(dc, from.x, from.y, nullptr);
     LineTo(dc, to.x, to.y);
@@ -1201,7 +1258,7 @@ void SnipWindow::DrawPenSegment(POINT from, POINT to) {
 }
 
 void SnipWindow::ApplyMosaic(POINT point) {
-    constexpr int block = 12;
+    const int block = mosaicBlock_;
     const RECT r = NormalizedSelection();
     const int px = static_cast<int>(point.x);
     const int py = static_cast<int>(point.y);
@@ -1212,10 +1269,7 @@ void SnipWindow::ApplyMosaic(POINT point) {
 
     HDC dc = CreateCompatibleDC(nullptr);
     const HGDIOBJ oldBitmap = SelectObject(dc, capture_);
-    const COLORREF color = GetPixel(
-        dc,
-        std::min(static_cast<int>(r.right) - 1, left + block / 2),
-        std::min(static_cast<int>(r.bottom) - 1, top + block / 2));
+    const COLORREF color = GetPixel(dc, std::min(static_cast<int>(r.right) - 1, left + block / 2), std::min(static_cast<int>(r.bottom) - 1, top + block / 2));
     HBRUSH brush = CreateSolidBrush(color == CLR_INVALID ? RGB(128, 128, 128) : color);
     RECT blockRect{left, top, right, bottom};
     FillRect(dc, &blockRect, brush);
@@ -1226,14 +1280,13 @@ void SnipWindow::ApplyMosaic(POINT point) {
 
 void SnipWindow::BeginTextEdit(POINT point) {
     CommitTextEdit();
-    if (!selected_) {
-        return;
-    }
+    if (!selected_) return;
 
     BeginEdit();
     textOrigin_ = ClampPoint(point, NormalizedSelection());
     const RECT r = NormalizedSelection();
-    const int width = std::max(80, std::min(240, static_cast<int>(r.right - textOrigin_.x)));
+    const int width = std::max(100, std::min(320, static_cast<int>(r.right - textOrigin_.x)));
+    const int height = fontSize_ + 14;
 
     textEdit_ = CreateWindowExW(
         WS_EX_TOPMOST,
@@ -1243,38 +1296,24 @@ void SnipWindow::BeginTextEdit(POINT point) {
         textOrigin_.x,
         textOrigin_.y,
         width,
-        30,
+        height,
         hwnd_,
         nullptr,
         instance_,
         nullptr);
+    if (!textEdit_) return;
 
-    if (!textEdit_) {
-        return;
-    }
-
-    if (!textFont_) {
-        textFont_ = CreateFontW(
-            -20, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-            CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-    }
-    if (textFont_) {
-        SendMessageW(textEdit_, WM_SETFONT, reinterpret_cast<WPARAM>(textFont_), TRUE);
-    }
+    if (!textFont_) RecreateTextFont();
+    if (textFont_) SendMessageW(textEdit_, WM_SETFONT, reinterpret_cast<WPARAM>(textFont_), TRUE);
     SetFocus(textEdit_);
 }
 
 void SnipWindow::CommitTextEdit() {
-    if (!textEdit_) {
-        return;
-    }
+    if (!textEdit_) return;
 
     const int length = GetWindowTextLengthW(textEdit_);
     std::wstring text(static_cast<size_t>(std::max(0, length)), L'\0');
-    if (length > 0) {
-        GetWindowTextW(textEdit_, text.data(), length + 1);
-    }
+    if (length > 0) GetWindowTextW(textEdit_, text.data(), length + 1);
 
     HWND edit = textEdit_;
     textEdit_ = nullptr;
@@ -1285,7 +1324,7 @@ void SnipWindow::CommitTextEdit() {
         const HGDIOBJ oldBitmap = SelectObject(dc, capture_);
         const HGDIOBJ oldFont = textFont_ ? SelectObject(dc, textFont_) : nullptr;
         SetBkMode(dc, TRANSPARENT);
-        SetTextColor(dc, RGB(235, 70, 70));
+        SetTextColor(dc, annotationColor_);
         TextOutW(dc, textOrigin_.x, textOrigin_.y, text.c_str(), static_cast<int>(text.size()));
         if (oldFont) SelectObject(dc, oldFont);
         SelectObject(dc, oldBitmap);
@@ -1294,73 +1333,62 @@ void SnipWindow::CommitTextEdit() {
     InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
-void SnipWindow::HandleToolbarClick(int index) {
-    if (index < 0 || index >= kToolbarButtons) {
-        return;
+void SnipWindow::HandleStyleClick(int index) {
+    if (index < 0) return;
+    if (tool_ != Tool::Mosaic && index >= 0 && index < static_cast<int>(std::size(kAnnotationColors))) {
+        annotationColor_ = kAnnotationColors[index];
+    } else if (index >= 100 && index < 103) {
+        const int option = index - 100;
+        if (tool_ == Tool::Text) {
+            fontSize_ = kFontSizes[option];
+            RecreateTextFont();
+        } else if (tool_ == Tool::Mosaic) {
+            mosaicBlock_ = kMosaicBlocks[option];
+        } else {
+            strokeWidth_ = kStrokeWidths[option];
+        }
     }
+    InvalidateRect(hwnd_, nullptr, FALSE);
+}
 
-    if (index != 4) {
-        CommitTextEdit();
-    }
+void SnipWindow::HandleToolbarClick(int index) {
+    if (index < 0 || index >= kToolbarButtons) return;
+    if (index != 5) CommitTextEdit();
 
     switch (index) {
-    case 0:
-        tool_ = tool_ == Tool::Rectangle ? Tool::None : Tool::Rectangle;
-        break;
-    case 1:
-        tool_ = tool_ == Tool::Arrow ? Tool::None : Tool::Arrow;
-        break;
-    case 2:
-        tool_ = tool_ == Tool::Pen ? Tool::None : Tool::Pen;
-        break;
-    case 3:
-        tool_ = tool_ == Tool::Mosaic ? Tool::None : Tool::Mosaic;
-        break;
-    case 4:
-        tool_ = tool_ == Tool::Text ? Tool::None : Tool::Text;
-        break;
-    case 5:
-        Undo();
-        return;
-    case 6:
-        Redo();
-        return;
-    case 7:
-        DestroyWindow(hwnd_);
-        return;
-    case 8:
-        Finish(FinishAction::Pin);
-        return;
-    case 9:
-        Finish(FinishAction::Save);
-        return;
-    case 10:
-        Finish(FinishAction::Copy);
-        return;
-    default:
-        return;
+    case 0: tool_ = tool_ == Tool::Rectangle ? Tool::None : Tool::Rectangle; break;
+    case 1: tool_ = tool_ == Tool::Ellipse ? Tool::None : Tool::Ellipse; break;
+    case 2: tool_ = tool_ == Tool::Arrow ? Tool::None : Tool::Arrow; break;
+    case 3: tool_ = tool_ == Tool::Pen ? Tool::None : Tool::Pen; break;
+    case 4: tool_ = tool_ == Tool::Mosaic ? Tool::None : Tool::Mosaic; break;
+    case 5: tool_ = tool_ == Tool::Text ? Tool::None : Tool::Text; break;
+    case 6: Undo(); return;
+    case 7: Redo(); return;
+    case 8: DestroyWindow(hwnd_); return;
+    case 9: Finish(FinishAction::Pin); return;
+    case 10: Finish(FinishAction::Save); return;
+    case 11: Finish(FinishAction::Copy); return;
+    default: return;
     }
+    hoverStyle_ = -1;
     InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
 void SnipWindow::Finish(FinishAction action) {
     CommitTextEdit();
-    if (!selected_) {
-        return;
-    }
+    if (!selected_) return;
 
-    HBITMAP result = CloneBitmapRegion(capture_, NormalizedSelection());
-    if (!result) {
-        return;
-    }
+    const RECT selection = NormalizedSelection();
+    HBITMAP result = CloneBitmapRegion(capture_, selection);
+    if (!result) return;
+
+    RECT sourceScreenRect = selection;
+    OffsetRect(&sourceScreenRect, screen_.x, screen_.y);
 
     auto callback = callback_;
     DestroyWindow(hwnd_);
-    if (callback) {
-        callback(result, action);
-    } else {
-        DeleteObject(result);
-    }
+    if (callback) callback(result, action, sourceScreenRect);
+    else DeleteObject(result);
 }
 
 void SnipWindow::CopyCurrentColor() {
@@ -1369,10 +1397,7 @@ void SnipWindow::CopyCurrentColor() {
     const int x = cursor.x - screen_.x;
     const int y = cursor.y - screen_.y;
     const COLORREF color = ReadBitmapPixel(capture_, x, y);
-    if (color == CLR_INVALID) {
-        return;
-    }
-
+    if (color == CLR_INVALID) return;
     wchar_t text[16]{};
     swprintf_s(text, L"#%02X%02X%02X", GetRValue(color), GetGValue(color), GetBValue(color));
     CopyTextToClipboard(owner_, text);
@@ -1399,11 +1424,8 @@ LRESULT SnipWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
         POINT point{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
         if (drawing_) {
             point = ClampPoint(point, NormalizedSelection());
-            if (tool_ == Tool::Pen) {
-                DrawPenSegment(drawCurrent_, point);
-            } else if (tool_ == Tool::Mosaic) {
-                ApplyMosaic(point);
-            }
+            if (tool_ == Tool::Pen) DrawPenSegment(drawCurrent_, point);
+            else if (tool_ == Tool::Mosaic) ApplyMosaic(point);
             drawCurrent_ = point;
             InvalidateRect(hwnd_, nullptr, FALSE);
             return 0;
@@ -1416,9 +1438,11 @@ LRESULT SnipWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
         if (!selected_) {
             UpdateHover();
         } else {
-            const int hovered = HitToolbar(point);
-            if (hovered != hoverToolbar_) {
-                hoverToolbar_ = hovered;
+            const int hoveredToolbar = HitToolbar(point);
+            const int hoveredStyle = HitStyle(point);
+            if (hoveredToolbar != hoverToolbar_ || hoveredStyle != hoverStyle_) {
+                hoverToolbar_ = hoveredToolbar;
+                hoverStyle_ = hoveredStyle;
                 InvalidateRect(hwnd_, nullptr, FALSE);
             }
             SetCursorForPoint(point);
@@ -1428,20 +1452,21 @@ LRESULT SnipWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
 
     case WM_LBUTTONDOWN: {
         POINT point{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+        const int styleIndex = HitStyle(point);
+        if (styleIndex >= 0) {
+            HandleStyleClick(styleIndex);
+            return 0;
+        }
         const int toolbarIndex = HitToolbar(point);
         if (toolbarIndex >= 0) {
             HandleToolbarClick(toolbarIndex);
             return 0;
         }
-        // Group dividers are part of the bar: swallow the click rather than
-        // letting it start a new selection behind the toolbar.
         if (selected_) {
             const RECT bar = ToolbarRect();
-            if (PtInRect(&bar, point)) {
-                return 0;
-            }
+            const RECT style = StyleBarRect();
+            if (PtInRect(&bar, point) || (style.right > style.left && PtInRect(&style, point))) return 0;
         }
-
         if (!selected_) {
             BeginSelectionDrag(point);
             return 0;
@@ -1453,16 +1478,13 @@ LRESULT SnipWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
             BeginTextEdit(point);
             return 0;
         }
-
         if (tool_ != Tool::None && PtInRect(&r, point)) {
             drawing_ = true;
             drawStart_ = ClampPoint(point, r);
             drawCurrent_ = drawStart_;
             BeginEdit();
             SetCapture(hwnd_);
-            if (tool_ == Tool::Mosaic) {
-                ApplyMosaic(drawStart_);
-            }
+            if (tool_ == Tool::Mosaic) ApplyMosaic(drawStart_);
             return 0;
         }
 
@@ -1475,10 +1497,7 @@ LRESULT SnipWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
             SetCapture(hwnd_);
             return 0;
         }
-
-        if (!edited_) {
-            BeginSelectionDrag(point);
-        }
+        if (!edited_) BeginSelectionDrag(point);
         return 0;
     }
 
@@ -1488,8 +1507,7 @@ LRESULT SnipWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
             point = ClampPoint(point, NormalizedSelection());
             drawCurrent_ = point;
             ReleaseCapture();
-
-            if (tool_ == Tool::Rectangle || tool_ == Tool::Arrow) {
+            if (tool_ == Tool::Rectangle || tool_ == Tool::Ellipse || tool_ == Tool::Arrow) {
                 HDC dc = CreateCompatibleDC(nullptr);
                 const HGDIOBJ oldBitmap = SelectObject(dc, capture_);
                 DrawShape(dc, tool_, drawStart_, drawCurrent_);
@@ -1501,24 +1519,21 @@ LRESULT SnipWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
             InvalidateRect(hwnd_, nullptr, FALSE);
             return 0;
         }
-        if (dragging_) {
-            FinishSelectionDrag(point);
-        }
+        if (dragging_) FinishSelectionDrag(point);
         return 0;
     }
 
     case WM_LBUTTONDBLCLK: {
         POINT point{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
         const RECT r = NormalizedSelection();
-        if (selected_ && PtInRect(&r, point)) {
-            Finish(FinishAction::Copy);
-        }
+        if (selected_ && PtInRect(&r, point)) Finish(FinishAction::Copy);
         return 0;
     }
 
     case WM_RBUTTONDOWN:
         if (tool_ != Tool::None) {
             tool_ = Tool::None;
+            hoverStyle_ = -1;
             CommitTextEdit();
             InvalidateRect(hwnd_, nullptr, FALSE);
         } else {
@@ -1538,6 +1553,7 @@ LRESULT SnipWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
             if (tool_ != Tool::None || textEdit_) {
                 CommitTextEdit();
                 tool_ = Tool::None;
+                hoverStyle_ = -1;
                 InvalidateRect(hwnd_, nullptr, FALSE);
             } else {
                 DestroyWindow(hwnd_);
@@ -1562,6 +1578,7 @@ LRESULT SnipWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
         }
         if (selected_) {
             if (wParam == 'R') tool_ = Tool::Rectangle;
+            if (wParam == 'O') tool_ = Tool::Ellipse;
             if (wParam == 'A') tool_ = Tool::Arrow;
             if (wParam == 'P') tool_ = Tool::Pen;
             if (wParam == 'M') tool_ = Tool::Mosaic;
@@ -1604,14 +1621,12 @@ LRESULT SnipWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
 
 LRESULT CALLBACK SnipWindow::WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
     SnipWindow* self = reinterpret_cast<SnipWindow*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
-
     if (message == WM_NCCREATE) {
         auto* create = reinterpret_cast<CREATESTRUCTW*>(lParam);
         self = static_cast<SnipWindow*>(create->lpCreateParams);
         self->hwnd_ = hwnd;
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
     }
-
     return self ? self->HandleMessage(message, wParam, lParam)
                 : DefWindowProcW(hwnd, message, wParam, lParam);
 }

@@ -33,6 +33,7 @@ private:
     HWND hwnd_{};
     NOTIFYICONDATAW tray_{};
     ULONG_PTR gdiplusToken_{};
+    HICON appIcon_{};
     HANDLE singleInstance_{};
 };
 

@@ -1,0 +1,87 @@
+name: beta-release
+
+on:
+  push:
+    branches:
+      - feature/tencent-style-toolbar
+    paths:
+      - 'src/**'
+      - 'CMakeLists.txt'
+      - '.github/workflows/beta-release.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: snaplite-v0.3.0-beta-release
+  cancel-in-progress: true
+
+jobs:
+  release:
+    runs-on: windows-latest
+    env:
+      VERSION: 0.3.0-beta
+      TAG: v0.3.0-beta
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -S . -B build -A x64
+
+      - name: Build Release
+        run: cmake --build build --config Release
+
+      - name: Prepare package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item build/Release/SnapLite.exe dist/SnapLite.exe
+          Compress-Archive -Path dist/SnapLite.exe -DestinationPath "dist/SnapLite-$env:VERSION-win-x64.zip" -Force
+          $hash = (Get-FileHash dist/SnapLite.exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  SnapLite.exe" | Out-File dist/SHA256SUMS.txt -Encoding ascii
+
+      - name: Move beta tag to current build
+        shell: pwsh
+        run: |
+          git tag -f "$env:TAG" "$env:GITHUB_SHA"
+          git push origin "refs/tags/$env:TAG" --force
+
+      - name: Publish GitHub beta release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ env.TAG }}
+          target_commitish: ${{ github.sha }}
+          name: Snap-Lite ${{ env.TAG }}
+          prerelease: true
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          overwrite_files: true
+          body: |
+            Snap-Lite v0.3.0-beta — screenshot interaction test build.
+
+            Test highlights:
+            - blue Fluent-style UI accent replaces the previous yellow accent
+            - custom blue anime-eye screenshot icon is embedded into SnapLite.exe and reused by window/tray UI
+            - final primary action is explicitly “Copy (Enter)” instead of “Done and Copy”
+            - polished unified vector toolbar icons with rounded active states
+            - Chinese hover tooltips for screenshot toolbar actions
+            - ellipse annotation tool
+            - rectangle / ellipse / arrow / pen color and stroke-width controls
+            - text color and font-size controls
+            - selectable mosaic block size
+            - screenshot pin opens at the exact original desktop position
+            - multi-monitor virtual-screen coordinates are preserved for original-position pinning
+            - pinned image right-click menu: copy / save / opacity presets / close
+            - mouse wheel adjusts pin opacity and shows a temporary percentage + progress HUD
+            - Ctrl + wheel adjusts pin zoom
+            - F3 retains arbitrary clipboard-image pinning near the cursor
+            - buffered painting and Per-Monitor V2 DPI support
+
+            This is a prerelease built from feature/tencent-style-toolbar for interaction testing before merging into main.
+          files: |
+            dist/SnapLite.exe
+            dist/SnapLite-${{ env.VERSION }}-win-x64.zip
+            dist/SHA256SUMS.txt

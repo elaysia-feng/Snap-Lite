@@ -3,6 +3,7 @@
 #include "capture.h"
 #include "pin_window.h"
 #include "snip_window.h"
+#include "resource.h"
 
 #include <shellapi.h>
 
@@ -24,6 +25,7 @@ constexpr UINT CMD_FULLSCREEN = 1002;
 constexpr UINT CMD_PIN = 1003;
 constexpr UINT CMD_OPEN_FOLDER = 1004;
 constexpr UINT CMD_EXIT = 1005;
+
 }
 
 App::App(HINSTANCE instance) : instance_(instance) {}
@@ -43,11 +45,20 @@ bool App::Initialize() {
         return false;
     }
 
+    appIcon_ = static_cast<HICON>(LoadImageW(
+        instance_,
+        MAKEINTRESOURCEW(IDI_SNAPLITE),
+        IMAGE_ICON,
+        32,
+        32,
+        LR_DEFAULTCOLOR));
+
     WNDCLASSEXW wc{};
     wc.cbSize = sizeof(wc);
     wc.lpfnWndProc = WindowProc;
     wc.hInstance = instance_;
-    wc.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
+    wc.hIcon = appIcon_ ? appIcon_ : LoadIconW(nullptr, IDI_APPLICATION);
+    wc.hIconSm = wc.hIcon;
     wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
     wc.lpszClassName = kMainClass;
 
@@ -112,6 +123,11 @@ void App::Shutdown() {
         tray_ = {};
     }
 
+    if (appIcon_) {
+        DestroyIcon(appIcon_);
+        appIcon_ = nullptr;
+    }
+
     if (gdiplusToken_) {
         Gdiplus::GdiplusShutdown(gdiplusToken_);
         gdiplusToken_ = 0;
@@ -131,7 +147,7 @@ void App::AddTrayIcon() {
     tray_.uID = 1;
     tray_.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
     tray_.uCallbackMessage = WM_TRAYICON;
-    tray_.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
+    tray_.hIcon = appIcon_ ? appIcon_ : LoadIconW(nullptr, IDI_APPLICATION);
     wcscpy_s(tray_.szTip, L"Snap-Lite · F1 截图 · F3 贴图");
     Shell_NotifyIconW(NIM_ADD, &tray_);
 }
@@ -174,7 +190,7 @@ void App::StartSnip() {
     const bool started = SnipWindow::Start(
         instance_,
         hwnd_,
-        [this](HBITMAP bitmap, SnipWindow::FinishAction action) {
+        [this](HBITMAP bitmap, SnipWindow::FinishAction action, const RECT& sourceScreenRect) {
             if (!bitmap) {
                 ShowNotice(L"截图失败");
                 return;
@@ -193,11 +209,19 @@ void App::StartSnip() {
                 return;
             }
 
-            const bool pinAfter = action == SnipWindow::FinishAction::Pin;
-            CommitCapture(bitmap);
-            if (pinAfter) {
-                PinClipboard();
+            if (action == SnipWindow::FinishAction::Pin) {
+                // Keep the normal save + clipboard behavior, but create the pin
+                // directly from a clone so the screenshot's desktop position is
+                // preserved instead of being lost through a clipboard round trip.
+                HBITMAP pinBitmap = CloneBitmap(bitmap);
+                CommitCapture(bitmap);
+                if (!pinBitmap || !PinWindow::CreateAt(instance_, pinBitmap, sourceScreenRect)) {
+                    ShowNotice(L"贴图创建失败");
+                }
+                return;
             }
+
+            CommitCapture(bitmap);
         });
 
     if (!started) {
