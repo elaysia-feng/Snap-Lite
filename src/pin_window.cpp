@@ -22,6 +22,29 @@ constexpr UINT CMD_OPACITY_80 = 2011;
 constexpr UINT CMD_OPACITY_60 = 2012;
 constexpr UINT CMD_OPACITY_40 = 2013;
 constexpr UINT CMD_CLOSE = 2099;
+constexpr UINT_PTR TIMER_OPACITY_HUD = 1;
+constexpr UINT OPACITY_HUD_MS = 1200;
+
+void AddRoundRect(Gdiplus::GraphicsPath& path, const Gdiplus::RectF& rect, float radius) {
+    path.Reset();
+    const float diameter = radius * 2.0f;
+    path.AddArc(rect.X, rect.Y, diameter, diameter, 180.0f, 90.0f);
+    path.AddArc(rect.GetRight() - diameter, rect.Y, diameter, diameter, 270.0f, 90.0f);
+    path.AddArc(rect.GetRight() - diameter, rect.GetBottom() - diameter, diameter, diameter, 0.0f, 90.0f);
+    path.AddArc(rect.X, rect.GetBottom() - diameter, diameter, diameter, 90.0f, 90.0f);
+    path.CloseFigure();
+}
+
+void FillRoundRect(
+    Gdiplus::Graphics& graphics,
+    const Gdiplus::Color& color,
+    const Gdiplus::RectF& rect,
+    float radius) {
+    Gdiplus::GraphicsPath path;
+    AddRoundRect(path, rect, radius);
+    Gdiplus::SolidBrush brush(color);
+    graphics.FillPath(&brush, &path);
+}
 
 bool OpenClipboardWithRetry() {
     for (int attempt = 0; attempt < 8; ++attempt) {
@@ -268,6 +291,17 @@ bool PinWindow::Register(HINSTANCE instance) {
 }
 
 bool PinWindow::Create(HINSTANCE instance, HBITMAP bitmap) {
+    return CreateInternal(instance, bitmap, nullptr);
+}
+
+bool PinWindow::CreateAt(HINSTANCE instance, HBITMAP bitmap, const RECT& screenRect) {
+    return CreateInternal(instance, bitmap, &screenRect);
+}
+
+bool PinWindow::CreateInternal(
+    HINSTANCE instance,
+    HBITMAP bitmap,
+    const RECT* initialScreenRect) {
     if (!bitmap) {
         return false;
     }
@@ -278,25 +312,42 @@ bool PinWindow::Create(HINSTANCE instance, HBITMAP bitmap) {
         return false;
     }
 
-    const int maxWidth = static_cast<int>(GetSystemMetrics(SM_CXSCREEN) * 0.65);
-    const int maxHeight = static_cast<int>(GetSystemMetrics(SM_CYSCREEN) * 0.65);
-    self->zoom_ = std::min({1.0,
-        static_cast<double>(maxWidth) / self->bitmapWidth_,
-        static_cast<double>(maxHeight) / self->bitmapHeight_});
+    int x{};
+    int y{};
+    int width{};
+    int height{};
 
-    const int width = std::max(1, static_cast<int>(self->bitmapWidth_ * self->zoom_));
-    const int height = std::max(1, static_cast<int>(self->bitmapHeight_ * self->zoom_));
+    if (initialScreenRect &&
+        initialScreenRect->right > initialScreenRect->left &&
+        initialScreenRect->bottom > initialScreenRect->top) {
+        self->zoom_ = 1.0;
+        x = initialScreenRect->left;
+        y = initialScreenRect->top;
+        width = self->bitmapWidth_;
+        height = self->bitmapHeight_;
+    } else {
+        const int maxWidth = static_cast<int>(GetSystemMetrics(SM_CXSCREEN) * 0.65);
+        const int maxHeight = static_cast<int>(GetSystemMetrics(SM_CYSCREEN) * 0.65);
+        self->zoom_ = std::min({1.0,
+            static_cast<double>(maxWidth) / self->bitmapWidth_,
+            static_cast<double>(maxHeight) / self->bitmapHeight_});
 
-    POINT cursor{};
-    GetCursorPos(&cursor);
+        width = std::max(1, static_cast<int>(self->bitmapWidth_ * self->zoom_));
+        height = std::max(1, static_cast<int>(self->bitmapHeight_ * self->zoom_));
+
+        POINT cursor{};
+        GetCursorPos(&cursor);
+        x = cursor.x + 16;
+        y = cursor.y + 16;
+    }
 
     HWND hwnd = CreateWindowExW(
         WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED,
         kPinClass,
         L"Snap-Lite Pin",
         WS_POPUP,
-        cursor.x + 16,
-        cursor.y + 16,
+        x,
+        y,
         width,
         height,
         nullptr,
@@ -357,10 +408,92 @@ void PinWindow::AdjustZoom(int wheelDelta) {
     ResizeForZoom();
 }
 
-void PinWindow::AdjustOpacity(int wheelDelta) {
-    int next = static_cast<int>(opacity_) + (wheelDelta > 0 ? 16 : -16);
-    opacity_ = static_cast<BYTE>(std::clamp(next, 48, 255));
+void PinWindow::SetOpacity(BYTE opacity, bool showHud) {
+    opacity_ = opacity;
     SetLayeredWindowAttributes(hwnd_, 0, opacity_, LWA_ALPHA);
+
+    if (showHud) {
+        opacityHudVisible_ = true;
+        SetTimer(hwnd_, TIMER_OPACITY_HUD, OPACITY_HUD_MS, nullptr);
+        InvalidateRect(hwnd_, nullptr, FALSE);
+    }
+}
+
+void PinWindow::AdjustOpacity(int wheelDelta) {
+    const int stepCount = std::max(1, std::abs(wheelDelta) / WHEEL_DELTA);
+    const int delta = (wheelDelta > 0 ? 16 : -16) * stepCount;
+    const int next = std::clamp(static_cast<int>(opacity_) + delta, 48, 255);
+    SetOpacity(static_cast<BYTE>(next), true);
+}
+
+void PinWindow::PaintOpacityHud(HDC dc, const RECT& client) {
+    const int clientWidth = client.right - client.left;
+    const int clientHeight = client.bottom - client.top;
+    if (!opacityHudVisible_ || clientWidth < 84 || clientHeight < 34) {
+        return;
+    }
+
+    const int panelWidth = std::min(196, std::max(112, clientWidth - 20));
+    const int panelHeight = std::min(58, std::max(34, clientHeight - 8));
+    const int left = (clientWidth - panelWidth) / 2;
+    const int top = std::max(4, clientHeight - panelHeight - 14);
+
+    Gdiplus::Graphics graphics(dc);
+    graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    graphics.SetCompositingMode(Gdiplus::CompositingModeSourceOver);
+
+    const Gdiplus::RectF panel(
+        static_cast<float>(left),
+        static_cast<float>(top),
+        static_cast<float>(panelWidth),
+        static_cast<float>(panelHeight));
+    FillRoundRect(graphics, Gdiplus::Color(218, 24, 27, 32), panel, 10.0f);
+
+    Gdiplus::GraphicsPath panelPath;
+    AddRoundRect(panelPath, panel, 10.0f);
+    Gdiplus::Pen border(Gdiplus::Color(52, 255, 255, 255), 1.0f);
+    graphics.DrawPath(&border, &panelPath);
+
+    const int percent = static_cast<int>(
+        (static_cast<unsigned int>(opacity_) * 100u + 127u) / 255u);
+
+    HFONT font = CreateFontW(
+        -14, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
+        DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
+        CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE,
+        L"Microsoft YaHei UI");
+    const HGDIOBJ oldFont = font ? SelectObject(dc, font) : nullptr;
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, RGB(244, 246, 250));
+
+    wchar_t label[32]{};
+    swprintf_s(label, L"透明度 %d%%", percent);
+    RECT labelRect{
+        left + 12,
+        top + 5,
+        left + panelWidth - 12,
+        top + std::max(24, panelHeight - 16)};
+    DrawTextW(dc, label, -1, &labelRect, DT_CENTER | DT_TOP | DT_SINGLELINE);
+
+    if (oldFont) SelectObject(dc, oldFont);
+    if (font) DeleteObject(font);
+
+    const float progress = static_cast<float>(opacity_) / 255.0f;
+    const float barX = static_cast<float>(left + 14);
+    const float barY = static_cast<float>(top + panelHeight - 13);
+    const float barWidth = static_cast<float>(panelWidth - 28);
+    const float barHeight = 6.0f;
+    const Gdiplus::RectF track(barX, barY, barWidth, barHeight);
+    FillRoundRect(graphics, Gdiplus::Color(70, 255, 255, 255), track, 3.0f);
+
+    if (progress > 0.0f) {
+        const Gdiplus::RectF fill(
+            barX,
+            barY,
+            std::max(6.0f, barWidth * progress),
+            barHeight);
+        FillRoundRect(graphics, Gdiplus::Color(255, 255, 197, 61), fill, 3.0f);
+    }
 }
 
 void PinWindow::ShowContextMenu() {
@@ -417,14 +550,21 @@ LRESULT PinWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
             SRCCOPY);
         SelectObject(memory, old);
         DeleteDC(memory);
+        PaintOpacityHud(dc, client);
         EndPaint(hwnd_, &ps);
         return 0;
     }
 
+    case WM_TIMER:
+        if (wParam == TIMER_OPACITY_HUD) {
+            KillTimer(hwnd_, TIMER_OPACITY_HUD);
+            opacityHudVisible_ = false;
+            InvalidateRect(hwnd_, nullptr, FALSE);
+            return 0;
+        }
+        break;
+
     case WM_MOUSEWHEEL:
-        // A pin is usually already the right size; opacity is the frequent
-        // adjustment. Keep zoom available behind Ctrl so the plain wheel does
-        // the thing users expect most often while reading through the pin.
         if (GetKeyState(VK_CONTROL) & 0x8000) {
             AdjustZoom(GET_WHEEL_DELTA_WPARAM(wParam));
         } else {
@@ -472,20 +612,16 @@ LRESULT PinWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
             return 0;
         }
         case CMD_OPACITY_100:
-            opacity_ = 255;
-            SetLayeredWindowAttributes(hwnd_, 0, opacity_, LWA_ALPHA);
+            SetOpacity(255, true);
             return 0;
         case CMD_OPACITY_80:
-            opacity_ = 204;
-            SetLayeredWindowAttributes(hwnd_, 0, opacity_, LWA_ALPHA);
+            SetOpacity(204, true);
             return 0;
         case CMD_OPACITY_60:
-            opacity_ = 153;
-            SetLayeredWindowAttributes(hwnd_, 0, opacity_, LWA_ALPHA);
+            SetOpacity(153, true);
             return 0;
         case CMD_OPACITY_40:
-            opacity_ = 102;
-            SetLayeredWindowAttributes(hwnd_, 0, opacity_, LWA_ALPHA);
+            SetOpacity(102, true);
             return 0;
         case CMD_CLOSE:
             DestroyWindow(hwnd_);
@@ -496,6 +632,7 @@ LRESULT PinWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
         break;
 
     case WM_NCDESTROY:
+        KillTimer(hwnd_, TIMER_OPACITY_HUD);
         hwnd_ = nullptr;
         delete this;
         return 0;
