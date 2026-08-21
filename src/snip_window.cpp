@@ -385,23 +385,25 @@ void SnipWindow::PaintSelection(HDC dc) {
     }
 
     const RECT r = NormalizedSelection();
-    Gdiplus::Graphics graphics(dc);
-    Gdiplus::SolidBrush dimBrush(Gdiplus::Color(105, 0, 0, 0));
-    const auto fillDim = [&](LONG x, LONG y, LONG width, LONG height) {
-        if (width > 0 && height > 0) {
-            graphics.FillRectangle(
-                &dimBrush,
-                static_cast<INT>(x),
-                static_cast<INT>(y),
-                static_cast<INT>(width),
-                static_cast<INT>(height));
-        }
-    };
+    {
+        Gdiplus::Graphics graphics(dc);
+        Gdiplus::SolidBrush dimBrush(Gdiplus::Color(105, 0, 0, 0));
+        const auto fillDim = [&](LONG x, LONG y, LONG width, LONG height) {
+            if (width > 0 && height > 0) {
+                graphics.FillRectangle(
+                    &dimBrush,
+                    static_cast<INT>(x),
+                    static_cast<INT>(y),
+                    static_cast<INT>(width),
+                    static_cast<INT>(height));
+            }
+        };
 
-    fillDim(0, 0, screen_.width, r.top);
-    fillDim(0, r.bottom, screen_.width, screen_.height - r.bottom);
-    fillDim(0, r.top, r.left, r.bottom - r.top);
-    fillDim(r.right, r.top, screen_.width - r.right, r.bottom - r.top);
+        fillDim(0, 0, screen_.width, r.top);
+        fillDim(0, r.bottom, screen_.width, screen_.height - r.bottom);
+        fillDim(0, r.top, r.left, r.bottom - r.top);
+        fillDim(r.right, r.top, screen_.width - r.right, r.bottom - r.top);
+    }
 
     HPEN border = CreatePen(PS_SOLID, 2, kAccent);
     const HGDIOBJ oldPen = SelectObject(dc, border);
@@ -598,40 +600,62 @@ void SnipWindow::Paint() {
     PAINTSTRUCT ps{};
     HDC dc = BeginPaint(hwnd_, &ps);
 
-    HDC memory = CreateCompatibleDC(dc);
-    const HGDIOBJ old = SelectObject(memory, capture_);
-    BitBlt(dc, 0, 0, screen_.width, screen_.height, memory, 0, 0, SRCCOPY);
-    SelectObject(memory, old);
-    DeleteDC(memory);
+    HDC frameDc = CreateCompatibleDC(dc);
+    HBITMAP frameBitmap = CreateCompatibleBitmap(dc, screen_.width, screen_.height);
+    if (!frameDc || !frameBitmap) {
+        if (frameBitmap) DeleteObject(frameBitmap);
+        if (frameDc) DeleteDC(frameDc);
+        EndPaint(hwnd_, &ps);
+        return;
+    }
+    const HGDIOBJ oldFrame = SelectObject(frameDc, frameBitmap);
+
+    HDC captureDc = CreateCompatibleDC(dc);
+    if (!captureDc) {
+        SelectObject(frameDc, oldFrame);
+        DeleteObject(frameBitmap);
+        DeleteDC(frameDc);
+        EndPaint(hwnd_, &ps);
+        return;
+    }
+    const HGDIOBJ oldCapture = SelectObject(captureDc, capture_);
+    BitBlt(frameDc, 0, 0, screen_.width, screen_.height, captureDc, 0, 0, SRCCOPY);
+    SelectObject(captureDc, oldCapture);
+    DeleteDC(captureDc);
 
     if (selected_) {
-        PaintSelection(dc);
-        PaintPreview(dc);
-        PaintToolbar(dc);
+        PaintSelection(frameDc);
+        PaintPreview(frameDc);
+        PaintToolbar(frameDc);
     } else {
         if (hasHover_) {
             HPEN pen = CreatePen(PS_SOLID, 2, kAccent);
-            const HGDIOBJ oldPen = SelectObject(dc, pen);
-            const HGDIOBJ oldBrush = SelectObject(dc, GetStockObject(NULL_BRUSH));
-            Rectangle(dc, hoverRect_.left, hoverRect_.top, hoverRect_.right, hoverRect_.bottom);
-            SelectObject(dc, oldPen);
-            SelectObject(dc, oldBrush);
+            const HGDIOBJ oldPen = SelectObject(frameDc, pen);
+            const HGDIOBJ oldBrush = SelectObject(frameDc, GetStockObject(NULL_BRUSH));
+            Rectangle(frameDc, hoverRect_.left, hoverRect_.top, hoverRect_.right, hoverRect_.bottom);
+            SelectObject(frameDc, oldPen);
+            SelectObject(frameDc, oldBrush);
             DeleteObject(pen);
         }
 
         POINT cursor{};
         GetCursorPos(&cursor);
         POINT client{cursor.x - screen_.x, cursor.y - screen_.y};
-        PaintMagnifier(dc, client);
+        PaintMagnifier(frameDc, client);
 
         RECT help{12, 12, 690, 40};
-        SetBkColor(dc, RGB(35, 35, 35));
-        SetTextColor(dc, RGB(255, 255, 255));
-        SetBkMode(dc, OPAQUE);
-        DrawTextW(dc, L"单击窗口/控件 · 拖动自由选择 · C 取色 · Esc 取消", -1, &help,
+        SetBkColor(frameDc, RGB(35, 35, 35));
+        SetTextColor(frameDc, RGB(255, 255, 255));
+        SetBkMode(frameDc, OPAQUE);
+        DrawTextW(frameDc, L"单击窗口/控件 · 拖动自由选择 · C 取色 · Esc 取消", -1, &help,
                   DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     }
 
+    BitBlt(dc, 0, 0, screen_.width, screen_.height, frameDc, 0, 0, SRCCOPY);
+
+    SelectObject(frameDc, oldFrame);
+    DeleteObject(frameBitmap);
+    DeleteDC(frameDc);
     EndPaint(hwnd_, &ps);
 }
 
