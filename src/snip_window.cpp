@@ -727,105 +727,121 @@ void SnipWindow::PaintHint(HDC dc) {
 void SnipWindow::PaintToolbarIcon(HDC dc, int index, const RECT& rect, bool active, bool hovered) {
     Gdiplus::Graphics graphics(dc);
     graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+
     const float cx = (rect.left + rect.right) / 2.0f;
     const float cy = (rect.top + rect.bottom) / 2.0f;
+    const Gdiplus::RectF chip(
+        static_cast<float>(rect.left) + 3.0f,
+        static_cast<float>(rect.top) + 3.0f,
+        static_cast<float>(rect.right - rect.left) - 6.0f,
+        static_cast<float>(rect.bottom - rect.top) - 6.0f);
 
-    if (hovered) {
-        Gdiplus::RectF box(
-            static_cast<float>(rect.left) + 2.0f,
-            static_cast<float>(rect.top) + 2.0f,
-            static_cast<float>(rect.right - rect.left) - 4.0f,
-            static_cast<float>(rect.bottom - rect.top) - 4.0f);
-        FillRoundRect(graphics, Gdiplus::Color(28, 255, 255, 255), box, 6.0f);
-    }
-    if (active) {
-        Gdiplus::SolidBrush accent(Accent());
-        graphics.FillRectangle(&accent, cx - 9.0f, static_cast<float>(rect.bottom) - 6.0f, 18.0f, 2.0f);
+    const bool cancel = index == 8;
+    const bool primary = index == 11;
+
+    if (primary) {
+        FillRoundRect(graphics, Accent(hovered ? 255 : 235), chip, 8.0f);
+    } else if (active) {
+        FillRoundRect(graphics, Gdiplus::Color(42, 255, 197, 61), chip, 8.0f);
+        Gdiplus::GraphicsPath activePath;
+        AddRoundRect(activePath, chip, 8.0f);
+        Gdiplus::Pen activeRing(Accent(210), 1.0f);
+        graphics.DrawPath(&activeRing, &activePath);
+    } else if (hovered) {
+        FillRoundRect(
+            graphics,
+            cancel ? Gdiplus::Color(32, 255, 107, 91)
+                   : Gdiplus::Color(28, 255, 255, 255),
+            chip,
+            8.0f);
     }
 
-    Gdiplus::Color tone = Ink(hovered ? 255 : 205);
-    if (index == 8) tone = hovered ? Danger() : Ink(170);
-    if (index == 11) tone = Accent(hovered ? 255 : 225);
+    Gdiplus::Color tone = Ink(hovered ? 255 : 220);
+    if (cancel) tone = hovered ? Danger() : Ink(180);
     if (active) tone = Accent();
+    if (primary) tone = Gdiplus::Color(255, 28, 30, 34);
 
-    Gdiplus::Pen pen(tone, 1.7f);
+    Gdiplus::Pen pen(tone, 1.9f);
     pen.SetStartCap(Gdiplus::LineCapRound);
     pen.SetEndCap(Gdiplus::LineCapRound);
     pen.SetLineJoin(Gdiplus::LineJoinRound);
     Gdiplus::SolidBrush brush(tone);
 
     switch (index) {
-    case 0:
-        graphics.DrawRectangle(&pen, cx - 8.0f, cy - 6.5f, 16.0f, 13.0f);
-        break;
-    case 1:
-        graphics.DrawEllipse(&pen, cx - 8.0f, cy - 7.0f, 16.0f, 14.0f);
-        break;
-    case 2: {
-        graphics.DrawLine(&pen, cx - 8.0f, cy + 7.0f, cx + 5.5f, cy - 5.5f);
-        const Gdiplus::PointF head[3] = {{cx + 8.0f, cy - 8.0f}, {cx + 0.5f, cy - 6.5f}, {cx + 6.5f, cy - 0.5f}};
-        graphics.FillPolygon(&brush, head, 3);
+    case 0: {  // rounded rectangle
+        Gdiplus::GraphicsPath path;
+        AddRoundRect(path, Gdiplus::RectF(cx - 8.0f, cy - 6.5f, 16.0f, 13.0f), 2.5f);
+        graphics.DrawPath(&pen, &path);
         break;
     }
-    case 3:
-        graphics.DrawLine(&pen, cx + 4.0f, cy - 8.0f, cx + 8.0f, cy - 4.0f);
-        graphics.DrawLine(&pen, cx + 4.0f, cy - 8.0f, cx - 6.0f, cy + 2.0f);
-        graphics.DrawLine(&pen, cx + 8.0f, cy - 4.0f, cx - 2.0f, cy + 6.0f);
-        graphics.DrawLine(&pen, cx - 6.0f, cy + 2.0f, cx - 7.5f, cy + 7.5f);
-        graphics.DrawLine(&pen, cx - 2.0f, cy + 6.0f, cx - 7.5f, cy + 7.5f);
+    case 1:  // ellipse
+        graphics.DrawEllipse(&pen, cx - 8.0f, cy - 6.5f, 16.0f, 13.0f);
         break;
-    case 4:
+    case 2:  // arrow
+        graphics.DrawLine(&pen, cx - 7.5f, cy + 6.5f, cx + 6.5f, cy - 6.5f);
+        graphics.DrawLine(&pen, cx + 0.5f, cy - 6.5f, cx + 6.5f, cy - 6.5f);
+        graphics.DrawLine(&pen, cx + 6.5f, cy - 6.5f, cx + 6.5f, cy - 0.5f);
+        break;
+    case 3:  // pen
+        graphics.DrawLine(&pen, cx - 6.5f, cy + 4.5f, cx + 4.5f, cy - 6.5f);
+        graphics.DrawLine(&pen, cx - 3.5f, cy + 7.5f, cx + 7.5f, cy - 3.5f);
+        graphics.DrawLine(&pen, cx + 4.5f, cy - 6.5f, cx + 7.5f, cy - 3.5f);
+        graphics.DrawLine(&pen, cx - 6.5f, cy + 4.5f, cx - 3.5f, cy + 7.5f);
+        graphics.DrawLine(&pen, cx - 7.0f, cy + 8.0f, cx - 2.0f, cy + 7.0f);
+        break;
+    case 4: {  // mosaic
         for (int row = 0; row < 3; ++row) {
             for (int col = 0; col < 3; ++col) {
-                if ((row + col) % 2 == 0) {
-                    graphics.FillRectangle(&brush, cx - 8.0f + col * 5.5f, cy - 8.0f + row * 5.5f, 4.5f, 4.5f);
-                }
+                const float x = cx - 8.0f + col * 6.0f;
+                const float y = cy - 8.0f + row * 6.0f;
+                Gdiplus::GraphicsPath cell;
+                AddRoundRect(cell, Gdiplus::RectF(x, y, 4.5f, 4.5f), 1.1f);
+                if ((row + col) % 2 == 0) graphics.FillPath(&brush, &cell);
+                else graphics.DrawPath(&pen, &cell);
             }
         }
         break;
-    case 5:
+    }
+    case 5:  // text
         graphics.DrawLine(&pen, cx - 7.0f, cy - 7.0f, cx + 7.0f, cy - 7.0f);
-        graphics.DrawLine(&pen, cx, cy - 7.0f, cx, cy + 8.0f);
+        graphics.DrawLine(&pen, cx, cy - 7.0f, cx, cy + 7.5f);
+        graphics.DrawLine(&pen, cx - 3.5f, cy + 7.5f, cx + 3.5f, cy + 7.5f);
         break;
-    case 6: {
-        graphics.DrawArc(&pen, cx - 8.0f, cy - 6.0f, 16.0f, 14.0f, 180.0f, 200.0f);
-        const Gdiplus::PointF head[3] = {{cx - 11.5f, cy - 1.5f}, {cx - 4.5f, cy - 1.5f}, {cx - 8.0f, cy + 5.5f}};
-        graphics.FillPolygon(&brush, head, 3);
+    case 6:  // undo
+        graphics.DrawArc(&pen, cx - 7.0f, cy - 6.0f, 15.0f, 13.0f, 205.0f, 245.0f);
+        graphics.DrawLine(&pen, cx - 8.0f, cy - 1.0f, cx - 8.0f, cy + 5.0f);
+        graphics.DrawLine(&pen, cx - 8.0f, cy + 5.0f, cx - 2.0f, cy + 5.0f);
         break;
-    }
-    case 7: {
-        graphics.DrawArc(&pen, cx - 8.0f, cy - 6.0f, 16.0f, 14.0f, 0.0f, -200.0f);
-        const Gdiplus::PointF head[3] = {{cx + 4.5f, cy - 1.5f}, {cx + 11.5f, cy - 1.5f}, {cx + 8.0f, cy + 5.5f}};
-        graphics.FillPolygon(&brush, head, 3);
+    case 7:  // redo
+        graphics.DrawArc(&pen, cx - 8.0f, cy - 6.0f, 15.0f, 13.0f, 90.0f, 245.0f);
+        graphics.DrawLine(&pen, cx + 8.0f, cy - 1.0f, cx + 8.0f, cy + 5.0f);
+        graphics.DrawLine(&pen, cx + 8.0f, cy + 5.0f, cx + 2.0f, cy + 5.0f);
         break;
-    }
-    case 8:
-        graphics.DrawLine(&pen, cx - 6.5f, cy - 6.5f, cx + 6.5f, cy + 6.5f);
-        graphics.DrawLine(&pen, cx + 6.5f, cy - 6.5f, cx - 6.5f, cy + 6.5f);
+    case 8:  // cancel
+        graphics.DrawLine(&pen, cx - 6.0f, cy - 6.0f, cx + 6.0f, cy + 6.0f);
+        graphics.DrawLine(&pen, cx + 6.0f, cy - 6.0f, cx - 6.0f, cy + 6.0f);
         break;
-    case 9: {
-        Gdiplus::GraphicsPath cap;
-        AddRoundRect(cap, Gdiplus::RectF(cx - 7.0f, cy - 8.5f, 14.0f, 4.5f), 2.0f);
-        graphics.FillPath(&brush, &cap);
-        const Gdiplus::PointF body[4] = {{cx - 4.5f, cy - 4.0f}, {cx + 4.5f, cy - 4.0f}, {cx + 6.5f, cy + 1.5f}, {cx - 6.5f, cy + 1.5f}};
-        graphics.FillPolygon(&brush, body, 4);
-        graphics.DrawLine(&pen, cx, cy + 1.5f, cx, cy + 8.5f);
+    case 9: {  // pin
+        graphics.DrawLine(&pen, cx - 6.5f, cy - 6.5f, cx + 6.5f, cy - 6.5f);
+        graphics.DrawLine(&pen, cx - 4.5f, cy - 6.5f, cx - 3.5f, cy - 1.0f);
+        graphics.DrawLine(&pen, cx + 4.5f, cy - 6.5f, cx + 3.5f, cy - 1.0f);
+        graphics.DrawLine(&pen, cx - 5.5f, cy - 1.0f, cx + 5.5f, cy - 1.0f);
+        graphics.DrawLine(&pen, cx, cy - 1.0f, cx, cy + 8.0f);
         break;
     }
-    case 10:
-        graphics.DrawLine(&pen, cx, cy - 8.0f, cx, cy + 2.5f);
-        graphics.DrawLine(&pen, cx - 4.5f, cy - 2.0f, cx, cy + 2.5f);
-        graphics.DrawLine(&pen, cx + 4.5f, cy - 2.0f, cx, cy + 2.5f);
-        graphics.DrawLine(&pen, cx - 8.0f, cy + 7.5f, cx + 8.0f, cy + 7.5f);
+    case 10:  // save / download
+        graphics.DrawLine(&pen, cx, cy - 7.5f, cx, cy + 3.0f);
+        graphics.DrawLine(&pen, cx - 4.0f, cy - 1.0f, cx, cy + 3.0f);
+        graphics.DrawLine(&pen, cx + 4.0f, cy - 1.0f, cx, cy + 3.0f);
+        graphics.DrawLine(&pen, cx - 7.5f, cy + 7.0f, cx + 7.5f, cy + 7.0f);
+        graphics.DrawLine(&pen, cx - 7.5f, cy + 7.0f, cx - 7.5f, cy + 4.0f);
+        graphics.DrawLine(&pen, cx + 7.5f, cy + 7.0f, cx + 7.5f, cy + 4.0f);
         break;
-    case 11: {
-        Gdiplus::GraphicsPath path;
-        AddRoundRect(path, Gdiplus::RectF(cx - 3.0f, cy - 3.0f, 11.0f, 11.0f), 2.0f);
-        graphics.DrawPath(&pen, &path);
-        graphics.DrawLine(&pen, cx - 6.5f, cy + 1.0f, cx - 6.5f, cy - 6.5f);
-        graphics.DrawLine(&pen, cx - 6.5f, cy - 6.5f, cx + 1.0f, cy - 6.5f);
+    case 11:  // done + copy
+        pen.SetWidth(2.4f);
+        graphics.DrawLine(&pen, cx - 6.0f, cy + 0.5f, cx - 1.5f, cy + 5.0f);
+        graphics.DrawLine(&pen, cx - 1.5f, cy + 5.0f, cx + 7.0f, cy - 5.0f);
         break;
-    }
     default:
         break;
     }
