@@ -39,19 +39,20 @@ jobs:
           "$hash  SnapLite.exe" | Out-File dist/SHA256SUMS.txt -Encoding ascii
 
       - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ env.TAG }}
           target_commitish: ${{ github.sha }}
           name: Snap-Lite ${{ env.TAG }}
           prerelease: true
-          generate_release_notes: true
+          overwrite_files: true
           fail_on_unmatched_files: true
           body: |
             Windows 11 x64 lightweight screenshot + pin tool.
 
             v0.2.0-alpha highlights:
-            - Snipaste-style gray capture overlay
+            - Snipaste-style semi-transparent capture overlay
+            - fixed selection overlay incorrectly covering the desktop with solid gray
             - blue resizable selection with 8 handles
             - live pixel-size label
             - floating annotation toolbar
