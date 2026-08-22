@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(SnapLite VERSION 1.2.1 LANGUAGES CXX RC)
+project(SnapLite VERSION 1.2.2 LANGUAGES CXX RC)
 
 configure_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/resources/SnapLite.rc.in
@@ -10,7 +10,7 @@ configure_file(
 add_executable(SnapLite WIN32
     src/main.cpp
     src/app.cpp
-    src/anime_toolbar.cpp
+    src/editor_toolbar.cpp
     src/capture.cpp
     src/capture_settings.cpp
     src/editor_window.cpp
