@@ -73,33 +73,57 @@ jobs:
           $hash = (Get-FileHash dist/SnapLite.exe -Algorithm SHA256).Hash.ToLower()
           "$hash  SnapLite.exe" | Out-File dist/SHA256SUMS.txt -Encoding ascii
 
-      - name: Create immutable release tag
+      - name: Ensure immutable release tag
         shell: pwsh
         env:
           TAG: ${{ steps.version.outputs.tag }}
         run: |
           git fetch --tags --force
-          if (git tag --list "$env:TAG") {
-            throw "Release tag $env:TAG already exists; bump the release version before publishing."
+          $existing = git rev-parse -q --verify "refs/tags/$env:TAG"
+          if ($LASTEXITCODE -eq 0 -and $existing) {
+            Write-Host "Tag $env:TAG already exists at $existing; keeping the immutable tag and continuing release recovery."
+          } else {
+            git tag "$env:TAG" "$env:GITHUB_SHA"
+            if ($LASTEXITCODE -ne 0) { throw "Failed to create tag $env:TAG" }
+            git push origin "refs/tags/$env:TAG"
+            if ($LASTEXITCODE -ne 0) { throw "Failed to push tag $env:TAG" }
           }
-          git tag "$env:TAG" "$env:GITHUB_SHA"
-          git push origin "refs/tags/$env:TAG"
 
-      - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v3
-        with:
-          tag_name: ${{ steps.version.outputs.tag }}
-          target_commitish: ${{ github.sha }}
-          name: Snap-Lite ${{ steps.version.outputs.tag }}
-          prerelease: ${{ steps.version.outputs.prerelease }}
-          generate_release_notes: true
-          fail_on_unmatched_files: true
-          body: |
-            Snap-Lite ${{ steps.version.outputs.tag }}
+      - name: Publish or repair GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+          PRERELEASE: ${{ steps.version.outputs.prerelease }}
+          REPO: ${{ github.repository }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $assets = @(
+            'dist/SnapLite.exe',
+            "dist/SnapLite-$env:VERSION-win-x64.zip",
+            'dist/SHA256SUMS.txt'
+          )
+          foreach ($asset in $assets) {
+            if (-not (Test-Path $asset)) { throw "Missing release asset: $asset" }
+          }
 
-            本次版本以当前 main 的功能和修复为准。
-            - Windows 11 x64
-          files: |
-            dist/SnapLite.exe
-            dist/SnapLite-${{ steps.version.outputs.version }}-win-x64.zip
-            dist/SHA256SUMS.txt
+          gh release view "$env:TAG" --repo "$env:REPO" *> $null
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "Release $env:TAG already exists; replacing assets."
+            gh release upload "$env:TAG" @assets --repo "$env:REPO" --clobber
+            if ($LASTEXITCODE -ne 0) { throw "Failed to upload assets for $env:TAG" }
+          } else {
+            $args = @(
+              'release', 'create', "$env:TAG",
+              '--repo', "$env:REPO",
+              '--title', "Snap-Lite $env:TAG",
+              '--generate-notes'
+            )
+            if ($env:PRERELEASE -eq 'true') {
+              $args += '--prerelease'
+            }
+            $args += $assets
+            & gh @args
+            if ($LASTEXITCODE -ne 0) { throw "Failed to create GitHub Release $env:TAG" }
+          }
