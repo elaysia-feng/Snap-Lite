@@ -1,0 +1,6 @@
+Snap-Lite v1.2.2
+
+- Replace the screenshot toolbar overlay repaint path with a child window.
+- Double-buffer the toolbar so hover/category changes are committed in one frame.
+- Keep toolbar coordinates inside the snip window to preserve DPI/selection alignment.
+- Includes the accurate DWM visible-window-bounds fix from v1.2.1.
