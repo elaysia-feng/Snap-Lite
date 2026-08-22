@@ -3,6 +3,9 @@
 #include "snip_window.h"
 
 #include <windows.h>
+#include <commctrl.h>
+#include <commdlg.h>
+#include <windowsx.h>
 #include <algorithm>
 #include <cwchar>
 
@@ -10,6 +13,11 @@ namespace snaplite::toolbarcompact {
 
 constexpr int kPrimaryOnlyHeight = 42;
 constexpr int kExpandedHeight = 42 + 42 + 24;
+
+inline bool IsToolbarClassName(LPCWSTR className) {
+    if (!className || reinterpret_cast<ULONG_PTR>(className) <= 0xFFFF) return false;
+    return wcscmp(className, L"SnapLiteEditorToolbarChild") == 0;
+}
 
 inline bool IsEditorToolbar(HWND hwnd) {
     if (!hwnd) return false;
@@ -22,6 +30,11 @@ inline SnipWindow* SnipFromToolbar(HWND toolbar) {
     HWND parent = GetParent(toolbar);
     if (!parent) return nullptr;
     return reinterpret_cast<SnipWindow*>(GetWindowLongPtrW(parent, GWLP_USERDATA));
+}
+
+inline bool ToolbarParentIsDragging(HWND toolbar) {
+    HWND parent = GetParent(toolbar);
+    return parent && GetCapture() == parent;
 }
 
 inline bool HasSecondaryOptions(HWND toolbar) {
@@ -60,6 +73,41 @@ inline void ApplyRoundedRegion(HWND hwnd) {
     }
 }
 
+inline HWND CreateWindowExCompact(
+    DWORD exStyle,
+    LPCWSTR className,
+    LPCWSTR windowName,
+    DWORD style,
+    int x,
+    int y,
+    int width,
+    int height,
+    HWND parent,
+    HMENU menu,
+    HINSTANCE instance,
+    LPVOID param) {
+
+    // F1 should enter a clean capture state. The editor toolbar is created
+    // immediately, but it stays hidden until a real selection is committed.
+    if (IsToolbarClassName(className)) {
+        style &= ~WS_VISIBLE;
+    }
+
+    return ::CreateWindowExW(
+        exStyle,
+        className,
+        windowName,
+        style,
+        x,
+        y,
+        width,
+        height,
+        parent,
+        menu,
+        instance,
+        param);
+}
+
 inline BOOL SetWindowPosCompact(
     HWND hwnd,
     HWND insertAfter,
@@ -70,6 +118,16 @@ inline BOOL SetWindowPosCompact(
     UINT flags) {
 
     if (IsEditorToolbar(hwnd)) {
+        // New-selection, move and resize drags capture the mouse on the parent
+        // snip window. Do not move/show the child toolbar on every WM_MOUSEMOVE;
+        // doing so left stacked white ghost panels when the pointer moved fast.
+        if (ToolbarParentIsDragging(hwnd)) {
+            if (IsWindowVisible(hwnd)) {
+                ::ShowWindow(hwnd, SW_HIDE);
+            }
+            return TRUE;
+        }
+
         const int requestedHeight = cy;
         const int desiredHeight = DesiredHeight(hwnd);
 
@@ -93,6 +151,11 @@ inline BOOL SetWindowPosCompact(
         if (!(flags & SWP_NOMOVE)) {
             y = ClampToolbarY(hwnd, y, cy);
         }
+
+        // UpdatePosition becomes the single place that reveals a committed
+        // selection's toolbar. Initial creation remains hidden.
+        flags &= ~SWP_HIDEWINDOW;
+        flags |= SWP_SHOWWINDOW;
     }
 
     const BOOL result = ::SetWindowPos(hwnd, insertAfter, x, y, cx, cy, flags);
@@ -102,6 +165,7 @@ inline BOOL SetWindowPosCompact(
 
 inline void ResizeToolbarForCurrentTool(HWND toolbar) {
     if (!IsEditorToolbar(toolbar)) return;
+    if (ToolbarParentIsDragging(toolbar)) return;
 
     RECT rect{};
     if (!GetWindowRect(toolbar, &rect)) return;
@@ -153,5 +217,6 @@ inline BOOL InvalidateRectCompact(HWND hwnd, const RECT* rect, BOOL erase) {
 
 }  // namespace snaplite::toolbarcompact
 
+#define CreateWindowExW(...) snaplite::toolbarcompact::CreateWindowExCompact(__VA_ARGS__)
 #define SetWindowPos(...) snaplite::toolbarcompact::SetWindowPosCompact(__VA_ARGS__)
 #define InvalidateRect(...) snaplite::toolbarcompact::InvalidateRectCompact(__VA_ARGS__)
