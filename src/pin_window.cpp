@@ -2,6 +2,7 @@
 
 #include "capture.h"
 
+#include <commdlg.h>
 #include <gdiplus.h>
 #include <objidl.h>
 #include <shellapi.h>
@@ -16,14 +17,305 @@
 namespace snaplite {
 namespace {
 constexpr wchar_t kPinClass[] = L"SnapLitePinWindow";
-constexpr UINT CMD_OPACITY_100 = 2001;
-constexpr UINT CMD_OPACITY_80 = 2002;
-constexpr UINT CMD_OPACITY_60 = 2003;
-constexpr UINT CMD_CLOSE = 2004;
+constexpr wchar_t kPinMenuClass[] = L"SnapLitePinMenuWindow";
+
+constexpr UINT WM_PIN_SET_OPACITY = WM_APP + 101;
+constexpr UINT WM_PIN_COPY = WM_APP + 102;
+constexpr UINT WM_PIN_SAVE_AS = WM_APP + 103;
+constexpr UINT WM_PIN_CLOSE = WM_APP + 104;
+constexpr UINT WM_PIN_MENU_CLOSED = WM_APP + 105;
+
+constexpr int kMenuWidth = 244;
+constexpr int kMenuHeight = 196;
+constexpr BYTE kMinOpacity = 26;
 
 DWORD gPendingClipboardSequence = 0;
 DWORD gDismissedClipboardSequence = 0;
 std::unordered_map<HWND, DWORD> gPinClipboardSequences;
+
+struct PinMenuState {
+    HWND owner{};
+    BYTE opacity{255};
+    bool dragging{};
+    int hoverRow{-1};
+};
+
+RECT SliderRect() {
+    return {20, 48, kMenuWidth - 20, 64};
+}
+
+RECT MenuRowRect(int row) {
+    switch (row) {
+    case 0: return {12, 82, kMenuWidth - 12, 112};
+    case 1: return {12, 114, kMenuWidth - 12, 144};
+    case 2: return {12, 154, kMenuWidth - 12, 184};
+    default: return {};
+    }
+}
+
+int HitMenuRow(POINT point) {
+    for (int row = 0; row < 3; ++row) {
+        RECT rect = MenuRowRect(row);
+        if (PtInRect(&rect, point)) {
+            return row;
+        }
+    }
+    return -1;
+}
+
+BYTE OpacityFromX(int x) {
+    const RECT slider = SliderRect();
+    const int clamped = std::clamp(x, slider.left, slider.right);
+    const double ratio = static_cast<double>(clamped - slider.left) /
+                         static_cast<double>(slider.right - slider.left);
+    const int value = static_cast<int>(kMinOpacity + ratio * (255 - kMinOpacity));
+    return static_cast<BYTE>(std::clamp(value, static_cast<int>(kMinOpacity), 255));
+}
+
+int SliderXFromOpacity(BYTE opacity) {
+    const RECT slider = SliderRect();
+    const double ratio = static_cast<double>(opacity - kMinOpacity) /
+                         static_cast<double>(255 - kMinOpacity);
+    return slider.left + static_cast<int>(ratio * (slider.right - slider.left));
+}
+
+void UpdateMenuOpacity(HWND hwnd, PinMenuState* state, int x) {
+    if (!state) {
+        return;
+    }
+    state->opacity = OpacityFromX(x);
+    if (state->owner && IsWindow(state->owner)) {
+        SendMessageW(state->owner, WM_PIN_SET_OPACITY, state->opacity, 0);
+    }
+    InvalidateRect(hwnd, nullptr, FALSE);
+}
+
+void PaintPinMenu(HWND hwnd, PinMenuState* state) {
+    PAINTSTRUCT ps{};
+    HDC dc = BeginPaint(hwnd, &ps);
+    if (!state) {
+        EndPaint(hwnd, &ps);
+        return;
+    }
+
+    RECT client{};
+    GetClientRect(hwnd, &client);
+
+    HBRUSH background = CreateSolidBrush(RGB(24, 30, 48));
+    FillRect(dc, &client, background);
+    DeleteObject(background);
+
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, RGB(229, 241, 255));
+
+    HFONT font = CreateFontW(
+        -15, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+        DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
+        CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+    HGDIOBJ oldFont = SelectObject(dc, font);
+
+    const int percent = static_cast<int>((static_cast<int>(state->opacity) * 100 + 127) / 255);
+    wchar_t opacityText[64]{};
+    swprintf_s(opacityText, L"透明度  %d%%", percent);
+    RECT label{20, 14, kMenuWidth - 20, 40};
+    DrawTextW(dc, opacityText, -1, &label, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
+    const RECT slider = SliderRect();
+    const int centerY = (slider.top + slider.bottom) / 2;
+    const int knobX = SliderXFromOpacity(state->opacity);
+
+    HPEN basePen = CreatePen(PS_SOLID, 4, RGB(68, 81, 111));
+    HPEN activePen = CreatePen(PS_SOLID, 4, RGB(111, 231, 255));
+    HGDIOBJ oldPen = SelectObject(dc, basePen);
+    MoveToEx(dc, slider.left, centerY, nullptr);
+    LineTo(dc, slider.right, centerY);
+    SelectObject(dc, activePen);
+    MoveToEx(dc, slider.left, centerY, nullptr);
+    LineTo(dc, knobX, centerY);
+
+    HBRUSH knobBrush = CreateSolidBrush(RGB(202, 247, 255));
+    HGDIOBJ oldBrush = SelectObject(dc, knobBrush);
+    Ellipse(dc, knobX - 7, centerY - 7, knobX + 7, centerY + 7);
+    SelectObject(dc, oldBrush);
+    DeleteObject(knobBrush);
+    SelectObject(dc, oldPen);
+    DeleteObject(basePen);
+    DeleteObject(activePen);
+
+    const wchar_t* labels[3] = {L"复制贴图", L"另存为...", L"关闭贴图"};
+    for (int row = 0; row < 3; ++row) {
+        RECT rect = MenuRowRect(row);
+        if (state->hoverRow == row) {
+            HBRUSH hover = CreateSolidBrush(row == 2 ? RGB(72, 42, 55) : RGB(39, 55, 83));
+            FillRect(dc, &rect, hover);
+            DeleteObject(hover);
+        }
+
+        if (row == 2) {
+            SetTextColor(dc, RGB(255, 166, 190));
+        } else {
+            SetTextColor(dc, RGB(224, 241, 255));
+        }
+        RECT textRect = rect;
+        textRect.left += 10;
+        DrawTextW(dc, labels[row], -1, &textRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    }
+
+    HPEN separator = CreatePen(PS_SOLID, 1, RGB(53, 66, 91));
+    oldPen = SelectObject(dc, separator);
+    MoveToEx(dc, 16, 149, nullptr);
+    LineTo(dc, kMenuWidth - 16, 149);
+    SelectObject(dc, oldPen);
+    DeleteObject(separator);
+
+    SelectObject(dc, oldFont);
+    DeleteObject(font);
+    EndPaint(hwnd, &ps);
+}
+
+LRESULT CALLBACK PinMenuWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
+    auto* state = reinterpret_cast<PinMenuState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+
+    if (message == WM_NCCREATE) {
+        auto* create = reinterpret_cast<CREATESTRUCTW*>(lParam);
+        state = static_cast<PinMenuState*>(create->lpCreateParams);
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(state));
+    }
+
+    switch (message) {
+    case WM_CREATE: {
+        HRGN region = CreateRoundRectRgn(0, 0, kMenuWidth + 1, kMenuHeight + 1, 18, 18);
+        SetWindowRgn(hwnd, region, TRUE);
+        return 0;
+    }
+    case WM_PAINT:
+        PaintPinMenu(hwnd, state);
+        return 0;
+    case WM_ERASEBKGND:
+        return 1;
+    case WM_MOUSEMOVE: {
+        if (!state) {
+            return 0;
+        }
+        POINT point{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+        if (state->dragging) {
+            UpdateMenuOpacity(hwnd, state, point.x);
+            return 0;
+        }
+        const int hover = HitMenuRow(point);
+        if (hover != state->hoverRow) {
+            state->hoverRow = hover;
+            InvalidateRect(hwnd, nullptr, FALSE);
+        }
+        return 0;
+    }
+    case WM_LBUTTONDOWN: {
+        if (!state) {
+            return 0;
+        }
+        POINT point{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+        RECT slider = SliderRect();
+        InflateRect(&slider, 0, 8);
+        if (PtInRect(&slider, point)) {
+            state->dragging = true;
+            SetCapture(hwnd);
+            UpdateMenuOpacity(hwnd, state, point.x);
+            return 0;
+        }
+
+        const int row = HitMenuRow(point);
+        if (row >= 0 && state->owner && IsWindow(state->owner)) {
+            const UINT command = row == 0 ? WM_PIN_COPY : (row == 1 ? WM_PIN_SAVE_AS : WM_PIN_CLOSE);
+            PostMessageW(state->owner, command, 0, 0);
+            DestroyWindow(hwnd);
+        }
+        return 0;
+    }
+    case WM_LBUTTONUP:
+        if (state && state->dragging) {
+            state->dragging = false;
+            if (GetCapture() == hwnd) {
+                ReleaseCapture();
+            }
+        }
+        return 0;
+    case WM_CAPTURECHANGED:
+        if (state) {
+            state->dragging = false;
+        }
+        return 0;
+    case WM_KEYDOWN:
+        if (wParam == VK_ESCAPE) {
+            DestroyWindow(hwnd);
+            return 0;
+        }
+        break;
+    case WM_ACTIVATE:
+        if (LOWORD(wParam) == WA_INACTIVE && state && !state->dragging) {
+            DestroyWindow(hwnd);
+            return 0;
+        }
+        break;
+    case WM_NCDESTROY:
+        if (state) {
+            if (state->owner && IsWindow(state->owner)) {
+                PostMessageW(state->owner, WM_PIN_MENU_CLOSED, reinterpret_cast<WPARAM>(hwnd), 0);
+            }
+            delete state;
+        }
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+        return 0;
+    default:
+        break;
+    }
+
+    return DefWindowProcW(hwnd, message, wParam, lParam);
+}
+
+HWND CreatePinMenu(HWND owner, BYTE opacity, POINT cursor) {
+    MONITORINFO monitorInfo{sizeof(monitorInfo)};
+    HMONITOR monitor = MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST);
+    GetMonitorInfoW(monitor, &monitorInfo);
+
+    int x = cursor.x;
+    int y = cursor.y;
+    if (x + kMenuWidth > monitorInfo.rcWork.right) {
+        x = monitorInfo.rcWork.right - kMenuWidth;
+    }
+    if (y + kMenuHeight > monitorInfo.rcWork.bottom) {
+        y = monitorInfo.rcWork.bottom - kMenuHeight;
+    }
+    x = std::max(x, static_cast<int>(monitorInfo.rcWork.left));
+    y = std::max(y, static_cast<int>(monitorInfo.rcWork.top));
+
+    auto* state = new PinMenuState{};
+    state->owner = owner;
+    state->opacity = opacity;
+
+    HWND hwnd = CreateWindowExW(
+        WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
+        kPinMenuClass,
+        L"Snap-Lite Pin Menu",
+        WS_POPUP,
+        x,
+        y,
+        kMenuWidth,
+        kMenuHeight,
+        owner,
+        nullptr,
+        reinterpret_cast<HINSTANCE>(GetWindowLongPtrW(owner, GWLP_HINSTANCE)),
+        state);
+
+    if (!hwnd) {
+        delete state;
+        return nullptr;
+    }
+
+    ShowWindow(hwnd, SW_SHOWNORMAL);
+    UpdateWindow(hwnd);
+    SetForegroundWindow(hwnd);
+    return hwnd;
+}
 
 bool OpenClipboardWithRetry() {
     for (int attempt = 0; attempt < 8; ++attempt) {
@@ -251,6 +543,10 @@ PinWindow::PinWindow(HINSTANCE instance, HBITMAP bitmap)
 }
 
 PinWindow::~PinWindow() {
+    if (contextMenu_ && IsWindow(contextMenu_)) {
+        DestroyWindow(contextMenu_);
+        contextMenu_ = nullptr;
+    }
     if (bitmap_) {
         DeleteObject(bitmap_);
         bitmap_ = nullptr;
@@ -266,7 +562,19 @@ bool PinWindow::Register(HINSTANCE instance) {
     wc.hbrBackground = static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
     wc.lpszClassName = kPinClass;
     wc.style = CS_DBLCLKS;
-    return RegisterClassExW(&wc) != 0 || GetLastError() == ERROR_CLASS_ALREADY_EXISTS;
+    const bool pinRegistered = RegisterClassExW(&wc) != 0 || GetLastError() == ERROR_CLASS_ALREADY_EXISTS;
+
+    WNDCLASSEXW menuClass{};
+    menuClass.cbSize = sizeof(menuClass);
+    menuClass.lpfnWndProc = PinMenuWindowProc;
+    menuClass.hInstance = instance;
+    menuClass.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+    menuClass.hbrBackground = static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
+    menuClass.lpszClassName = kPinMenuClass;
+    const bool menuRegistered =
+        RegisterClassExW(&menuClass) != 0 || GetLastError() == ERROR_CLASS_ALREADY_EXISTS;
+
+    return pinRegistered && menuRegistered;
 }
 
 bool PinWindow::Create(HINSTANCE instance, HBITMAP bitmap) {
@@ -370,29 +678,72 @@ void PinWindow::AdjustZoom(int wheelDelta) {
     ResizeForZoom();
 }
 
+void PinWindow::SetOpacity(BYTE opacity) {
+    opacity_ = static_cast<BYTE>(std::clamp(static_cast<int>(opacity), static_cast<int>(kMinOpacity), 255));
+    if (hwnd_) {
+        SetLayeredWindowAttributes(hwnd_, 0, opacity_, LWA_ALPHA);
+    }
+}
+
 void PinWindow::AdjustOpacity(int wheelDelta) {
-    int next = static_cast<int>(opacity_) + (wheelDelta > 0 ? 16 : -16);
-    opacity_ = static_cast<BYTE>(std::clamp(next, 48, 255));
-    SetLayeredWindowAttributes(hwnd_, 0, opacity_, LWA_ALPHA);
+    const int next = static_cast<int>(opacity_) + (wheelDelta > 0 ? 13 : -13);
+    SetOpacity(static_cast<BYTE>(std::clamp(next, static_cast<int>(kMinOpacity), 255)));
 }
 
 void PinWindow::ShowContextMenu() {
-    HMENU menu = CreatePopupMenu();
-    if (!menu) {
-        return;
+    if (contextMenu_ && IsWindow(contextMenu_)) {
+        DestroyWindow(contextMenu_);
+        contextMenu_ = nullptr;
     }
-
-    AppendMenuW(menu, MF_STRING, CMD_OPACITY_100, L"透明度 100%");
-    AppendMenuW(menu, MF_STRING, CMD_OPACITY_80, L"透明度 80%");
-    AppendMenuW(menu, MF_STRING, CMD_OPACITY_60, L"透明度 60%");
-    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(menu, MF_STRING, CMD_CLOSE, L"关闭贴图");
 
     POINT cursor{};
     GetCursorPos(&cursor);
-    SetForegroundWindow(hwnd_);
-    TrackPopupMenu(menu, TPM_RIGHTBUTTON | TPM_LEFTALIGN, cursor.x, cursor.y, 0, hwnd_, nullptr);
-    DestroyMenu(menu);
+    contextMenu_ = CreatePinMenu(hwnd_, opacity_, cursor);
+}
+
+void PinWindow::CopyPin() {
+    if (!CopyBitmapToClipboard(hwnd_, bitmap_)) {
+        MessageBoxW(hwnd_, L"复制贴图失败。", L"Snap-Lite", MB_OK | MB_ICONERROR);
+    }
+}
+
+void PinWindow::SavePinAs() {
+    SYSTEMTIME time{};
+    GetLocalTime(&time);
+
+    wchar_t fileName[128]{};
+    swprintf_s(
+        fileName,
+        L"SnapLite-pin-%04d%02d%02d-%02d%02d%02d.png",
+        time.wYear,
+        time.wMonth,
+        time.wDay,
+        time.wHour,
+        time.wMinute,
+        time.wSecond);
+
+    std::vector<wchar_t> pathBuffer(32768, L'\0');
+    wcsncpy_s(pathBuffer.data(), pathBuffer.size(), fileName, _TRUNCATE);
+
+    static constexpr wchar_t filter[] =
+        L"PNG 图片 (*.png)\0*.png\0所有文件 (*.*)\0*.*\0\0";
+
+    OPENFILENAMEW dialog{};
+    dialog.lStructSize = sizeof(dialog);
+    dialog.hwndOwner = hwnd_;
+    dialog.lpstrFilter = filter;
+    dialog.lpstrFile = pathBuffer.data();
+    dialog.nMaxFile = static_cast<DWORD>(pathBuffer.size());
+    dialog.lpstrDefExt = L"png";
+    dialog.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+
+    if (!GetSaveFileNameW(&dialog)) {
+        return;
+    }
+
+    if (!SaveBitmapPng(bitmap_, std::filesystem::path(pathBuffer.data()))) {
+        MessageBoxW(hwnd_, L"保存贴图失败。", L"Snap-Lite", MB_OK | MB_ICONERROR);
+    }
 }
 
 LRESULT PinWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
@@ -433,6 +784,10 @@ LRESULT PinWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
         return 0;
 
     case WM_LBUTTONDOWN:
+        if (contextMenu_ && IsWindow(contextMenu_)) {
+            DestroyWindow(contextMenu_);
+            contextMenu_ = nullptr;
+        }
         ReleaseCapture();
         SendMessageW(hwnd_, WM_NCLBUTTONDOWN, HTCAPTION, 0);
         return 0;
@@ -445,29 +800,31 @@ LRESULT PinWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
         ShowContextMenu();
         return 0;
 
-    case WM_COMMAND:
-        switch (LOWORD(wParam)) {
-        case CMD_OPACITY_100:
-            opacity_ = 255;
-            SetLayeredWindowAttributes(hwnd_, 0, opacity_, LWA_ALPHA);
-            return 0;
-        case CMD_OPACITY_80:
-            opacity_ = 204;
-            SetLayeredWindowAttributes(hwnd_, 0, opacity_, LWA_ALPHA);
-            return 0;
-        case CMD_OPACITY_60:
-            opacity_ = 153;
-            SetLayeredWindowAttributes(hwnd_, 0, opacity_, LWA_ALPHA);
-            return 0;
-        case CMD_CLOSE:
-            DestroyWindow(hwnd_);
-            return 0;
-        default:
-            break;
-        }
-        break;
+    case WM_PIN_SET_OPACITY:
+        SetOpacity(static_cast<BYTE>(std::clamp(static_cast<int>(wParam), 0, 255)));
+        return 0;
+
+    case WM_PIN_COPY:
+        CopyPin();
+        return 0;
+
+    case WM_PIN_SAVE_AS:
+        SavePinAs();
+        return 0;
+
+    case WM_PIN_CLOSE:
+        DestroyWindow(hwnd_);
+        return 0;
+
+    case WM_PIN_MENU_CLOSED:
+        contextMenu_ = nullptr;
+        return 0;
 
     case WM_NCDESTROY: {
+        if (contextMenu_ && IsWindow(contextMenu_)) {
+            DestroyWindow(contextMenu_);
+            contextMenu_ = nullptr;
+        }
         const auto it = gPinClipboardSequences.find(hwnd_);
         if (it != gPinClipboardSequences.end()) {
             gDismissedClipboardSequence = it->second;
@@ -477,6 +834,8 @@ LRESULT PinWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
         delete this;
         return 0;
     }
+    default:
+        break;
     }
 
     return DefWindowProcW(hwnd_, message, wParam, lParam);
