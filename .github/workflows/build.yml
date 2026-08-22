@@ -5,9 +5,6 @@ on:
     branches: [main]
   pull_request:
 
-permissions:
-  contents: write
-
 jobs:
   windows:
     runs-on: windows-latest
@@ -15,25 +12,17 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event_name == 'pull_request' && github.head_ref || github.ref_name }}
-          fetch-depth: 0
 
-      - name: Apply one-time stability migration
-        if: github.event_name == 'pull_request' && github.head_ref == 'agent/stability-fix-all' && hashFiles('scripts/apply_stability_fixes.py') != ''
+      - name: Source invariants
         shell: pwsh
         run: |
-          python scripts/apply_stability_fixes.py
-
-          # GitHub Actions tokens cannot update workflow files. Restore workflow
-          # files in this commit; they are cleaned separately through the connector.
-          git checkout HEAD -- .github/workflows
-
-          git config user.name 'Snap-Lite CI'
-          git config user.email 'actions@users.noreply.github.com'
-          git add -A
-          git commit -m 'Fix screenshot stability and remove legacy paths'
-          git push origin HEAD:${{ github.head_ref }}
+          $snip = Get-Content src/snip_window_original.inc -Raw
+          if ($snip.Contains('PaintToolbar(frameDc);')) { throw 'Legacy toolbar paint path is active.' }
+          $editor = Get-Content src/editor_toolbar.cpp -Raw
+          if ($editor.Contains('#define DrawTextW')) { throw 'Toolbar icon macro interception returned.' }
+          if (Test-Path src/editor_window.cpp) { throw 'Dead legacy EditorWindow source returned.' }
+          if (Test-Path .github/workflows/fix-beta2-once.yml) { throw 'One-time source mutation workflow must not ship.' }
+          if (Test-Path .github/workflows/release-beta.yml) { throw 'Beta source-mutation release workflow must not ship.' }
 
       - name: Configure
         run: cmake -S . -B build -A x64
