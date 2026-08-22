@@ -1,3 +1,5 @@
+$ErrorActionPreference = 'Stop'
+
 param(
     [Parameter(Mandatory=$true)][string]$InputBase64Path,
     [Parameter(Mandatory=$true)][string]$OutputPath
