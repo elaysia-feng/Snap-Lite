@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(SnapLite VERSION 1.3.0 LANGUAGES CXX RC)
+project(SnapLite VERSION 1.3.1 LANGUAGES CXX RC)
 
 configure_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/resources/SnapLite.rc.in
@@ -41,6 +41,11 @@ if(MSVC)
         SOURCE src/snip_window.cpp
         APPEND PROPERTY COMPILE_OPTIONS
         "/FI${CMAKE_CURRENT_SOURCE_DIR}/src/window_bounds_fix.h"
+    )
+    set_property(
+        SOURCE src/editor_toolbar.cpp
+        APPEND PROPERTY COMPILE_OPTIONS
+        "/FI${CMAKE_CURRENT_SOURCE_DIR}/src/toolbar_icon_render.h"
     )
 endif()
 
