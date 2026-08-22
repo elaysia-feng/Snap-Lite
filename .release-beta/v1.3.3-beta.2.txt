@@ -4,3 +4,4 @@ Beta verification:
 - remove legacy dark toolbar
 - repaint transparent text edits immediately on delete
 - keep F1 clean capture state and drag ghosting fixes
+- verification retry after source-level fixes
