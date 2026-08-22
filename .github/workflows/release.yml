@@ -24,7 +24,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Read version
+      - name: Read release version
         id: version
         shell: pwsh
         run: |
@@ -32,9 +32,29 @@ jobs:
           if ($cmake -notmatch 'project\(SnapLite VERSION ([0-9]+\.[0-9]+\.[0-9]+)') {
             throw 'Could not read SnapLite version from CMakeLists.txt'
           }
-          $version = $Matches[1]
-          "version=$version" >> $env:GITHUB_OUTPUT
-          "tag=v$version" >> $env:GITHUB_OUTPUT
+          $baseVersion = $Matches[1]
+          $releaseVersion = $baseVersion
+
+          if ('${{ github.event_name }}' -eq 'push') {
+            $before = '${{ github.event.before }}'
+            $sha = '${{ github.sha }}'
+            $changed = git diff --name-only $before $sha | Where-Object { $_ -like '.release/*' } | Select-Object -Last 1
+            if ($changed) {
+              $name = [System.IO.Path]::GetFileNameWithoutExtension($changed)
+              if ($name -match '^v(.+)$') {
+                $releaseVersion = $Matches[1]
+              }
+            }
+          }
+
+          if (-not $releaseVersion.StartsWith($baseVersion)) {
+            throw "Release version $releaseVersion must start with project version $baseVersion"
+          }
+
+          $prerelease = $releaseVersion.Contains('-')
+          "version=$releaseVersion" >> $env:GITHUB_OUTPUT
+          "tag=v$releaseVersion" >> $env:GITHUB_OUTPUT
+          "prerelease=$($prerelease.ToString().ToLower())" >> $env:GITHUB_OUTPUT
 
       - name: Configure
         run: cmake -S . -B build -A x64
@@ -60,7 +80,7 @@ jobs:
         run: |
           git fetch --tags --force
           if (git tag --list "$env:TAG") {
-            throw "Release tag $env:TAG already exists; bump the project version before publishing."
+            throw "Release tag $env:TAG already exists; bump the release version before publishing."
           }
           git tag "$env:TAG" "$env:GITHUB_SHA"
           git push origin "refs/tags/$env:TAG"
@@ -70,12 +90,12 @@ jobs:
         with:
           tag_name: ${{ steps.version.outputs.tag }}
           target_commitish: ${{ github.sha }}
-          name: Snap-Lite v${{ steps.version.outputs.version }}
-          prerelease: false
+          name: Snap-Lite ${{ steps.version.outputs.tag }}
+          prerelease: ${{ steps.version.outputs.prerelease }}
           generate_release_notes: true
           fail_on_unmatched_files: true
           body: |
-            Snap-Lite v${{ steps.version.outputs.version }}
+            Snap-Lite ${{ steps.version.outputs.tag }}
 
             本次版本以当前 main 的功能和修复为准。
             - Windows 11 x64
