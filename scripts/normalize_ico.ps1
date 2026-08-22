@@ -1,9 +1,9 @@
-$ErrorActionPreference = 'Stop'
-
 param(
     [Parameter(Mandatory=$true)][string]$InputBase64Path,
     [Parameter(Mandatory=$true)][string]$OutputPath
 )
+
+$ErrorActionPreference = 'Stop'
 
 $base64 = (Get-Content $InputBase64Path -Raw).Trim()
 if ([string]::IsNullOrWhiteSpace($base64)) { throw 'Icon source is empty.' }
