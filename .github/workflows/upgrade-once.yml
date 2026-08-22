@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/upgrade-once.yml'
+  workflow_dispatch:
 
 permissions:
   contents: write
