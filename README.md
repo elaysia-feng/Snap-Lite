@@ -8,14 +8,14 @@
 
 优先从 GitHub Releases 获取预编译版本，不需要安装 CMake、Visual Studio 或其他运行时。
 
-首个测试版本：`v0.1.0-alpha`
+当前正式版：`v1.0.0`
 
 Release Assets：
 
 ```text
-SnapLite.exe                         直接运行
-SnapLite-0.1.0-alpha-win-x64.zip    便携压缩包
-SHA256SUMS.txt                       文件校验
+SnapLite.exe                   直接运行
+SnapLite-1.0.0-win-x64.zip    便携压缩包
+SHA256SUMS.txt                 文件校验
 ```
 
 当前 Release 面向 **Windows 11 x64**。
@@ -34,16 +34,17 @@ SHA256SUMS.txt                       文件校验
 - `C` 复制当前像素 HEX 颜色
 - 方向键 1px 微调鼠标位置，`Shift + 方向键` 10px
 - `Esc` / 右键取消
+- 蓝白二次元科技风截图 UI，与 Snap-Lite 少女图标统一配色
 
 ### 标注
 
 选区完成后进入轻量编辑器：
 
 - 矩形
-- 椭圆
 - 箭头
 - 画笔
 - 马赛克
+- 文字
 - 撤销 / 重做
 - `Enter` 完成，`Esc` 取消
 
@@ -52,12 +53,14 @@ SHA256SUMS.txt                       文件校验
 | 工具 | 快捷键 |
 | --- | --- |
 | 矩形 | `R` |
-| 椭圆 | `O` |
 | 箭头 | `A` |
 | 画笔 | `P` |
 | 马赛克 | `M` |
+| 文字 | `T` |
 | 撤销 | `Ctrl + Z` |
 | 重做 | `Ctrl + Y` |
+
+撤销历史采用双重内存限制：最多保留 6 个位图状态，并将位图历史控制在约 32 MB 预算内。大尺寸选区不会再因为连续标注保留 20 份完整位图而快速膨胀内存。
 
 ### 输出
 
@@ -110,20 +113,22 @@ Ctrl + V
 - 鼠标滚轮缩放
 - `Ctrl + 滚轮` 调整透明度
 - 右键快速设置透明度
-- 双击关闭贴图
+- 双击 / 右键关闭贴图
+- 关闭后不会因为再次按 `F3` 重新创建同一份剪贴板贴图；复制新图片后才允许重新贴出
 
 ### 桌面应用能力
 
 - 系统托盘常驻
 - 单实例运行
 - 原生 Win32 全局热键
+- 内置应用 / 托盘图标
+- 托盘菜单可选 **开机自启动**，默认关闭
+- 开机启动使用当前用户 `HKCU` Run 项，不需要管理员权限
+- 截图处理完成后主动回收不再活跃的工作集页面
 - 无第三方 GUI 框架
 
-## 1.0 必须完成的功能
+## 后续计划
 
-这些属于核心功能，不会为了“轻量”而删除：
-
-- [ ] 文字标注
 - [ ] 马克笔 / 高亮笔
 - [ ] 高斯模糊
 - [ ] 橡皮擦
@@ -135,7 +140,6 @@ Ctrl + V
 - [ ] 贴图重新进入标注
 - [ ] 自定义全局快捷键
 - [ ] 设置页：自动保存、保存目录、文件名规则
-- [ ] 开机启动
 - [ ] 更完善的 UI 元素识别（包含非 Win32 控件）
 
 OCR、云同步、账号系统等重功能默认不进入核心版本。
@@ -147,6 +151,7 @@ C++17
 Win32 API
 GDI / GDI+
 Windows Shell API
+Windows Registry API
 ```
 
 核心链路：
@@ -190,6 +195,10 @@ build/Release/SnapLite.exe
 Snap-Lite/
 ├── .github/workflows/build.yml
 ├── .github/workflows/release.yml
+├── resources/
+│   ├── SnapLite.ico
+│   ├── SnapLite.rc.in
+│   └── resource.h
 ├── CMakeLists.txt
 ├── README.md
 └── src/
@@ -197,6 +206,7 @@ Snap-Lite/
     ├── app.h / app.cpp
     ├── capture.h / capture.cpp
     ├── snip_window.h / snip_window.cpp
+    ├── snip_window_original.inc
     ├── editor_window.h / editor_window.cpp
     └── pin_window.h / pin_window.cpp
 ```
