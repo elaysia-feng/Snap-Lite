@@ -1,1 +1,0 @@
-verify compact toolbar PR third trigger
