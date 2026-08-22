@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(SnapLite VERSION 0.2.0 LANGUAGES CXX)
+project(SnapLite VERSION 0.2.0 LANGUAGES CXX RC)
 
 add_executable(SnapLite WIN32
     src/main.cpp
@@ -8,6 +8,7 @@ add_executable(SnapLite WIN32
     src/editor_window.cpp
     src/pin_window.cpp
     src/snip_window.cpp
+    resources/SnapLite.rc
 )
 
 target_compile_features(SnapLite PRIVATE cxx_std_17)
