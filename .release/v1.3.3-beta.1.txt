@@ -1,0 +1,8 @@
+Snap-Lite v1.3.3-beta.1
+
+Beta test build for recent screenshot interaction fixes:
+- F1 starts in pure capture mode without showing the editor toolbar
+- editor toolbar appears only after a selection is confirmed
+- moving or resizing a selection hides the toolbar until mouse release
+- old toolbar area is invalidated immediately to avoid fast-drag ghosting
+- includes current warm minimal UI and existing annotation features
