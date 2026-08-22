@@ -1,6 +1,12 @@
 cmake_minimum_required(VERSION 3.20)
 project(SnapLite VERSION 0.2.0 LANGUAGES CXX RC)
 
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/resources/SnapLite.rc.in
+    ${CMAKE_CURRENT_BINARY_DIR}/SnapLite.rc
+    @ONLY
+)
+
 add_executable(SnapLite WIN32
     src/main.cpp
     src/app.cpp
@@ -8,7 +14,11 @@ add_executable(SnapLite WIN32
     src/editor_window.cpp
     src/pin_window.cpp
     src/snip_window.cpp
-    resources/SnapLite.rc
+    ${CMAKE_CURRENT_BINARY_DIR}/SnapLite.rc
+)
+
+target_include_directories(SnapLite PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/resources
 )
 
 target_compile_features(SnapLite PRIVATE cxx_std_17)
