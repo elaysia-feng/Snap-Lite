@@ -1,4 +1,4 @@
-name: fix-beta2-once
+name: apply-stability-fixes-once
 
 on:
   issues:
@@ -9,113 +9,27 @@ permissions:
 
 jobs:
   patch:
-    if: github.event.issue.title == '[automation] apply beta2 source fixes'
+    if: github.event.issue.title == '[automation] apply snaplite stability fixes'
     runs-on: windows-latest
     steps:
-      - name: Checkout main
+      - name: Checkout clean stability branch
         uses: actions/checkout@v4
         with:
-          ref: main
+          ref: agent/stability-fix-all
           fetch-depth: 0
 
-      - name: Apply exact source fixes
+      - name: Apply guarded stability migration
         shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $utf8 = [System.Text.UTF8Encoding]::new($false)
+        run: python scripts/apply_stability_fixes.py
 
-          $snipPath = 'src/snip_window_original.inc'
-          $snip = [System.IO.File]::ReadAllText($snipPath)
-          $oldToolbar = "        PaintToolbar(frameDc);"
-          $newToolbar = "        // Legacy toolbar disabled; editor_toolbar.cpp owns the only visible toolbar."
-          $count = ([regex]::Matches($snip, [regex]::Escape($oldToolbar))).Count
-          if ($count -eq 1) {
-            $snip = $snip.Replace($oldToolbar, $newToolbar)
-            [System.IO.File]::WriteAllText($snipPath, $snip, $utf8)
-          } elseif ($count -ne 0 -or -not $snip.Contains($newToolbar)) {
-            throw "Unexpected legacy toolbar match count: $count"
-          }
-
-          $editorPath = 'src/editor_toolbar.cpp'
-          $editor = [System.IO.File]::ReadAllText($editorPath)
-
-          $oldErase = "        case WM_ERASEBKGND:`r`n            return 1;`r`n        case WM_CTLCOLOREDIT: {"
-          $newErase = @"
-        case WM_ERASEBKGND: {
-            // Transparent text annotations must restore the snip surface before
-            // the EDIT control repaints, otherwise deleted glyphs remain visible.
-            HDC dc = reinterpret_cast<HDC>(wParam);
-            RECT client{};
-            GetClientRect(hwnd, &client);
-            POINT source{0, 0};
-            MapWindowPoints(hwnd, parent_, &source, 1);
-            HDC parentDc = GetDC(parent_);
-            if (parentDc) {
-                BitBlt(dc, 0, 0,
-                       client.right - client.left,
-                       client.bottom - client.top,
-                       parentDc, source.x, source.y, SRCCOPY);
-                ReleaseDC(parent_, parentDc);
-            }
-            return 1;
-        }
-        case WM_CTLCOLOREDIT: {
-"@
-          if ($editor.Contains($oldErase)) {
-            $editor = $editor.Replace($oldErase, $newErase.TrimEnd("`r", "`n"))
-          } elseif (-not $editor.Contains('deleted glyphs remain visible')) {
-            # LF checkout fallback
-            $oldEraseLf = $oldErase.Replace("`r`n", "`n")
-            if (-not $editor.Contains($oldEraseLf)) { throw 'Could not locate HandleText erase block.' }
-            $editor = $editor.Replace($oldEraseLf, $newErase.TrimEnd("`r", "`n").Replace("`r`n", "`n"))
-          }
-
-          $oldCommand = @"
-        case WM_COMMAND:
-            if (item->edit && reinterpret_cast<HWND>(lParam) == item->edit &&
-                HIWORD(wParam) == EN_KILLFOCUS) {
-                CommitTextEdit(item);
-                return 0;
-            }
-            break;
-"@
-          $newCommand = @"
-        case WM_COMMAND:
-            if (item->edit && reinterpret_cast<HWND>(lParam) == item->edit) {
-                const WORD notify = HIWORD(wParam);
-                if (notify == EN_UPDATE) {
-                    RedrawWindow(hwnd, nullptr, nullptr,
-                                 RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_ALLCHILDREN);
-                    return 0;
-                }
-                if (notify == EN_KILLFOCUS) {
-                    CommitTextEdit(item);
-                    return 0;
-                }
-            }
-            break;
-"@
-          $oldCommand = $oldCommand.Trim("`r", "`n")
-          $newCommand = $newCommand.Trim("`r", "`n")
-          if ($editor.Contains($oldCommand)) {
-            $editor = $editor.Replace($oldCommand, $newCommand)
-          } elseif (-not $editor.Contains('notify == EN_UPDATE')) {
-            $oldCommandLf = $oldCommand.Replace("`r`n", "`n")
-            if (-not $editor.Contains($oldCommandLf)) { throw 'Could not locate HandleText command block.' }
-            $editor = $editor.Replace($oldCommandLf, $newCommand.Replace("`r`n", "`n"))
-          }
-
-          [System.IO.File]::WriteAllText($editorPath, $editor, $utf8)
-
-      - name: Commit fixes
+      - name: Commit fixes to stability branch
         shell: pwsh
         run: |
           git config user.name 'Snap-Lite CI'
           git config user.email 'actions@users.noreply.github.com'
-          git add src/snip_window_original.inc src/editor_toolbar.cpp
+          git add -A
           if (git diff --cached --quiet) {
-            Write-Host 'Source fixes already present.'
-            exit 0
+            throw 'Stability migration produced no source changes.'
           }
-          git commit -m 'Fix legacy toolbar and live text deletion repaint'
-          git push origin HEAD:main
+          git commit -m 'Fix screenshot stability and remove legacy paths'
+          git push origin HEAD:agent/stability-fix-all
