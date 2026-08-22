@@ -27,7 +27,7 @@ target_compile_definitions(
     UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN
     SNAP_LITE_VERSION=L"${PROJECT_VERSION}"
 )
-target_link_libraries(SnapLite PRIVATE user32 gdi32 gdiplus shell32 ole32 uuid)
+target_link_libraries(SnapLite PRIVATE user32 gdi32 gdiplus shell32 ole32 uuid advapi32)
 
 if(MSVC)
     target_compile_options(SnapLite PRIVATE /W4 /permissive- /utf-8)
