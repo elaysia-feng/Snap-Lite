@@ -1,25 +1,26 @@
-# trigger: beta2-fix
 name: fix-beta2-once
 
 on:
-  push:
+  pull_request:
     branches: [main]
-    paths:
-      - '.github/workflows/fix-beta2-once.yml'
 
 permissions:
   contents: write
 
 concurrency:
-  group: snaplite-fix-beta2-once
+  group: snaplite-fix-beta2-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
   patch:
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: windows-latest
     steps:
-      - name: Checkout
+      - name: Checkout PR branch
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
 
       - name: Apply fixes
         shell: pwsh
@@ -47,9 +48,8 @@ jobs:
 '@
           $newErase = @'
         case WM_ERASEBKGND: {
-            // Text annotations are transparent, so copy the already-rendered
-            // snip surface underneath this child before the EDIT control paints.
-            // This prevents removed glyphs from remaining as stale pixels.
+            // Transparent text annotations must restore the snip surface before
+            // the EDIT control repaints, otherwise deleted glyphs remain visible.
             HDC dc = reinterpret_cast<HDC>(wParam);
             RECT client{};
             GetClientRect(hwnd, &client);
@@ -68,7 +68,7 @@ jobs:
 '@
           if ($editor.Contains($oldErase)) {
             $editor = $editor.Replace($oldErase, $newErase)
-          } elseif (-not $editor.Contains('This prevents removed glyphs from remaining as stale pixels.')) {
+          } elseif (-not $editor.Contains('deleted glyphs remain visible')) {
             throw 'Could not locate the text background erase block.'
           }
 
@@ -86,9 +86,6 @@ jobs:
             if (item->edit && reinterpret_cast<HWND>(lParam) == item->edit) {
                 const WORD notify = HIWORD(wParam);
                 if (notify == EN_UPDATE) {
-                    // EN_UPDATE fires after the edit buffer changes but before
-                    // the control redraws. Erase from the snip surface first,
-                    // then repaint the transparent EDIT immediately.
                     RedrawWindow(hwnd, nullptr, nullptr,
                                  RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_ALLCHILDREN);
                     return 0;
@@ -102,21 +99,23 @@ jobs:
 '@
           if ($editor.Contains($oldCommand)) {
             $editor = $editor.Replace($oldCommand, $newCommand)
-          } elseif (-not $editor.Contains('EN_UPDATE fires after the edit buffer changes')) {
+          } elseif (-not $editor.Contains('notify == EN_UPDATE')) {
             throw 'Could not locate the text WM_COMMAND block.'
           }
 
           [System.IO.File]::WriteAllText($editorPath, $editor, $utf8)
 
-      - name: Commit fixes
+      - name: Commit fixes to PR branch
         shell: pwsh
+        env:
+          HEAD_REF: ${{ github.head_ref }}
         run: |
           git config user.name 'Snap-Lite CI'
           git config user.email 'actions@users.noreply.github.com'
           git add src/snip_window_original.inc src/editor_toolbar.cpp
           if (git diff --cached --quiet) {
-            Write-Host 'No changes to commit.'
+            Write-Host 'Source fixes already applied.'
             exit 0
           }
           git commit -m 'Fix legacy toolbar and live text deletion repaint'
-          git push origin HEAD:main
+          git push origin "HEAD:$env:HEAD_REF"
