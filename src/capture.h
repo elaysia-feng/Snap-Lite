@@ -30,8 +30,14 @@ bool CopyBitmapToClipboard(
 bool CopyTextToClipboard(HWND owner, const std::wstring& text);
 bool SaveBitmapPng(HBITMAP bitmap, const std::filesystem::path& path);
 
+// Legacy/default helpers retained for compatibility.
 std::filesystem::path ScreenshotDirectory();
-bool SetScreenshotDirectory(const std::filesystem::path& directory);
 std::filesystem::path NextScreenshotPath();
+
+// User-configurable screenshot storage. The selected folder is persisted in
+// HKCU so portable builds do not need a config file beside the executable.
+std::filesystem::path ConfiguredScreenshotDirectory();
+bool SetScreenshotDirectory(const std::filesystem::path& directory);
+std::filesystem::path NextConfiguredScreenshotPath();
 
 }  // namespace snaplite
