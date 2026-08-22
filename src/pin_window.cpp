@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <unordered_map>
 #include <vector>
 
 namespace snaplite {
@@ -19,6 +20,10 @@ constexpr UINT CMD_OPACITY_100 = 2001;
 constexpr UINT CMD_OPACITY_80 = 2002;
 constexpr UINT CMD_OPACITY_60 = 2003;
 constexpr UINT CMD_CLOSE = 2004;
+
+DWORD gPendingClipboardSequence = 0;
+DWORD gDismissedClipboardSequence = 0;
+std::unordered_map<HWND, DWORD> gPinClipboardSequences;
 
 bool OpenClipboardWithRetry() {
     for (int attempt = 0; attempt < 8; ++attempt) {
@@ -307,6 +312,9 @@ bool PinWindow::Create(HINSTANCE instance, HBITMAP bitmap) {
     }
 
     self->hwnd_ = hwnd;
+    if (gPendingClipboardSequence != 0) {
+        gPinClipboardSequences[hwnd] = gPendingClipboardSequence;
+    }
     SetLayeredWindowAttributes(hwnd, 0, self->opacity_, LWA_ALPHA);
     ShowWindow(hwnd, SW_SHOWNOACTIVATE);
     UpdateWindow(hwnd);
@@ -314,6 +322,11 @@ bool PinWindow::Create(HINSTANCE instance, HBITMAP bitmap) {
 }
 
 bool PinWindow::CreateFromClipboard(HINSTANCE instance) {
+    const DWORD clipboardSequence = GetClipboardSequenceNumber();
+    if (clipboardSequence != 0 && clipboardSequence == gDismissedClipboardSequence) {
+        return true;
+    }
+
     if (!OpenClipboardWithRetry()) {
         return false;
     }
@@ -325,7 +338,10 @@ bool PinWindow::CreateFromClipboard(HINSTANCE instance) {
         return false;
     }
 
-    return Create(instance, bitmap);
+    gPendingClipboardSequence = clipboardSequence;
+    const bool created = Create(instance, bitmap);
+    gPendingClipboardSequence = 0;
+    return created;
 }
 
 void PinWindow::ResizeForZoom() {
@@ -451,10 +467,16 @@ LRESULT PinWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
         }
         break;
 
-    case WM_NCDESTROY:
+    case WM_NCDESTROY: {
+        const auto it = gPinClipboardSequences.find(hwnd_);
+        if (it != gPinClipboardSequences.end()) {
+            gDismissedClipboardSequence = it->second;
+            gPinClipboardSequences.erase(it);
+        }
         hwnd_ = nullptr;
         delete this;
         return 0;
+    }
     }
 
     return DefWindowProcW(hwnd_, message, wParam, lParam);
