@@ -3,11 +3,19 @@
 #include <windows.h>
 
 #include <functional>
+#include <string>
 #include <vector>
 
 #include "capture.h"
 
 namespace snaplite {
+
+struct TextOverlay {
+    std::wstring text;
+    POINT origin{};
+    COLORREF color{RGB(235, 70, 70)};
+    int sizePt{16};
+};
 
 class BitmapHistory : public std::vector<HBITMAP> {
 public:
@@ -90,6 +98,7 @@ public:
     void UiSetTextSize(int points);
     void UiUndo();
     void UiRedo();
+    void UiBakeTextOverlays(const std::vector<TextOverlay>& overlays);
     void UiFinish(FinishAction action);
     void UiCancel();
     HWND UiHwnd() const;
