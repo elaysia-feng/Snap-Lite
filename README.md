@@ -8,13 +8,13 @@
 
 优先从 GitHub Releases 获取预编译版本，不需要安装 CMake、Visual Studio 或其他运行时。
 
-当前正式版：`v1.0.0`
+当前正式版：`v1.1.0`
 
 Release Assets：
 
 ```text
 SnapLite.exe                   直接运行
-SnapLite-1.0.0-win-x64.zip    便携压缩包
+SnapLite-1.1.0-win-x64.zip    便携压缩包
 SHA256SUMS.txt                 文件校验
 ```
 
