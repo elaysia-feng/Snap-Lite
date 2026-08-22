@@ -14,9 +14,9 @@
 namespace snaplite {
 namespace {
 
-constexpr wchar_t kToolbarClass[] = L"SnapLiteAnimeToolbar";
 constexpr wchar_t kSnipClass[] = L"SnapLiteSnipWindow";
-constexpr UINT_PTR kTimerId = 1;
+constexpr wchar_t kControllerProp[] = L"SnapLiteAnimeToolbarController";
+constexpr UINT_PTR kSubclassId = 0x534C1200;
 
 constexpr int kButtonSize = 38;
 constexpr int kTopHeight = 46;
@@ -60,8 +60,9 @@ const wchar_t* HintForButton(int index) {
         L"复制 · 复制截图到剪贴板",
         L"取消 Esc · 关闭本次截图",
     };
-    return index >= 0 && index < kButtonCount ? hints[index]
-                                              : L"悬停查看功能说明 · 颜色和字号可以直接调整";
+    return index >= 0 && index < kButtonCount
+        ? hints[index]
+        : L"悬停查看功能说明 · 颜色和字号可以直接调整";
 }
 
 void AddRoundRect(Gdiplus::GraphicsPath& path, const Gdiplus::RectF& rect, float radius) {
@@ -76,22 +77,21 @@ void AddRoundRect(Gdiplus::GraphicsPath& path, const Gdiplus::RectF& rect, float
         diameter,
         0.0f,
         90.0f);
-    path.AddArc(rect.X, rect.GetBottom() - diameter, diameter, diameter, 90.0f, 90.0f);
+    path.AddArc(
+        rect.X,
+        rect.GetBottom() - diameter,
+        diameter,
+        diameter,
+        90.0f,
+        90.0f);
     path.CloseFigure();
 }
 
-class ToolbarWindow {
+class ToolbarController {
 public:
-    ToolbarWindow(HINSTANCE instance, HWND snipHwnd, SnipWindow* snip)
-        : instance_(instance), snipHwnd_(snipHwnd), snip_(snip) {}
+    ToolbarController(HWND hwnd, SnipWindow* snip) : hwnd_(hwnd), snip_(snip) {}
 
-    ~ToolbarWindow() {
-        if (snipHwnd_ && IsWindow(snipHwnd_)) {
-            RemoveWindowSubclass(
-                snipHwnd_,
-                ParentSubclassProc,
-                reinterpret_cast<UINT_PTR>(this));
-        }
+    ~ToolbarController() {
         if (font_) {
             DeleteObject(font_);
         }
@@ -100,32 +100,24 @@ public:
         }
     }
 
-    static LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
-        ToolbarWindow* self = reinterpret_cast<ToolbarWindow*>(
-            GetWindowLongPtrW(hwnd, GWLP_USERDATA));
-
-        if (message == WM_NCCREATE) {
-            auto* create = reinterpret_cast<CREATESTRUCTW*>(lParam);
-            self = static_cast<ToolbarWindow*>(create->lpCreateParams);
-            self->hwnd_ = hwnd;
-            SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
-        }
-
-        return self ? self->HandleMessage(message, wParam, lParam)
-                    : DefWindowProcW(hwnd, message, wParam, lParam);
-    }
-
-private:
-    static LRESULT CALLBACK ParentSubclassProc(
+    static LRESULT CALLBACK SubclassProc(
         HWND hwnd,
         UINT message,
         WPARAM wParam,
         LPARAM lParam,
         UINT_PTR,
         DWORD_PTR refData) {
-        auto* self = reinterpret_cast<ToolbarWindow*>(refData);
+        auto* self = reinterpret_cast<ToolbarController*>(refData);
         if (!self) {
             return DefSubclassProc(hwnd, message, wParam, lParam);
+        }
+
+        if (message == WM_NCDESTROY) {
+            const LRESULT result = DefSubclassProc(hwnd, message, wParam, lParam);
+            RemovePropW(hwnd, kControllerProp);
+            RemoveWindowSubclass(hwnd, SubclassProc, kSubclassId);
+            delete self;
+            return result;
         }
 
         if (message == WM_CTLCOLOREDIT && self->snip_) {
@@ -135,68 +127,104 @@ private:
             return reinterpret_cast<LRESULT>(GetStockObject(NULL_BRUSH));
         }
 
-        if (message == WM_NCDESTROY) {
-            self->snip_ = nullptr;
-            self->snipHwnd_ = nullptr;
-            if (self->hwnd_) {
-                PostMessageW(self->hwnd_, WM_CLOSE, 0, 0);
+        if (message == WM_PAINT) {
+            const LRESULT result = DefSubclassProc(hwnd, message, wParam, lParam);
+            self->Paint();
+            return result;
+        }
+
+        if (!self->snip_ || !self->snip_->UiHasSelection()) {
+            return DefSubclassProc(hwnd, message, wParam, lParam);
+        }
+
+        if (message == WM_MOUSEMOVE) {
+            POINT point{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+            const RECT bar = self->ToolbarRect();
+            if (PtInRect(&bar, point)) {
+                const int hovered = self->HitTest(point);
+                if (hovered != self->hover_) {
+                    self->hover_ = hovered;
+                    InvalidateRect(hwnd, &bar, FALSE);
+                }
+                SetCursor(LoadCursorW(nullptr, IDC_HAND));
+                return 0;
+            }
+
+            if (self->hover_ != -1) {
+                self->hover_ = -1;
+                InvalidateRect(hwnd, &bar, FALSE);
+            }
+            return DefSubclassProc(hwnd, message, wParam, lParam);
+        }
+
+        if (message == WM_SETCURSOR) {
+            POINT point{};
+            GetCursorPos(&point);
+            ScreenToClient(hwnd, &point);
+            const RECT bar = self->ToolbarRect();
+            if (PtInRect(&bar, point)) {
+                SetCursor(LoadCursorW(nullptr, IDC_HAND));
+                return TRUE;
+            }
+        }
+
+        if (message == WM_LBUTTONDOWN || message == WM_LBUTTONDBLCLK) {
+            POINT point{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+            const RECT bar = self->ToolbarRect();
+            if (PtInRect(&bar, point)) {
+                SetFocus(hwnd);
+                return 0;
+            }
+        }
+
+        if (message == WM_LBUTTONUP) {
+            POINT point{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+            const RECT bar = self->ToolbarRect();
+            if (PtInRect(&bar, point)) {
+                const int index = self->HitTest(point);
+                if (index >= 0) {
+                    self->Click(index);
+                }
+                return 0;
             }
         }
 
         return DefSubclassProc(hwnd, message, wParam, lParam);
     }
 
+private:
     void EnsureFonts() {
+        const UINT dpi = GetDpiForWindow(hwnd_);
         if (!font_) {
             font_ = CreateFontW(
-                -13, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
+                -MulDiv(10, static_cast<int>(dpi), 72),
+                0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
                 DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
                 CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
         }
         if (!smallFont_) {
             smallFont_ = CreateFontW(
-                -11, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
+                -MulDiv(9, static_cast<int>(dpi), 72),
+                0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
                 DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
                 CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
         }
     }
 
-    RECT ButtonRect(int index) const {
-        const int left = ButtonOffset(index);
-        return {left, 4, left + kButtonSize, kTopHeight - 4};
-    }
-
-    int HitTest(POINT point) const {
-        if (point.y < 0 || point.y >= kTopHeight) {
-            return -1;
-        }
-        for (int i = 0; i < kButtonCount; ++i) {
-            RECT rect = ButtonRect(i);
-            if (PtInRect(&rect, point)) {
-                return i;
-            }
-        }
-        return -1;
-    }
-
-    void SyncPosition() {
-        if (!snip_ || !snipHwnd_ || !IsWindow(snipHwnd_)) {
-            DestroyWindow(hwnd_);
-            return;
-        }
-
-        if (!snip_->UiHasSelection()) {
-            ShowWindow(hwnd_, SW_HIDE);
-            return;
+    RECT ToolbarRect() const {
+        if (!snip_ || !snip_->UiHasSelection()) {
+            return {};
         }
 
         const RECT selection = snip_->UiSelectionRect();
         const RECT legacy = snip_->UiLegacyToolbarRect();
+
         RECT client{};
-        GetClientRect(snipHwnd_, &client);
+        GetClientRect(hwnd_, &client);
 
         int x = static_cast<int>(legacy.left);
         int y = static_cast<int>(legacy.top);
+
         if (legacy.top < selection.top) {
             y = static_cast<int>(legacy.bottom) - kToolbarHeight;
         }
@@ -210,34 +238,45 @@ private:
             6,
             std::max(6, static_cast<int>(client.bottom) - kToolbarHeight - 6));
 
-        POINT origin{0, 0};
-        ClientToScreen(snipHwnd_, &origin);
-        SetWindowPos(
-            hwnd_,
-            HWND_TOPMOST,
-            origin.x + x,
-            origin.y + y,
-            kToolbarWidth,
-            kToolbarHeight,
-            SWP_NOACTIVATE | SWP_SHOWWINDOW);
-
-        const int tool = snip_->UiActiveTool();
-        const COLORREF color = snip_->UiColor();
-        const int textSize = snip_->UiTextSize();
-        if (tool != lastTool_ || color != lastColor_ || textSize != lastTextSize_) {
-            lastTool_ = tool;
-            lastColor_ = color;
-            lastTextSize_ = textSize;
-            InvalidateRect(hwnd_, nullptr, FALSE);
-        }
+        return {x, y, x + kToolbarWidth, y + kToolbarHeight};
     }
 
-    void PaintVectorIcon(Gdiplus::Graphics& graphics, int index, const RECT& rect, bool active) {
+    RECT ButtonRect(const RECT& bar, int index) const {
+        const int left = bar.left + ButtonOffset(index);
+        return {
+            left,
+            bar.top + 4,
+            left + kButtonSize,
+            bar.top + kTopHeight - 4,
+        };
+    }
+
+    int HitTest(POINT point) const {
+        const RECT bar = ToolbarRect();
+        if (!PtInRect(&bar, point) || point.y >= bar.top + kTopHeight) {
+            return -1;
+        }
+
+        for (int i = 0; i < kButtonCount; ++i) {
+            const RECT button = ButtonRect(bar, i);
+            if (PtInRect(&button, point)) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    void PaintVectorIcon(
+        Gdiplus::Graphics& graphics,
+        int index,
+        const RECT& rect,
+        bool active) {
         const float cx = (rect.left + rect.right) / 2.0f;
         const float cy = (rect.top + rect.bottom) / 2.0f;
         const Gdiplus::Color tone = active
             ? Gdiplus::Color(255, 122, 231, 255)
             : Gdiplus::Color(235, 224, 241, 255);
+
         Gdiplus::Pen pen(tone, 1.8f);
         pen.SetStartCap(Gdiplus::LineCapRound);
         pen.SetEndCap(Gdiplus::LineCapRound);
@@ -305,8 +344,10 @@ private:
         case 9: {
             graphics.FillRectangle(&brush, cx - 6.0f, cy - 8.0f, 12.0f, 4.0f);
             const Gdiplus::PointF body[4] = {
-                {cx - 4.0f, cy - 4.0f}, {cx + 4.0f, cy - 4.0f},
-                {cx + 6.0f, cy + 1.0f}, {cx - 6.0f, cy + 1.0f},
+                {cx - 4.0f, cy - 4.0f},
+                {cx + 4.0f, cy - 4.0f},
+                {cx + 6.0f, cy + 1.0f},
+                {cx - 6.0f, cy + 1.0f},
             };
             graphics.FillPolygon(&brush, body, 4);
             graphics.DrawLine(&pen, cx, cy + 1.0f, cx, cy + 8.0f);
@@ -338,8 +379,8 @@ private:
         }
     }
 
-    void PaintButton(HDC dc, Gdiplus::Graphics& graphics, int index) {
-        const RECT rect = ButtonRect(index);
+    void PaintButton(HDC dc, Gdiplus::Graphics& graphics, const RECT& bar, int index) {
+        const RECT rect = ButtonRect(bar, index);
         const bool hovered = hover_ == index;
         const bool active = snip_ && index < 5 && snip_->UiActiveTool() == index;
 
@@ -352,12 +393,12 @@ private:
         AddRoundRect(path, box, 8.0f);
 
         if (active) {
-            Gdiplus::SolidBrush fill(Gdiplus::Color(76, 68, 111, 205));
+            Gdiplus::SolidBrush fill(Gdiplus::Color(255, 50, 76, 126));
             graphics.FillPath(&fill, &path);
-            Gdiplus::Pen ring(Gdiplus::Color(160, 111, 231, 255), 1.0f);
+            Gdiplus::Pen ring(Gdiplus::Color(220, 111, 231, 255), 1.0f);
             graphics.DrawPath(&ring, &path);
         } else if (hovered) {
-            Gdiplus::SolidBrush fill(Gdiplus::Color(48, 91, 156, 230));
+            Gdiplus::SolidBrush fill(Gdiplus::Color(255, 42, 58, 101));
             graphics.FillPath(&fill, &path);
         }
 
@@ -368,7 +409,7 @@ private:
             Gdiplus::SolidBrush swatch(Gdiplus::Color(
                 255, GetRValue(color), GetGValue(color), GetBValue(color)));
             graphics.FillEllipse(&swatch, cx - 8.0f, cy - 8.0f, 16.0f, 16.0f);
-            Gdiplus::Pen ring(Gdiplus::Color(230, 230, 247, 255), 1.5f);
+            Gdiplus::Pen ring(Gdiplus::Color(235, 230, 247, 255), 1.5f);
             graphics.DrawEllipse(&ring, cx - 8.0f, cy - 8.0f, 16.0f, 16.0f);
             return;
         }
@@ -380,9 +421,11 @@ private:
             const HGDIOBJ oldFont = SelectObject(dc, smallFont_);
             SetBkMode(dc, TRANSPARENT);
             SetTextColor(dc, RGB(226, 242, 255));
+
             RECT upper = rect;
             upper.bottom = (rect.top + rect.bottom) / 2 + 2;
             DrawTextW(dc, L"Aa", -1, &upper, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
             RECT lower = rect;
             lower.top = upper.bottom - 1;
             DrawTextW(dc, text, -1, &lower, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
@@ -394,77 +437,105 @@ private:
     }
 
     void Paint() {
-        PAINTSTRUCT ps{};
-        HDC dc = BeginPaint(hwnd_, &ps);
-        HDC mem = CreateCompatibleDC(dc);
-        HBITMAP bitmap = CreateCompatibleBitmap(dc, kToolbarWidth, kToolbarHeight);
-        const HGDIOBJ oldBitmap = SelectObject(mem, bitmap);
+        if (!snip_ || !snip_->UiHasSelection()) {
+            return;
+        }
+
+        const RECT bar = ToolbarRect();
+        HDC dc = GetDC(hwnd_);
+        if (!dc) {
+            return;
+        }
 
         {
-            Gdiplus::Graphics graphics(mem);
+            Gdiplus::Graphics graphics(dc);
             graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
-            Gdiplus::RectF body(0.5f, 0.5f, kToolbarWidth - 1.0f, kToolbarHeight - 1.0f);
-            Gdiplus::GraphicsPath path;
-            AddRoundRect(path, body, 13.0f);
+
+            Gdiplus::RectF shadow(
+                static_cast<float>(bar.left - 3),
+                static_cast<float>(bar.top - 1),
+                static_cast<float>(kToolbarWidth + 6),
+                static_cast<float>(kToolbarHeight + 6));
+            Gdiplus::GraphicsPath shadowPath;
+            AddRoundRect(shadowPath, shadow, 15.0f);
+            Gdiplus::SolidBrush shadowBrush(Gdiplus::Color(95, 0, 0, 0));
+            graphics.FillPath(&shadowBrush, &shadowPath);
+
+            Gdiplus::RectF body(
+                static_cast<float>(bar.left) + 0.5f,
+                static_cast<float>(bar.top) + 0.5f,
+                static_cast<float>(kToolbarWidth) - 1.0f,
+                static_cast<float>(kToolbarHeight) - 1.0f);
+            Gdiplus::GraphicsPath bodyPath;
+            AddRoundRect(bodyPath, body, 13.0f);
 
             Gdiplus::LinearGradientBrush background(
-                Gdiplus::PointF(0.0f, 0.0f),
-                Gdiplus::PointF(static_cast<float>(kToolbarWidth), static_cast<float>(kToolbarHeight)),
-                Gdiplus::Color(250, 18, 27, 49),
-                Gdiplus::Color(250, 30, 35, 67));
-            graphics.FillPath(&background, &path);
+                Gdiplus::PointF(static_cast<float>(bar.left), static_cast<float>(bar.top)),
+                Gdiplus::PointF(static_cast<float>(bar.right), static_cast<float>(bar.bottom)),
+                Gdiplus::Color(255, 17, 25, 48),
+                Gdiplus::Color(255, 30, 35, 67));
+            graphics.FillPath(&background, &bodyPath);
 
-            Gdiplus::Pen outline(Gdiplus::Color(150, 116, 217, 255), 1.0f);
-            graphics.DrawPath(&outline, &path);
+            Gdiplus::Pen outline(Gdiplus::Color(190, 111, 225, 255), 1.0f);
+            graphics.DrawPath(&outline, &bodyPath);
 
-            Gdiplus::Pen topGlow(Gdiplus::Color(80, 187, 235, 255), 1.0f);
-            graphics.DrawLine(&topGlow, 15.0f, 1.5f, kToolbarWidth - 15.0f, 1.5f);
+            Gdiplus::Pen topGlow(Gdiplus::Color(110, 193, 236, 255), 1.0f);
+            graphics.DrawLine(
+                &topGlow,
+                static_cast<float>(bar.left + 16),
+                static_cast<float>(bar.top + 1),
+                static_cast<float>(bar.right - 16),
+                static_cast<float>(bar.top + 1));
 
-            Gdiplus::SolidBrush cyan(Gdiplus::Color(210, 112, 230, 255));
-            Gdiplus::SolidBrush pink(Gdiplus::Color(190, 255, 128, 190));
-            graphics.FillEllipse(&cyan, 10.0f, 9.0f, 3.0f, 3.0f);
-            graphics.FillEllipse(&pink, kToolbarWidth - 13.0f, 9.0f, 3.0f, 3.0f);
-
-            Gdiplus::Pen separator(Gdiplus::Color(45, 194, 230, 255), 1.0f);
+            Gdiplus::Pen separator(Gdiplus::Color(55, 194, 230, 255), 1.0f);
             graphics.DrawLine(
                 &separator,
-                10.0f,
-                static_cast<float>(kTopHeight),
-                kToolbarWidth - 10.0f,
-                static_cast<float>(kTopHeight));
+                static_cast<float>(bar.left + 10),
+                static_cast<float>(bar.top + kTopHeight),
+                static_cast<float>(bar.right - 10),
+                static_cast<float>(bar.top + kTopHeight));
 
             for (int i = 0; i < kButtonCount; ++i) {
-                PaintButton(mem, graphics, i);
+                PaintButton(dc, graphics, bar, i);
             }
         }
 
         EnsureFonts();
-        const HGDIOBJ oldFont = SelectObject(mem, font_);
-        SetBkMode(mem, TRANSPARENT);
-        SetTextColor(mem, RGB(194, 222, 245));
-        RECT hintRect{14, kTopHeight, kToolbarWidth - 14, kToolbarHeight};
+        const HGDIOBJ oldFont = SelectObject(dc, font_);
+        SetBkMode(dc, TRANSPARENT);
+        SetTextColor(dc, RGB(194, 222, 245));
+
+        RECT hintRect{
+            bar.left + 14,
+            bar.top + kTopHeight,
+            bar.right - 14,
+            bar.bottom,
+        };
         DrawTextW(
-            mem,
+            dc,
             HintForButton(hover_),
             -1,
             &hintRect,
             DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-        SelectObject(mem, oldFont);
+        SelectObject(dc, oldFont);
 
-        BitBlt(dc, 0, 0, kToolbarWidth, kToolbarHeight, mem, 0, 0, SRCCOPY);
-        SelectObject(mem, oldBitmap);
-        DeleteObject(bitmap);
-        DeleteDC(mem);
-        EndPaint(hwnd_, &ps);
+        ReleaseDC(hwnd_, dc);
     }
 
     void OpenColorPicker() {
         if (!snip_) {
             return;
         }
+
         static COLORREF customColors[16] = {
-            RGB(255, 105, 180), RGB(111, 231, 255), RGB(139, 125, 255), RGB(255, 92, 92),
-            RGB(255, 191, 71), RGB(104, 222, 143), RGB(255, 255, 255), RGB(30, 30, 30),
+            RGB(255, 105, 180),
+            RGB(111, 231, 255),
+            RGB(139, 125, 255),
+            RGB(255, 92, 92),
+            RGB(255, 191, 71),
+            RGB(104, 222, 143),
+            RGB(255, 255, 255),
+            RGB(30, 30, 30),
         };
 
         CHOOSECOLORW choose{};
@@ -473,16 +544,18 @@ private:
         choose.rgbResult = snip_->UiColor();
         choose.lpCustColors = customColors;
         choose.Flags = CC_FULLOPEN | CC_RGBINIT;
+
         if (::ChooseColorW(&choose)) {
             snip_->UiSetColor(choose.rgbResult);
             InvalidateRect(hwnd_, nullptr, FALSE);
         }
     }
 
-    void ChooseFontSize() {
+    void OpenFontSizeMenu() {
         if (!snip_) {
             return;
         }
+
         static constexpr std::array<int, 7> sizes{12, 14, 16, 20, 24, 32, 48};
         HMENU menu = CreatePopupMenu();
         if (!menu) {
@@ -499,9 +572,11 @@ private:
                 label);
         }
 
-        RECT button = ButtonRect(6);
+        const RECT bar = ToolbarRect();
+        const RECT button = ButtonRect(bar, 6);
         POINT point{button.left, button.bottom};
         ClientToScreen(hwnd_, &point);
+
         const UINT command = TrackPopupMenu(
             menu,
             TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN,
@@ -522,6 +597,7 @@ private:
         if (!snip_) {
             return;
         }
+
         if (index >= 0 && index <= 4) {
             snip_->UiSetTool(index);
             InvalidateRect(hwnd_, nullptr, FALSE);
@@ -529,136 +605,77 @@ private:
         }
 
         switch (index) {
-        case 5: OpenColorPicker(); break;
-        case 6: ChooseFontSize(); break;
-        case 7: snip_->UiUndo(); break;
-        case 8: snip_->UiRedo(); break;
-        case 9: snip_->UiFinish(SnipWindow::FinishAction::Pin); break;
-        case 10: snip_->UiFinish(SnipWindow::FinishAction::Save); break;
-        case 11: snip_->UiFinish(SnipWindow::FinishAction::SaveAs); break;
-        case 12: snip_->UiFinish(SnipWindow::FinishAction::Copy); break;
-        case 13: snip_->UiCancel(); break;
-        default: break;
-        }
-    }
-
-    LRESULT HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
-        switch (message) {
-        case WM_CREATE: {
-            HRGN region = CreateRoundRectRgn(0, 0, kToolbarWidth + 1, kToolbarHeight + 1, 26, 26);
-            SetWindowRgn(hwnd_, region, TRUE);
-            SetTimer(hwnd_, kTimerId, 80, nullptr);
-            if (snipHwnd_ && IsWindow(snipHwnd_)) {
-                SetWindowSubclass(
-                    snipHwnd_,
-                    ParentSubclassProc,
-                    reinterpret_cast<UINT_PTR>(this),
-                    reinterpret_cast<DWORD_PTR>(this));
-            }
-            return 0;
-        }
-        case WM_TIMER:
-            if (wParam == kTimerId) {
-                SyncPosition();
-            }
-            return 0;
-        case WM_MOUSEMOVE: {
-            POINT point{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
-            const int hovered = HitTest(point);
-            if (hovered != hover_) {
-                hover_ = hovered;
-                InvalidateRect(hwnd_, nullptr, FALSE);
-            }
-            if (!trackingMouse_) {
-                TRACKMOUSEEVENT track{sizeof(track), TME_LEAVE, hwnd_, 0};
-                TrackMouseEvent(&track);
-                trackingMouse_ = true;
-            }
-            return 0;
-        }
-        case WM_MOUSELEAVE:
-            trackingMouse_ = false;
-            hover_ = -1;
-            InvalidateRect(hwnd_, nullptr, FALSE);
-            return 0;
-        case WM_LBUTTONUP: {
-            POINT point{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
-            Click(HitTest(point));
-            return 0;
-        }
-        case WM_SETCURSOR:
-            SetCursor(LoadCursorW(nullptr, IDC_HAND));
-            return TRUE;
-        case WM_ERASEBKGND:
-            return 1;
-        case WM_PAINT:
-            Paint();
-            return 0;
-        case WM_NCDESTROY:
-            KillTimer(hwnd_, kTimerId);
-            hwnd_ = nullptr;
-            delete this;
-            return 0;
+        case 5:
+            OpenColorPicker();
+            break;
+        case 6:
+            OpenFontSizeMenu();
+            break;
+        case 7:
+            snip_->UiUndo();
+            break;
+        case 8:
+            snip_->UiRedo();
+            break;
+        case 9:
+            snip_->UiFinish(SnipWindow::FinishAction::Pin);
+            break;
+        case 10:
+            snip_->UiFinish(SnipWindow::FinishAction::Save);
+            break;
+        case 11:
+            snip_->UiFinish(SnipWindow::FinishAction::SaveAs);
+            break;
+        case 12:
+            snip_->UiFinish(SnipWindow::FinishAction::Copy);
+            break;
+        case 13:
+            snip_->UiCancel();
+            break;
         default:
             break;
         }
-        return DefWindowProcW(hwnd_, message, wParam, lParam);
     }
 
-    HINSTANCE instance_{};
-    HWND snipHwnd_{};
-    SnipWindow* snip_{};
     HWND hwnd_{};
+    SnipWindow* snip_{};
     HFONT font_{};
     HFONT smallFont_{};
     int hover_{-1};
-    int lastTool_{-100};
-    int lastTextSize_{-1};
-    COLORREF lastColor_{CLR_INVALID};
-    bool trackingMouse_{false};
 };
 
 }  // namespace
 
-bool AnimeToolbar::Register(HINSTANCE instance) {
-    WNDCLASSEXW wc{};
-    wc.cbSize = sizeof(wc);
-    wc.lpfnWndProc = ToolbarWindow::WindowProc;
-    wc.hInstance = instance;
-    wc.hCursor = LoadCursorW(nullptr, IDC_HAND);
-    wc.lpszClassName = kToolbarClass;
-    return RegisterClassExW(&wc) != 0 || GetLastError() == ERROR_CLASS_ALREADY_EXISTS;
+bool AnimeToolbar::Register(HINSTANCE) {
+    // The themed toolbar is painted directly inside the snip window.
+    // No second popup window is created, so DPI and selection coordinates stay unified.
+    return true;
 }
 
-void AnimeToolbar::ShowForSnip(HINSTANCE instance) {
+void AnimeToolbar::ShowForSnip(HINSTANCE) {
     HWND snipHwnd = FindWindowW(kSnipClass, nullptr);
-    if (!snipHwnd) {
+    if (!snipHwnd || GetPropW(snipHwnd, kControllerProp)) {
         return;
     }
-    auto* snip = reinterpret_cast<SnipWindow*>(GetWindowLongPtrW(snipHwnd, GWLP_USERDATA));
+
+    auto* snip = reinterpret_cast<SnipWindow*>(
+        GetWindowLongPtrW(snipHwnd, GWLP_USERDATA));
     if (!snip) {
         return;
     }
 
-    auto* toolbar = new ToolbarWindow(instance, snipHwnd, snip);
-    HWND hwnd = CreateWindowExW(
-        WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
-        kToolbarClass,
-        L"Snap-Lite Editor",
-        WS_POPUP,
-        0,
-        0,
-        kToolbarWidth,
-        kToolbarHeight,
-        nullptr,
-        nullptr,
-        instance,
-        toolbar);
-    if (!hwnd) {
-        delete toolbar;
+    auto* controller = new ToolbarController(snipHwnd, snip);
+    if (!SetWindowSubclass(
+            snipHwnd,
+            ToolbarController::SubclassProc,
+            kSubclassId,
+            reinterpret_cast<DWORD_PTR>(controller))) {
+        delete controller;
         return;
     }
-    ShowWindow(hwnd, SW_HIDE);
+
+    SetPropW(snipHwnd, kControllerProp, reinterpret_cast<HANDLE>(controller));
+    InvalidateRect(snipHwnd, nullptr, FALSE);
 }
 
 }  // namespace snaplite
