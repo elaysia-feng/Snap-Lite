@@ -14,15 +14,15 @@ permissions:
   contents: write
 
 concurrency:
-  group: snaplite-v1.1.0-release
+  group: snaplite-v1.2.0-release
   cancel-in-progress: true
 
 jobs:
   release:
     runs-on: windows-latest
     env:
-      VERSION: 1.1.0
-      TAG: v1.1.0
+      VERSION: 1.2.0
+      TAG: v1.2.0
 
     steps:
       - name: Checkout
@@ -54,21 +54,22 @@ jobs:
         with:
           tag_name: ${{ env.TAG }}
           target_commitish: ${{ github.sha }}
-          name: Snap-Lite v1.1.0
+          name: Snap-Lite v1.2.0
           prerelease: false
           generate_release_notes: true
           fail_on_unmatched_files: true
           overwrite_files: true
           body: |
-            Snap-Lite v1.1.0
+            Snap-Lite v1.2.0
 
             本次更新：
-            - 截图界面升级为蓝白二次元科技风，与少女应用图标统一视觉
-            - 优化截图标注撤销历史，最多 6 个状态并限制约 32 MB 位图预算
-            - 截图完成后主动回收空闲工作集，降低托盘常驻内存占用
-            - 托盘菜单新增“开机自启动”，用户可自行开启或关闭，默认关闭
-            - 开机启动使用当前用户 HKCU Run 项，不需要管理员权限
-            - 保留 F1 截图、F3 贴图、标注、多显示器、高 DPI 和 AI CLI 图片粘贴能力
+            - 重做截图编辑工具栏，升级为蓝白二次元科技风并重新分组
+            - 所有工具按钮加入 hover 用途提示和快捷键说明
+            - 恢复颜色选择，并应用到矩形、箭头、画笔和文字
+            - 文字输入改为透明背景，支持 12 / 14 / 16 / 20 / 24 / 32 / 48 pt 字号
+            - 编辑工具栏新增“另存为”，可自选文件名和位置
+            - 托盘菜单新增“设置默认保存目录”，配置会持久化到当前用户
+            - 保留开机自启动、内存限制、F1 截图、F3 贴图、多显示器、高 DPI 和 AI CLI 图片粘贴
             - Windows 11 x64
           files: |
             dist/SnapLite.exe
