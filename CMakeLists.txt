@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(SnapLite VERSION 1.2.0 LANGUAGES CXX RC)
+project(SnapLite VERSION 1.2.1 LANGUAGES CXX RC)
 
 configure_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/resources/SnapLite.rc.in
@@ -31,11 +31,16 @@ target_compile_definitions(
 )
 target_link_libraries(
     SnapLite PRIVATE
-    user32 gdi32 gdiplus shell32 ole32 uuid advapi32 comdlg32 comctl32
+    user32 gdi32 gdiplus shell32 ole32 uuid advapi32 comdlg32 comctl32 dwmapi
 )
 
 if(MSVC)
     target_compile_options(SnapLite PRIVATE /W4 /permissive- /utf-8)
+    set_property(
+        SOURCE src/snip_window.cpp
+        APPEND PROPERTY COMPILE_OPTIONS
+        "/FI${CMAKE_CURRENT_SOURCE_DIR}/src/window_bounds_fix.h"
+    )
 endif()
 
 install(TARGETS SnapLite RUNTIME DESTINATION .)
