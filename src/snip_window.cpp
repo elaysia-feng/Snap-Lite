@@ -146,8 +146,6 @@ private:
 
 }  // namespace Gdiplus
 
-// The legacy implementation uses RGB(235,70,70) as annotation ink. Redirect
-// only that exact token to the user-selected colour, leaving UI colours alone.
 #ifdef RGB
 #undef RGB
 #endif
@@ -171,6 +169,8 @@ private:
 namespace snaplite {
 
 bool SnipWindow::UiHasSelection() const {
+    detail::gAnnotationColor = annotationColor_;
+    detail::gTextSizePt = textSizePt_;
     return selected_;
 }
 
