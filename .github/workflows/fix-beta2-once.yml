@@ -1,3 +1,4 @@
+# trigger: beta2-fix
 name: fix-beta2-once
 
 on:
