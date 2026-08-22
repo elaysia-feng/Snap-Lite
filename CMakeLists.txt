@@ -5,12 +5,12 @@ set(SNAPLITE_NORMALIZED_ICON "${CMAKE_CURRENT_BINARY_DIR}/SnapLite.ico")
 execute_process(
     COMMAND powershell -NoProfile -ExecutionPolicy Bypass
             -File "${CMAKE_CURRENT_SOURCE_DIR}/scripts/normalize_ico.ps1"
-            -InputPath "${CMAKE_CURRENT_SOURCE_DIR}/resources/SnapLite.ico"
+            -InputBase64Path "${CMAKE_CURRENT_SOURCE_DIR}/resources/SnapLite-icon.png.b64"
             -OutputPath "${SNAPLITE_NORMALIZED_ICON}"
     RESULT_VARIABLE SNAP_LITE_ICON_NORMALIZE_RESULT
 )
 if(NOT SNAP_LITE_ICON_NORMALIZE_RESULT EQUAL 0)
-    message(FATAL_ERROR "Failed to normalize Snap-Lite icon resource")
+    message(FATAL_ERROR "Failed to generate Snap-Lite icon resource")
 endif()
 
 configure_file(
