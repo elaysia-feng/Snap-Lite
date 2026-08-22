@@ -2,6 +2,7 @@
 
 #include <windows.h>
 
+#include <cwchar>
 #include <filesystem>
 
 namespace snaplite {
