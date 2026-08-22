@@ -9,6 +9,59 @@
 
 namespace snaplite {
 
+// HBITMAP-based undo history can become very expensive for large selections.
+// A 2560x1600 32-bit snapshot is roughly 16 MB, so the old 20-entry history
+// could grow into hundreds of MB. Keep normal undo useful while bounding the
+// real bitmap allocation. It intentionally derives from vector so the existing
+// screenshot implementation can keep using the same vector API unchanged.
+class BitmapHistory : public std::vector<HBITMAP> {
+public:
+    void push_back(HBITMAP bitmap) {
+        std::vector<HBITMAP>::push_back(bitmap);
+        Trim();
+    }
+
+private:
+    static SIZE_T BitmapBytes(HBITMAP bitmap) {
+        if (!bitmap) {
+            return 0;
+        }
+
+        BITMAP info{};
+        if (GetObjectW(bitmap, sizeof(info), &info) == 0) {
+            return 0;
+        }
+
+        const SIZE_T stride = static_cast<SIZE_T>(
+            info.bmWidthBytes >= 0 ? info.bmWidthBytes : -info.bmWidthBytes);
+        const SIZE_T height = static_cast<SIZE_T>(
+            info.bmHeight >= 0 ? info.bmHeight : -info.bmHeight);
+        return stride * height;
+    }
+
+    SIZE_T TotalBytes() const {
+        SIZE_T total = 0;
+        for (HBITMAP bitmap : *this) {
+            total += BitmapBytes(bitmap);
+        }
+        return total;
+    }
+
+    void Trim() {
+        constexpr size_t kMaxEntries = 6;
+        constexpr SIZE_T kMaxBytes = 32ull * 1024ull * 1024ull;
+
+        // Always keep at least one state so a single Undo remains available
+        // even when one very large snapshot itself exceeds the byte budget.
+        while (size() > 1 && (size() > kMaxEntries || TotalBytes() > kMaxBytes)) {
+            if (front()) {
+                DeleteObject(front());
+            }
+            erase(begin());
+        }
+    }
+};
+
 class SnipWindow {
 public:
     enum class FinishAction {
@@ -114,8 +167,8 @@ private:
     Tool tool_{Tool::None};
     POINT drawStart_{};
     POINT drawCurrent_{};
-    std::vector<HBITMAP> undo_;
-    std::vector<HBITMAP> redo_;
+    BitmapHistory undo_;
+    BitmapHistory redo_;
 
     int hoverToolbar_{-1};
 
