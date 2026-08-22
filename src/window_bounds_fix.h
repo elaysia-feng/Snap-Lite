@@ -34,3 +34,9 @@ inline BOOL GetAccurateWindowRect(HWND hwnd, LPRECT rect) {
     return ::GetWindowRect(hwnd, rect);
 }
 
+}  // namespace snaplite::detail
+
+// Force-included only for snip_window.cpp so legacy element detection uses the
+// visible DWM frame without changing every call site.
+#define GetWindowRect(hwnd, rect) \
+    snaplite::detail::GetAccurateWindowRect((hwnd), (rect))
