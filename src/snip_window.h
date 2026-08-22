@@ -9,11 +9,6 @@
 
 namespace snaplite {
 
-// HBITMAP-based undo history can become very expensive for large selections.
-// A 2560x1600 32-bit snapshot is roughly 16 MB, so the old 20-entry history
-// could grow into hundreds of MB. Keep normal undo useful while bounding the
-// real bitmap allocation. It intentionally derives from vector so the existing
-// screenshot implementation can keep using the same vector API unchanged.
 class BitmapHistory : public std::vector<HBITMAP> {
 public:
     void push_back(HBITMAP bitmap) {
@@ -51,8 +46,6 @@ private:
         constexpr size_t kMaxEntries = 6;
         constexpr SIZE_T kMaxBytes = 32ull * 1024ull * 1024ull;
 
-        // Always keep at least one state so a single Undo remains available
-        // even when one very large snapshot itself exceeds the byte budget.
         while (size() > 1 && (size() > kMaxEntries || TotalBytes() > kMaxBytes)) {
             if (front()) {
                 DeleteObject(front());
@@ -67,6 +60,7 @@ public:
     enum class FinishAction {
         Copy,
         Save,
+        SaveAs,
         Pin,
     };
 
@@ -74,6 +68,23 @@ public:
 
     static bool Register(HINSTANCE instance);
     static bool Start(HINSTANCE instance, HWND owner, CaptureCallback callback);
+
+    // UI bridge used by the floating anime-style editor toolbar. Keeping this
+    // bridge small means the capture/selection implementation stays isolated.
+    bool UiHasSelection() const;
+    RECT UiSelectionRect() const;
+    RECT UiLegacyToolbarRect() const;
+    int UiActiveTool() const;
+    void UiSetTool(int toolIndex);
+    COLORREF UiColor() const;
+    void UiSetColor(COLORREF color);
+    int UiTextSize() const;
+    void UiSetTextSize(int points);
+    void UiUndo();
+    void UiRedo();
+    void UiFinish(FinishAction action);
+    void UiCancel();
+    HWND UiHwnd() const;
 
 private:
     enum class Tool {
@@ -171,6 +182,9 @@ private:
     BitmapHistory redo_;
 
     int hoverToolbar_{-1};
+
+    COLORREF annotationColor_{RGB(235, 70, 70)};
+    int textSizePt_{16};
 
     HWND textEdit_{};
     POINT textOrigin_{};
