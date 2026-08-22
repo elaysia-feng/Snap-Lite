@@ -1,0 +1,6 @@
+Snap-Lite v1.3.1
+
+- Replace text-heavy toolbar controls with vector line icons
+- Shape and arrow variants now use visual glyphs
+- Stroke widths are shown as line samples
+- Keep numeric text sizes and hover descriptions
