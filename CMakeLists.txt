@@ -45,7 +45,7 @@ if(MSVC)
     set_property(
         SOURCE src/editor_toolbar.cpp
         APPEND PROPERTY COMPILE_OPTIONS
-        "/FI${CMAKE_CURRENT_SOURCE_DIR}/src/toolbar_icon_render.h"
+        "/FI${CMAKE_CURRENT_SOURCE_DIR}/src/toolbar_icon_render_gdi.h"
     )
 endif()
 
