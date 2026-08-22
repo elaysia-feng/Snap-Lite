@@ -10,7 +10,9 @@ configure_file(
 add_executable(SnapLite WIN32
     src/main.cpp
     src/app.cpp
+    src/anime_toolbar.cpp
     src/capture.cpp
+    src/capture_settings.cpp
     src/editor_window.cpp
     src/pin_window.cpp
     src/snip_window.cpp
@@ -27,7 +29,10 @@ target_compile_definitions(
     UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN
     SNAP_LITE_VERSION=L"${PROJECT_VERSION}"
 )
-target_link_libraries(SnapLite PRIVATE user32 gdi32 gdiplus shell32 ole32 uuid advapi32)
+target_link_libraries(
+    SnapLite PRIVATE
+    user32 gdi32 gdiplus shell32 ole32 uuid advapi32 comdlg32 comctl32
+)
 
 if(MSVC)
     target_compile_options(SnapLite PRIVATE /W4 /permissive- /utf-8)
