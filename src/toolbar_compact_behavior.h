@@ -46,6 +46,20 @@ inline int ClampToolbarY(HWND toolbar, int y, int height) {
     return std::clamp(y, 6, std::max(6, static_cast<int>(client.bottom) - height - 6));
 }
 
+inline void ApplyRoundedRegion(HWND hwnd) {
+    if (!IsEditorToolbar(hwnd)) return;
+    RECT client{};
+    if (!GetClientRect(hwnd, &client)) return;
+    const int width = std::max(1L, client.right - client.left);
+    const int height = std::max(1L, client.bottom - client.top);
+    const int radius = height <= kPrimaryOnlyHeight ? 18 : 16;
+    HRGN region = CreateRoundRectRgn(0, 0, width + 1, height + 1, radius, radius);
+    if (!region) return;
+    if (SetWindowRgn(hwnd, region, TRUE) == 0) {
+        DeleteObject(region);
+    }
+}
+
 inline BOOL SetWindowPosCompact(
     HWND hwnd,
     HWND insertAfter,
@@ -81,7 +95,9 @@ inline BOOL SetWindowPosCompact(
         }
     }
 
-    return ::SetWindowPos(hwnd, insertAfter, x, y, cx, cy, flags);
+    const BOOL result = ::SetWindowPos(hwnd, insertAfter, x, y, cx, cy, flags);
+    if (result && IsEditorToolbar(hwnd)) ApplyRoundedRegion(hwnd);
+    return result;
 }
 
 inline void ResizeToolbarForCurrentTool(HWND toolbar) {
@@ -98,7 +114,10 @@ inline void ResizeToolbarForCurrentTool(HWND toolbar) {
 
     const int currentHeight = std::max(1L, rect.bottom - rect.top);
     const int desiredHeight = DesiredHeight(toolbar);
-    if (currentHeight == desiredHeight) return;
+    if (currentHeight == desiredHeight) {
+        ApplyRoundedRegion(toolbar);
+        return;
+    }
 
     SnipWindow* snip = SnipFromToolbar(toolbar);
     int y = origin.y;
@@ -110,14 +129,16 @@ inline void ResizeToolbarForCurrentTool(HWND toolbar) {
     }
     y = ClampToolbarY(toolbar, y, desiredHeight);
 
-    ::SetWindowPos(
-        toolbar,
-        HWND_TOP,
-        origin.x,
-        y,
-        rect.right - rect.left,
-        desiredHeight,
-        SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    if (::SetWindowPos(
+            toolbar,
+            HWND_TOP,
+            origin.x,
+            y,
+            rect.right - rect.left,
+            desiredHeight,
+            SWP_NOACTIVATE | SWP_SHOWWINDOW)) {
+        ApplyRoundedRegion(toolbar);
+    }
 }
 
 inline BOOL InvalidateRectCompact(HWND hwnd, const RECT* rect, BOOL erase) {
