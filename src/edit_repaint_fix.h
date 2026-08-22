@@ -3,6 +3,7 @@
 #include <windows.h>
 #include <commctrl.h>
 #include <cwchar>
+#include <iterator>
 
 namespace snaplite::editrepaintfix {
 
