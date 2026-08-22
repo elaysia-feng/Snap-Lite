@@ -16,6 +16,7 @@ add_executable(SnapLite WIN32
     src/editor_window.cpp
     src/pin_window.cpp
     src/snip_window.cpp
+    src/snip_text_overlay.cpp
     ${CMAKE_CURRENT_BINARY_DIR}/SnapLite.rc
 )
 
