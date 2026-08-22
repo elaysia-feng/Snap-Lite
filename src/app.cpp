@@ -1,12 +1,16 @@
 #include "app.h"
 
+#include "anime_toolbar.h"
 #include "capture.h"
 #include "pin_window.h"
 #include "resource.h"
 #include "snip_window.h"
 
+#include <commdlg.h>
 #include <shellapi.h>
+#include <shlobj.h>
 
+#include <filesystem>
 #include <string>
 
 namespace snaplite {
@@ -26,6 +30,7 @@ constexpr UINT CMD_PIN = 1003;
 constexpr UINT CMD_OPEN_FOLDER = 1004;
 constexpr UINT CMD_EXIT = 1005;
 constexpr UINT CMD_AUTOSTART = 1006;
+constexpr UINT CMD_SET_FOLDER = 1007;
 
 constexpr wchar_t kRunKey[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 constexpr wchar_t kRunValue[] = L"Snap-Lite";
@@ -111,9 +116,61 @@ bool SetStartupEnabled(bool enabled) {
     return result == ERROR_SUCCESS;
 }
 
+int CALLBACK BrowseFolderCallback(HWND hwnd, UINT message, LPARAM, LPARAM data) {
+    if (message == BFFM_INITIALIZED && data) {
+        SendMessageW(hwnd, BFFM_SETSELECTIONW, TRUE, data);
+    }
+    return 0;
+}
+
+std::filesystem::path ChooseScreenshotFolder(HWND owner) {
+    const std::wstring initial = ConfiguredScreenshotDirectory().wstring();
+    BROWSEINFOW browse{};
+    browse.hwndOwner = owner;
+    browse.lpszTitle = L"选择 Snap-Lite 默认截图保存目录";
+    browse.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
+    browse.lpfn = BrowseFolderCallback;
+    browse.lParam = reinterpret_cast<LPARAM>(initial.c_str());
+
+    PIDLIST_ABSOLUTE item = SHBrowseForFolderW(&browse);
+    if (!item) {
+        return {};
+    }
+
+    wchar_t path[MAX_PATH]{};
+    const bool ok = SHGetPathFromIDListW(item, path) != FALSE;
+    CoTaskMemFree(item);
+    return ok ? std::filesystem::path(path) : std::filesystem::path{};
+}
+
+std::filesystem::path ChooseSaveAsPath(HWND owner) {
+    const std::filesystem::path suggested = NextConfiguredScreenshotPath();
+    const std::wstring initialDirectory = ConfiguredScreenshotDirectory().wstring();
+
+    wchar_t file[MAX_PATH]{};
+    wcsncpy_s(file, suggested.filename().c_str(), _TRUNCATE);
+
+    static constexpr wchar_t filter[] =
+        L"PNG 图片 (*.png)\0*.png\0"
+        L"所有文件 (*.*)\0*.*\0\0";
+
+    OPENFILENAMEW dialog{};
+    dialog.lStructSize = sizeof(dialog);
+    dialog.hwndOwner = owner;
+    dialog.lpstrFilter = filter;
+    dialog.lpstrFile = file;
+    dialog.nMaxFile = MAX_PATH;
+    dialog.lpstrInitialDir = initialDirectory.c_str();
+    dialog.lpstrDefExt = L"png";
+    dialog.Flags = OFN_EXPLORER | OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT | OFN_NOCHANGEDIR;
+
+    if (!GetSaveFileNameW(&dialog)) {
+        return {};
+    }
+    return std::filesystem::path(file);
+}
+
 void TrimWorkingSet() {
-    // Do not free live objects here. This only asks Windows to reclaim resident
-    // pages which are no longer actively used after capture/encoding work.
     SetProcessWorkingSetSize(
         GetCurrentProcess(),
         static_cast<SIZE_T>(-1),
@@ -150,7 +207,9 @@ bool App::Initialize() {
     if (!RegisterClassExW(&wc) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
         return false;
     }
-    if (!SnipWindow::Register(instance_) || !PinWindow::Register(instance_)) {
+    if (!SnipWindow::Register(instance_) ||
+        !PinWindow::Register(instance_) ||
+        !AnimeToolbar::Register(instance_)) {
         return false;
     }
 
@@ -257,6 +316,7 @@ void App::ShowTrayMenu() {
     AppendMenuW(menu, MF_STRING, CMD_FULLSCREEN, L"全屏截图\tCtrl+Shift+F");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, CMD_OPEN_FOLDER, L"打开截图目录");
+    AppendMenuW(menu, MF_STRING, CMD_SET_FOLDER, L"设置默认保存目录...");
     AppendMenuW(
         menu,
         MF_STRING | (IsStartupEnabled() ? MF_CHECKED : MF_UNCHECKED),
@@ -282,8 +342,19 @@ void App::StartSnip() {
                 return;
             }
 
-            if (action == SnipWindow::FinishAction::Save) {
-                const auto path = NextScreenshotPath();
+            if (action == SnipWindow::FinishAction::Save ||
+                action == SnipWindow::FinishAction::SaveAs) {
+                const std::filesystem::path path =
+                    action == SnipWindow::FinishAction::Save
+                        ? NextConfiguredScreenshotPath()
+                        : ChooseSaveAsPath(hwnd_);
+
+                if (path.empty()) {
+                    DeleteObject(bitmap);
+                    TrimWorkingSet();
+                    return;
+                }
+
                 const bool saved = SaveBitmapPng(bitmap, path);
                 DeleteObject(bitmap);
                 if (saved) {
@@ -305,7 +376,10 @@ void App::StartSnip() {
 
     if (!started) {
         ShowNotice(L"无法启动截图");
+        return;
     }
+
+    AnimeToolbar::ShowForSnip(instance_);
 }
 
 void App::CaptureFullscreen() {
@@ -329,7 +403,7 @@ void App::CommitCapture(HBITMAP bitmap) {
         return;
     }
 
-    const auto path = NextScreenshotPath();
+    const auto path = NextConfiguredScreenshotPath();
     const bool saved = SaveBitmapPng(bitmap, path);
     const bool copied = CopyBitmapToClipboard(
         hwnd_,
@@ -383,8 +457,26 @@ LRESULT App::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
             CaptureFullscreen();
             return 0;
         case CMD_OPEN_FOLDER:
-            ShellExecuteW(hwnd_, L"open", ScreenshotDirectory().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+            ShellExecuteW(
+                hwnd_,
+                L"open",
+                ConfiguredScreenshotDirectory().c_str(),
+                nullptr,
+                nullptr,
+                SW_SHOWNORMAL);
             return 0;
+        case CMD_SET_FOLDER: {
+            const auto directory = ChooseScreenshotFolder(hwnd_);
+            if (!directory.empty()) {
+                if (SetScreenshotDirectory(directory)) {
+                    const std::wstring message = L"默认截图目录已设置为：\n" + directory.wstring();
+                    ShowNotice(message.c_str());
+                } else {
+                    ShowNotice(L"设置截图目录失败");
+                }
+            }
+            return 0;
+        }
         case CMD_AUTOSTART: {
             const bool next = !IsStartupEnabled();
             if (SetStartupEnabled(next)) {
