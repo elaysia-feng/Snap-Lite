@@ -195,14 +195,20 @@ private:
         RECT client{};
         GetClientRect(snipHwnd_, &client);
 
-        int x = legacy.left;
-        int y = legacy.top;
+        int x = static_cast<int>(legacy.left);
+        int y = static_cast<int>(legacy.top);
         if (legacy.top < selection.top) {
-            y = legacy.bottom - kToolbarHeight;
+            y = static_cast<int>(legacy.bottom) - kToolbarHeight;
         }
 
-        x = std::clamp(x, 6, std::max(6, client.right - kToolbarWidth - 6));
-        y = std::clamp(y, 6, std::max(6, client.bottom - kToolbarHeight - 6));
+        x = std::clamp(
+            x,
+            6,
+            std::max(6, static_cast<int>(client.right) - kToolbarWidth - 6));
+        y = std::clamp(
+            y,
+            6,
+            std::max(6, static_cast<int>(client.bottom) - kToolbarHeight - 6));
 
         POINT origin{0, 0};
         ClientToScreen(snipHwnd_, &origin);
@@ -452,7 +458,7 @@ private:
         EndPaint(hwnd_, &ps);
     }
 
-    void ChooseColor() {
+    void OpenColorPicker() {
         if (!snip_) {
             return;
         }
@@ -467,7 +473,7 @@ private:
         choose.rgbResult = snip_->UiColor();
         choose.lpCustColors = customColors;
         choose.Flags = CC_FULLOPEN | CC_RGBINIT;
-        if (ChooseColorW(&choose)) {
+        if (::ChooseColorW(&choose)) {
             snip_->UiSetColor(choose.rgbResult);
             InvalidateRect(hwnd_, nullptr, FALSE);
         }
@@ -523,7 +529,7 @@ private:
         }
 
         switch (index) {
-        case 5: ChooseColor(); break;
+        case 5: OpenColorPicker(); break;
         case 6: ChooseFontSize(); break;
         case 7: snip_->UiUndo(); break;
         case 8: snip_->UiRedo(); break;
