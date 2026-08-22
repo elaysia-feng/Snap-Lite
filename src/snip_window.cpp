@@ -28,73 +28,32 @@ POINT gArrowFrom{};
 POINT gArrowTo{};
 
 HFONT ThemedCreateFontW(
-    int height,
-    int width,
-    int escapement,
-    int orientation,
-    int weight,
-    DWORD italic,
-    DWORD underline,
-    DWORD strikeOut,
-    DWORD charSet,
-    DWORD outPrecision,
-    DWORD clipPrecision,
-    DWORD quality,
-    DWORD pitchAndFamily,
-    LPCWSTR faceName) {
+    int height, int width, int escapement, int orientation, int weight,
+    DWORD italic, DWORD underline, DWORD strikeOut, DWORD charSet,
+    DWORD outPrecision, DWORD clipPrecision, DWORD quality,
+    DWORD pitchAndFamily, LPCWSTR faceName) {
     if (height == -20 && faceName && _wcsicmp(faceName, L"Segoe UI") == 0) {
         const UINT dpi = GetDpiForSystem();
         height = -MulDiv(std::clamp(gTextSizePt, 10, 72), static_cast<int>(dpi), 72);
     }
     return ::CreateFontW(
-        height,
-        width,
-        escapement,
-        orientation,
-        weight,
-        italic,
-        underline,
-        strikeOut,
-        charSet,
-        outPrecision,
-        clipPrecision,
-        quality,
-        pitchAndFamily,
-        faceName);
+        height, width, escapement, orientation, weight, italic, underline,
+        strikeOut, charSet, outPrecision, clipPrecision, quality,
+        pitchAndFamily, faceName);
 }
 
 HWND ThemedCreateWindowExW(
-    DWORD exStyle,
-    LPCWSTR className,
-    LPCWSTR windowName,
-    DWORD style,
-    int x,
-    int y,
-    int width,
-    int height,
-    HWND parent,
-    HMENU menu,
-    HINSTANCE instance,
-    LPVOID param) {
+    DWORD exStyle, LPCWSTR className, LPCWSTR windowName, DWORD style,
+    int x, int y, int width, int height, HWND parent, HMENU menu,
+    HINSTANCE instance, LPVOID param) {
     if (reinterpret_cast<ULONG_PTR>(className) > 0xFFFF &&
         className && _wcsicmp(className, L"EDIT") == 0) {
         exStyle |= WS_EX_TRANSPARENT;
         style &= ~WS_BORDER;
     }
-
     return ::CreateWindowExW(
-        exStyle,
-        className,
-        windowName,
-        style,
-        x,
-        y,
-        width,
-        height,
-        parent,
-        menu,
-        instance,
-        param);
+        exStyle, className, windowName, style, x, y, width, height,
+        parent, menu, instance, param);
 }
 
 HPEN ThemedCreatePen(int style, int width, COLORREF color) {
@@ -149,10 +108,12 @@ void DrawAdvancedArrow(HDC dc, POINT from, POINT to) {
     POINT tailForEnd = from;
 
     switch (kind) {
-    case 4: { // curved
+    case 4: {
         const LONG dx = to.x - from.x;
         const LONG dy = to.y - from.y;
-        const double len = std::max(1.0, std::hypot(static_cast<double>(dx), static_cast<double>(dy)));
+        const double len = std::max(
+            1.0,
+            std::hypot(static_cast<double>(dx), static_cast<double>(dy)));
         const double nx = -dy / len;
         const double ny = dx / len;
         const double bend = std::min(70.0, len * 0.22);
@@ -168,7 +129,7 @@ void DrawAdvancedArrow(HDC dc, POINT from, POINT to) {
         tailForEnd = bezier[2];
         break;
     }
-    case 5: { // elbow
+    case 5: {
         POINT points[4] = {
             from,
             {(from.x + to.x) / 2, from.y},
@@ -179,7 +140,7 @@ void DrawAdvancedArrow(HDC dc, POINT from, POINT to) {
         tailForEnd = points[2];
         break;
     }
-    case 6: { // double elbow / stepped
+    case 6: {
         const LONG dx = to.x - from.x;
         POINT points[4] = {
             from,
@@ -313,10 +274,8 @@ class SnapLiteThemeColor : public Color {
 public:
     SnapLiteThemeColor() : Color() {}
     explicit SnapLiteThemeColor(ARGB value) : Color(value) {}
-
     SnapLiteThemeColor(BYTE alpha, BYTE red, BYTE green, BYTE blue)
         : Color(ThemeArgb(alpha, red, green, blue)) {}
-
     SnapLiteThemeColor(BYTE red, BYTE green, BYTE blue)
         : Color(ThemeArgb(255, red, green, blue)) {}
 
@@ -329,20 +288,10 @@ private:
     }
 
     static ARGB ThemeArgb(BYTE alpha, BYTE red, BYTE green, BYTE blue) {
-        // Keep the capture chrome restrained and neutral. The editor toolbar
-        // now owns its visual language, so this mapping only softens legacy UI.
-        if (red == 27 && green == 30 && blue == 35) {
-            return Pack(alpha, 38, 38, 42);
-        }
-        if (red == 255 && green == 197 && blue == 61) {
-            return Pack(alpha, 111, 146, 214);
-        }
-        if (red == 236 && green == 239 && blue == 244) {
-            return Pack(alpha, 245, 245, 247);
-        }
-        if (red == 255 && green == 107 && blue == 91) {
-            return Pack(alpha, 218, 92, 92);
-        }
+        if (red == 27 && green == 30 && blue == 35) return Pack(alpha, 38, 38, 42);
+        if (red == 255 && green == 197 && blue == 61) return Pack(alpha, 111, 146, 214);
+        if (red == 236 && green == 239 && blue == 244) return Pack(alpha, 245, 245, 247);
+        if (red == 255 && green == 107 && blue == 91) return Pack(alpha, 218, 92, 92);
         return Pack(alpha, red, green, blue);
     }
 };
@@ -361,11 +310,11 @@ private:
 
 #define CreateFontW snaplite::detail::ThemedCreateFontW
 #define CreateWindowExW snaplite::detail::ThemedCreateWindowExW
-#define CreatePen snaplite::detail::ThemedCreatePen
-#define Rectangle snaplite::detail::ThemedRectangle
-#define MoveToEx snaplite::detail::ThemedMoveToEx
-#define LineTo snaplite::detail::ThemedLineTo
-#define Polygon snaplite::detail::ThemedPolygon
+#define CreatePen(...) snaplite::detail::ThemedCreatePen(__VA_ARGS__)
+#define Rectangle(...) snaplite::detail::ThemedRectangle(__VA_ARGS__)
+#define MoveToEx(...) snaplite::detail::ThemedMoveToEx(__VA_ARGS__)
+#define LineTo(...) snaplite::detail::ThemedLineTo(__VA_ARGS__)
+#define Polygon(...) snaplite::detail::ThemedPolygon(__VA_ARGS__)
 #define Color SnapLiteThemeColor
 #include "snip_window_original.inc"
 #undef Color
@@ -395,13 +344,8 @@ bool SnipWindow::UiHasSelection() const {
     return selected_;
 }
 
-RECT SnipWindow::UiSelectionRect() const {
-    return selected_ ? NormalizedSelection() : RECT{};
-}
-
-RECT SnipWindow::UiLegacyToolbarRect() const {
-    return ToolbarRect();
-}
+RECT SnipWindow::UiSelectionRect() const { return selected_ ? NormalizedSelection() : RECT{}; }
+RECT SnipWindow::UiLegacyToolbarRect() const { return ToolbarRect(); }
 
 int SnipWindow::UiActiveTool() const {
     switch (tool_) {
@@ -415,10 +359,7 @@ int SnipWindow::UiActiveTool() const {
 }
 
 void SnipWindow::UiSetTool(int toolIndex) {
-    if (textEdit_ && toolIndex != 4) {
-        CommitTextEdit();
-    }
-
+    if (textEdit_ && toolIndex != 4) CommitTextEdit();
     switch (toolIndex) {
     case 0: tool_ = Tool::Rectangle; break;
     case 1: tool_ = Tool::Arrow; break;
@@ -427,7 +368,6 @@ void SnipWindow::UiSetTool(int toolIndex) {
     case 4: tool_ = Tool::Text; break;
     default: tool_ = Tool::None; break;
     }
-
     detail::gActiveToolIndex = toolIndex >= 0 && toolIndex <= 4 ? toolIndex : -1;
     InvalidateRect(hwnd_, nullptr, FALSE);
 }
@@ -437,51 +377,38 @@ void SnipWindow::UiSetShapeKind(int kind) {
     detail::gShapeKind = std::clamp(kind, 0, 7);
     UiSetTool(0);
 }
-
 int SnipWindow::UiShapeFillMode() const { return detail::gShapeFillMode; }
 void SnipWindow::UiSetShapeFillMode(int mode) {
     detail::gShapeFillMode = std::clamp(mode, 0, 2);
     InvalidateRect(hwnd_, nullptr, FALSE);
 }
-
 int SnipWindow::UiArrowKind() const { return detail::gArrowKind; }
 void SnipWindow::UiSetArrowKind(int kind) {
     detail::gArrowKind = std::clamp(kind, 0, 6);
     UiSetTool(1);
 }
-
 int SnipWindow::UiStrokeWidth() const { return detail::gStrokeWidth; }
 void SnipWindow::UiSetStrokeWidth(int width) {
     detail::gStrokeWidth = std::clamp(width, 1, 12);
     InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
-COLORREF SnipWindow::UiColor() const {
-    return annotationColor_;
-}
-
+COLORREF SnipWindow::UiColor() const { return annotationColor_; }
 void SnipWindow::UiSetColor(COLORREF color) {
     annotationColor_ = color;
     detail::gAnnotationColor = color;
-    if (textEdit_) {
-        InvalidateRect(textEdit_, nullptr, TRUE);
-    }
+    if (textEdit_) InvalidateRect(textEdit_, nullptr, TRUE);
     InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
-int SnipWindow::UiTextSize() const {
-    return textSizePt_;
-}
-
+int SnipWindow::UiTextSize() const { return textSizePt_; }
 void SnipWindow::UiSetTextSize(int points) {
     textSizePt_ = std::clamp(points, 10, 72);
     detail::gTextSizePt = textSizePt_;
-
     if (textFont_) {
         DeleteObject(textFont_);
         textFont_ = nullptr;
     }
-
     if (textEdit_) {
         const UINT dpi = GetDpiForWindow(hwnd_);
         const int height = -MulDiv(textSizePt_, static_cast<int>(dpi), 72);
@@ -489,9 +416,7 @@ void SnipWindow::UiSetTextSize(int points) {
             height, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
             CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-        if (textFont_) {
-            SendMessageW(textEdit_, WM_SETFONT, reinterpret_cast<WPARAM>(textFont_), TRUE);
-        }
+        if (textFont_) SendMessageW(textEdit_, WM_SETFONT, reinterpret_cast<WPARAM>(textFont_), TRUE);
     }
     InvalidateRect(hwnd_, nullptr, FALSE);
 }
@@ -499,9 +424,7 @@ void SnipWindow::UiSetTextSize(int points) {
 void SnipWindow::UiUndo() { Undo(); }
 void SnipWindow::UiRedo() { Redo(); }
 void SnipWindow::UiFinish(FinishAction action) { Finish(action); }
-void SnipWindow::UiCancel() {
-    if (hwnd_) DestroyWindow(hwnd_);
-}
+void SnipWindow::UiCancel() { if (hwnd_) DestroyWindow(hwnd_); }
 HWND SnipWindow::UiHwnd() const { return hwnd_; }
 
 }  // namespace snaplite
