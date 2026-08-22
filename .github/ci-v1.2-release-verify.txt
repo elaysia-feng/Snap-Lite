@@ -1,0 +1,1 @@
+temporary CI verification marker for v1.2.0 after build fixes
