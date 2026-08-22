@@ -17,6 +17,15 @@ namespace snaplite::detail {
 
 COLORREF gAnnotationColor = RGB(235, 70, 70);
 int gTextSizePt = 16;
+int gActiveToolIndex = -1;
+int gShapeKind = 0;
+int gShapeFillMode = 0;
+int gArrowKind = 0;
+int gStrokeWidth = 3;
+
+bool gShapeDrawing = false;
+POINT gArrowFrom{};
+POINT gArrowTo{};
 
 HFONT ThemedCreateFontW(
     int height,
@@ -88,6 +97,214 @@ HWND ThemedCreateWindowExW(
         param);
 }
 
+HPEN ThemedCreatePen(int style, int width, COLORREF color) {
+    if (color == gAnnotationColor) {
+        if (width == 3 && (gActiveToolIndex == 0 || gActiveToolIndex == 1)) {
+            gShapeDrawing = true;
+        }
+        if ((width == 3 && (gActiveToolIndex == 0 || gActiveToolIndex == 1)) ||
+            (width == 4 && gActiveToolIndex == 2)) {
+            width = std::clamp(gStrokeWidth, 1, 12);
+        }
+    }
+    return ::CreatePen(style, width, color);
+}
+
+void DrawArrowHeadRaw(HDC dc, POINT tip, POINT tail, COLORREF color, int size, bool filled) {
+    const double angle = std::atan2(
+        static_cast<double>(tip.y - tail.y),
+        static_cast<double>(tip.x - tail.x));
+    constexpr double spread = 0.55;
+    POINT head[3] = {
+        tip,
+        {static_cast<LONG>(tip.x - size * std::cos(angle - spread)),
+         static_cast<LONG>(tip.y - size * std::sin(angle - spread))},
+        {static_cast<LONG>(tip.x - size * std::cos(angle + spread)),
+         static_cast<LONG>(tip.y - size * std::sin(angle + spread))},
+    };
+
+    if (filled) {
+        HBRUSH brush = ::CreateSolidBrush(color);
+        const HGDIOBJ oldBrush = ::SelectObject(dc, brush);
+        ::Polygon(dc, head, 3);
+        ::SelectObject(dc, oldBrush);
+        ::DeleteObject(brush);
+    } else {
+        ::MoveToEx(dc, head[1].x, head[1].y, nullptr);
+        ::LineTo(dc, tip.x, tip.y);
+        ::LineTo(dc, head[2].x, head[2].y);
+    }
+}
+
+void DrawAdvancedArrow(HDC dc, POINT from, POINT to) {
+    const int kind = std::clamp(gArrowKind, 0, 6);
+    int width = std::clamp(gStrokeWidth, 1, 12);
+    if (kind == 1) width = 1;
+    if (kind == 2) width = std::max(width, 6);
+
+    HPEN pen = ::CreatePen(PS_SOLID, width, gAnnotationColor);
+    const HGDIOBJ oldPen = ::SelectObject(dc, pen);
+    const bool filledHead = kind != 1;
+    const int headSize = kind == 2 ? 22 : std::max(13, 12 + width);
+    POINT tailForEnd = from;
+
+    switch (kind) {
+    case 4: { // curved
+        const LONG dx = to.x - from.x;
+        const LONG dy = to.y - from.y;
+        const double len = std::max(1.0, std::hypot(static_cast<double>(dx), static_cast<double>(dy)));
+        const double nx = -dy / len;
+        const double ny = dx / len;
+        const double bend = std::min(70.0, len * 0.22);
+        POINT bezier[4] = {
+            from,
+            {static_cast<LONG>(from.x + dx / 3.0 + nx * bend),
+             static_cast<LONG>(from.y + dy / 3.0 + ny * bend)},
+            {static_cast<LONG>(from.x + dx * 2.0 / 3.0 + nx * bend),
+             static_cast<LONG>(from.y + dy * 2.0 / 3.0 + ny * bend)},
+            to,
+        };
+        ::PolyBezier(dc, bezier, 4);
+        tailForEnd = bezier[2];
+        break;
+    }
+    case 5: { // elbow
+        POINT points[4] = {
+            from,
+            {(from.x + to.x) / 2, from.y},
+            {(from.x + to.x) / 2, to.y},
+            to,
+        };
+        ::Polyline(dc, points, 4);
+        tailForEnd = points[2];
+        break;
+    }
+    case 6: { // double elbow / stepped
+        const LONG dx = to.x - from.x;
+        POINT points[4] = {
+            from,
+            {from.x + dx / 3, from.y},
+            {from.x + dx / 3, to.y},
+            to,
+        };
+        ::Polyline(dc, points, 4);
+        tailForEnd = points[2];
+        break;
+    }
+    default:
+        ::MoveToEx(dc, from.x, from.y, nullptr);
+        ::LineTo(dc, to.x, to.y);
+        break;
+    }
+
+    DrawArrowHeadRaw(dc, to, tailForEnd, gAnnotationColor, headSize, filledHead);
+    if (kind == 3) {
+        DrawArrowHeadRaw(dc, from, to, gAnnotationColor, headSize, true);
+    }
+
+    ::SelectObject(dc, oldPen);
+    ::DeleteObject(pen);
+}
+
+BOOL ThemedRectangle(HDC dc, int left, int top, int right, int bottom) {
+    if (!gShapeDrawing || gActiveToolIndex != 0) {
+        return ::Rectangle(dc, left, top, right, bottom);
+    }
+
+    gShapeDrawing = false;
+    const int kind = std::clamp(gShapeKind, 0, 7);
+    const int fillMode = std::clamp(gShapeFillMode, 0, 2);
+
+    HPEN pen = fillMode == 1
+        ? static_cast<HPEN>(::GetStockObject(NULL_PEN))
+        : ::CreatePen(PS_SOLID, std::clamp(gStrokeWidth, 1, 12), gAnnotationColor);
+    HBRUSH brush = fillMode == 0
+        ? static_cast<HBRUSH>(::GetStockObject(NULL_BRUSH))
+        : ::CreateSolidBrush(gAnnotationColor);
+
+    const HGDIOBJ oldPen = ::SelectObject(dc, pen);
+    const HGDIOBJ oldBrush = ::SelectObject(dc, brush);
+    const int width = std::abs(right - left);
+    const int height = std::abs(bottom - top);
+    const int cx = (left + right) / 2;
+    const int cy = (top + bottom) / 2;
+
+    switch (kind) {
+    case 0:
+        ::Rectangle(dc, left, top, right, bottom);
+        break;
+    case 1:
+        ::RoundRect(dc, left, top, right, bottom, 18, 18);
+        break;
+    case 2: {
+        const int side = std::min(width, height);
+        ::Ellipse(dc, cx - side / 2, cy - side / 2, cx + side / 2, cy + side / 2);
+        break;
+    }
+    case 3:
+        ::Ellipse(dc, left, top, right, bottom);
+        break;
+    case 4:
+        ::MoveToEx(dc, left, top, nullptr);
+        ::LineTo(dc, right, bottom);
+        break;
+    case 5: {
+        POINT points[3] = {{cx, top}, {right, bottom}, {left, bottom}};
+        ::Polygon(dc, points, 3);
+        break;
+    }
+    case 6: {
+        POINT points[4] = {{cx, top}, {right, cy}, {cx, bottom}, {left, cy}};
+        ::Polygon(dc, points, 4);
+        break;
+    }
+    case 7: {
+        const int quarter = std::max(1, width / 4);
+        POINT points[6] = {
+            {left + quarter, top}, {right - quarter, top}, {right, cy},
+            {right - quarter, bottom}, {left + quarter, bottom}, {left, cy},
+        };
+        ::Polygon(dc, points, 6);
+        break;
+    }
+    }
+
+    ::SelectObject(dc, oldBrush);
+    ::SelectObject(dc, oldPen);
+    if (fillMode != 1) ::DeleteObject(pen);
+    if (fillMode != 0) ::DeleteObject(brush);
+    return TRUE;
+}
+
+BOOL ThemedMoveToEx(HDC dc, int x, int y, LPPOINT oldPoint) {
+    if (gShapeDrawing && gActiveToolIndex == 1) {
+        gArrowFrom = {x, y};
+        if (oldPoint) {
+            oldPoint->x = x;
+            oldPoint->y = y;
+        }
+        return TRUE;
+    }
+    return ::MoveToEx(dc, x, y, oldPoint);
+}
+
+BOOL ThemedLineTo(HDC dc, int x, int y) {
+    if (gShapeDrawing && gActiveToolIndex == 1) {
+        gArrowTo = {x, y};
+        return TRUE;
+    }
+    return ::LineTo(dc, x, y);
+}
+
+BOOL ThemedPolygon(HDC dc, const POINT* points, int count) {
+    if (gShapeDrawing && gActiveToolIndex == 1) {
+        gShapeDrawing = false;
+        DrawAdvancedArrow(dc, gArrowFrom, gArrowTo);
+        return TRUE;
+    }
+    return ::Polygon(dc, points, count);
+}
+
 }  // namespace snaplite::detail
 
 namespace Gdiplus {
@@ -112,33 +329,19 @@ private:
     }
 
     static ARGB ThemeArgb(BYTE alpha, BYTE red, BYTE green, BYTE blue) {
+        // Keep the capture chrome restrained and neutral. The editor toolbar
+        // now owns its visual language, so this mapping only softens legacy UI.
         if (red == 27 && green == 30 && blue == 35) {
-            return Pack(alpha, 17, 24, 44);
+            return Pack(alpha, 38, 38, 42);
         }
         if (red == 255 && green == 197 && blue == 61) {
-            return Pack(alpha, 105, 225, 255);
+            return Pack(alpha, 111, 146, 214);
         }
         if (red == 236 && green == 239 && blue == 244) {
-            return Pack(alpha, 232, 247, 255);
+            return Pack(alpha, 245, 245, 247);
         }
         if (red == 255 && green == 107 && blue == 91) {
-            return Pack(alpha, 255, 112, 170);
-        }
-        if (red == 0 && green == 0 && blue == 0) {
-            if (alpha == 148 || alpha == 66) {
-                return Pack(alpha, 20, 25, 51);
-            }
-            if (alpha == 110) {
-                return Pack(alpha, 8, 14, 32);
-            }
-            if (alpha == 13) {
-                return Pack(alpha, 45, 95, 175);
-            }
-        }
-        if (red == 255 && green == 255 && blue == 255) {
-            if (alpha == 56) return Pack(86, 144, 231, 255);
-            if (alpha == 38) return Pack(55, 112, 225, 255);
-            if (alpha == 26) return Pack(38, 112, 225, 255);
+            return Pack(alpha, 218, 92, 92);
         }
         return Pack(alpha, red, green, blue);
     }
@@ -158,9 +361,19 @@ private:
 
 #define CreateFontW snaplite::detail::ThemedCreateFontW
 #define CreateWindowExW snaplite::detail::ThemedCreateWindowExW
+#define CreatePen snaplite::detail::ThemedCreatePen
+#define Rectangle snaplite::detail::ThemedRectangle
+#define MoveToEx snaplite::detail::ThemedMoveToEx
+#define LineTo snaplite::detail::ThemedLineTo
+#define Polygon snaplite::detail::ThemedPolygon
 #define Color SnapLiteThemeColor
 #include "snip_window_original.inc"
 #undef Color
+#undef Polygon
+#undef LineTo
+#undef MoveToEx
+#undef Rectangle
+#undef CreatePen
 #undef CreateWindowExW
 #undef CreateFontW
 #undef RGB
@@ -171,6 +384,14 @@ namespace snaplite {
 bool SnipWindow::UiHasSelection() const {
     detail::gAnnotationColor = annotationColor_;
     detail::gTextSizePt = textSizePt_;
+    switch (tool_) {
+    case Tool::Rectangle: detail::gActiveToolIndex = 0; break;
+    case Tool::Arrow: detail::gActiveToolIndex = 1; break;
+    case Tool::Pen: detail::gActiveToolIndex = 2; break;
+    case Tool::Mosaic: detail::gActiveToolIndex = 3; break;
+    case Tool::Text: detail::gActiveToolIndex = 4; break;
+    default: detail::gActiveToolIndex = -1; break;
+    }
     return selected_;
 }
 
@@ -194,21 +415,44 @@ int SnipWindow::UiActiveTool() const {
 }
 
 void SnipWindow::UiSetTool(int toolIndex) {
-    if (textEdit_) {
+    if (textEdit_ && toolIndex != 4) {
         CommitTextEdit();
     }
 
-    Tool next = Tool::None;
     switch (toolIndex) {
-    case 0: next = Tool::Rectangle; break;
-    case 1: next = Tool::Arrow; break;
-    case 2: next = Tool::Pen; break;
-    case 3: next = Tool::Mosaic; break;
-    case 4: next = Tool::Text; break;
-    default: break;
+    case 0: tool_ = Tool::Rectangle; break;
+    case 1: tool_ = Tool::Arrow; break;
+    case 2: tool_ = Tool::Pen; break;
+    case 3: tool_ = Tool::Mosaic; break;
+    case 4: tool_ = Tool::Text; break;
+    default: tool_ = Tool::None; break;
     }
 
-    tool_ = tool_ == next ? Tool::None : next;
+    detail::gActiveToolIndex = toolIndex >= 0 && toolIndex <= 4 ? toolIndex : -1;
+    InvalidateRect(hwnd_, nullptr, FALSE);
+}
+
+int SnipWindow::UiShapeKind() const { return detail::gShapeKind; }
+void SnipWindow::UiSetShapeKind(int kind) {
+    detail::gShapeKind = std::clamp(kind, 0, 7);
+    UiSetTool(0);
+}
+
+int SnipWindow::UiShapeFillMode() const { return detail::gShapeFillMode; }
+void SnipWindow::UiSetShapeFillMode(int mode) {
+    detail::gShapeFillMode = std::clamp(mode, 0, 2);
+    InvalidateRect(hwnd_, nullptr, FALSE);
+}
+
+int SnipWindow::UiArrowKind() const { return detail::gArrowKind; }
+void SnipWindow::UiSetArrowKind(int kind) {
+    detail::gArrowKind = std::clamp(kind, 0, 6);
+    UiSetTool(1);
+}
+
+int SnipWindow::UiStrokeWidth() const { return detail::gStrokeWidth; }
+void SnipWindow::UiSetStrokeWidth(int width) {
+    detail::gStrokeWidth = std::clamp(width, 1, 12);
     InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
@@ -252,26 +496,12 @@ void SnipWindow::UiSetTextSize(int points) {
     InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
-void SnipWindow::UiUndo() {
-    Undo();
-}
-
-void SnipWindow::UiRedo() {
-    Redo();
-}
-
-void SnipWindow::UiFinish(FinishAction action) {
-    Finish(action);
-}
-
+void SnipWindow::UiUndo() { Undo(); }
+void SnipWindow::UiRedo() { Redo(); }
+void SnipWindow::UiFinish(FinishAction action) { Finish(action); }
 void SnipWindow::UiCancel() {
-    if (hwnd_) {
-        DestroyWindow(hwnd_);
-    }
+    if (hwnd_) DestroyWindow(hwnd_);
 }
-
-HWND SnipWindow::UiHwnd() const {
-    return hwnd_;
-}
+HWND SnipWindow::UiHwnd() const { return hwnd_; }
 
 }  // namespace snaplite
