@@ -1,6 +1,8 @@
 #pragma once
 
 #include <windows.h>
+#include <objidl.h>
+#include <propidl.h>
 #include <gdiplus.h>
 #include <cwchar>
 
@@ -29,7 +31,7 @@ inline COLORREF SetTextColorThemed(HDC dc, COLORREF color) {
 inline bool IsToolbarWindow(HWND hwnd) {
     if (!hwnd) return false;
     wchar_t name[96]{};
-    if (!GetClassNameW(hwnd, name, static_cast<int>(std::size(name)))) return false;
+    if (!GetClassNameW(hwnd, name, static_cast<int>(_countof(name)))) return false;
     return wcscmp(name, L"SnapLiteEditorToolbarChild") == 0;
 }
 
