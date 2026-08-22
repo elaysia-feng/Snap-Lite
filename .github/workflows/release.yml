@@ -1,33 +1,40 @@
 name: release
 
-# v1.2.0 release trigger
 on:
   push:
     branches: [main]
     paths:
-      - 'src/**'
-      - 'resources/**'
-      - 'CMakeLists.txt'
-      - '.github/workflows/release.yml'
+      - '.release/**'
   workflow_dispatch:
 
 permissions:
   contents: write
 
 concurrency:
-  group: snaplite-v1.2.0-release
-  cancel-in-progress: true
+  group: snaplite-release
+  cancel-in-progress: false
 
 jobs:
   release:
     runs-on: windows-latest
-    env:
-      VERSION: 1.2.0
-      TAG: v1.2.0
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read version
+        id: version
+        shell: pwsh
+        run: |
+          $cmake = Get-Content CMakeLists.txt -Raw
+          if ($cmake -notmatch 'project\(SnapLite VERSION ([0-9]+\.[0-9]+\.[0-9]+)') {
+            throw 'Could not read SnapLite version from CMakeLists.txt'
+          }
+          $version = $Matches[1]
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "tag=v$version" >> $env:GITHUB_OUTPUT
 
       - name: Configure
         run: cmake -S . -B build -A x64
@@ -37,6 +44,8 @@ jobs:
 
       - name: Prepare package
         shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           Copy-Item build/Release/SnapLite.exe dist/SnapLite.exe
@@ -44,35 +53,33 @@ jobs:
           $hash = (Get-FileHash dist/SnapLite.exe -Algorithm SHA256).Hash.ToLower()
           "$hash  SnapLite.exe" | Out-File dist/SHA256SUMS.txt -Encoding ascii
 
-      - name: Move release tag to current build
+      - name: Create immutable release tag
         shell: pwsh
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
         run: |
-          git tag -f "$env:TAG" "$env:GITHUB_SHA"
-          git push origin "refs/tags/$env:TAG" --force
+          git fetch --tags --force
+          if (git tag --list "$env:TAG") {
+            throw "Release tag $env:TAG already exists; bump the project version before publishing."
+          }
+          git tag "$env:TAG" "$env:GITHUB_SHA"
+          git push origin "refs/tags/$env:TAG"
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v3
         with:
-          tag_name: ${{ env.TAG }}
+          tag_name: ${{ steps.version.outputs.tag }}
           target_commitish: ${{ github.sha }}
-          name: Snap-Lite v1.2.0
+          name: Snap-Lite v${{ steps.version.outputs.version }}
           prerelease: false
           generate_release_notes: true
           fail_on_unmatched_files: true
-          overwrite_files: true
           body: |
-            Snap-Lite v1.2.0
+            Snap-Lite v${{ steps.version.outputs.version }}
 
-            本次更新：
-            - 重做截图编辑工具栏，升级为蓝白二次元科技风并重新分组
-            - 所有工具按钮加入 hover 用途提示和快捷键说明
-            - 恢复颜色选择，并应用到矩形、箭头、画笔和文字
-            - 文字输入改为透明背景，支持 12 / 14 / 16 / 20 / 24 / 32 / 48 pt 字号
-            - 编辑工具栏新增“另存为”，可自选文件名和位置
-            - 托盘菜单新增“设置默认保存目录”，配置会持久化到当前用户
-            - 保留开机自启动、内存限制、F1 截图、F3 贴图、多显示器、高 DPI 和 AI CLI 图片粘贴
+            本次版本以当前 main 的功能和修复为准。
             - Windows 11 x64
           files: |
             dist/SnapLite.exe
-            dist/SnapLite-${{ env.VERSION }}-win-x64.zip
+            dist/SnapLite-${{ steps.version.outputs.version }}-win-x64.zip
             dist/SHA256SUMS.txt
