@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: write
+
 jobs:
   windows:
     runs-on: windows-latest
@@ -12,6 +15,39 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.head_ref || github.ref_name }}
+          fetch-depth: 0
+
+      - name: Repair generated ICO header
+        if: github.event_name == 'pull_request' && github.head_ref == 'agent/stability-fix-all'
+        shell: pwsh
+        run: |
+          $path = 'resources/SnapLite.ico'
+          $bytes = [System.IO.File]::ReadAllBytes($path)
+          if ($bytes.Length -lt 6) { throw 'Invalid ICO header.' }
+          $count = [BitConverter]::ToUInt16($bytes, 4)
+          if ($count -lt 1 -or $bytes.Length -lt (6 + 16 * $count)) { throw 'Invalid ICO directory.' }
+          $changed = $false
+          for ($i = 0; $i -lt $count; $i++) {
+            $entry = 6 + 16 * $i
+            $planes = [BitConverter]::ToUInt16($bytes, $entry + 4)
+            if ($planes -eq 0) {
+              $bytes[$entry + 4] = 1
+              $bytes[$entry + 5] = 0
+              $changed = $true
+            } elseif ($planes -ne 1) {
+              throw "Unexpected ICO planes value $planes at entry $i"
+            }
+          }
+          if ($changed) {
+            [System.IO.File]::WriteAllBytes($path, $bytes)
+            git config user.name 'Snap-Lite CI'
+            git config user.email 'actions@users.noreply.github.com'
+            git add resources/SnapLite.ico
+            git commit -m 'Fix Windows icon resource format'
+            git push origin HEAD:${{ github.head_ref }}
+          }
 
       - name: Source invariants
         shell: pwsh
