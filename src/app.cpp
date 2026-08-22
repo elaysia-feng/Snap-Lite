@@ -25,10 +25,99 @@ constexpr UINT CMD_FULLSCREEN = 1002;
 constexpr UINT CMD_PIN = 1003;
 constexpr UINT CMD_OPEN_FOLDER = 1004;
 constexpr UINT CMD_EXIT = 1005;
+constexpr UINT CMD_AUTOSTART = 1006;
+
+constexpr wchar_t kRunKey[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+constexpr wchar_t kRunValue[] = L"Snap-Lite";
 
 HICON LoadAppIcon(HINSTANCE instance) {
     HICON icon = LoadIconW(instance, MAKEINTRESOURCEW(IDI_SNAPLITE));
     return icon ? icon : LoadIconW(nullptr, IDI_APPLICATION);
+}
+
+std::wstring CurrentExecutableCommand() {
+    wchar_t path[32768]{};
+    constexpr DWORD capacity = static_cast<DWORD>(sizeof(path) / sizeof(path[0]));
+    const DWORD length = GetModuleFileNameW(nullptr, path, capacity);
+    if (length == 0 || length >= capacity) {
+        return {};
+    }
+    return L"\"" + std::wstring(path, length) + L"\"";
+}
+
+bool IsStartupEnabled() {
+    HKEY key{};
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, kRunKey, 0, KEY_QUERY_VALUE, &key) != ERROR_SUCCESS) {
+        return false;
+    }
+
+    wchar_t value[32768]{};
+    DWORD type = 0;
+    DWORD bytes = sizeof(value);
+    const LONG result = RegQueryValueExW(
+        key,
+        kRunValue,
+        nullptr,
+        &type,
+        reinterpret_cast<BYTE*>(value),
+        &bytes);
+    RegCloseKey(key);
+
+    if (result != ERROR_SUCCESS || type != REG_SZ) {
+        return false;
+    }
+
+    const std::wstring expected = CurrentExecutableCommand();
+    return !expected.empty() && _wcsicmp(value, expected.c_str()) == 0;
+}
+
+bool SetStartupEnabled(bool enabled) {
+    HKEY key{};
+    if (RegCreateKeyExW(
+            HKEY_CURRENT_USER,
+            kRunKey,
+            0,
+            nullptr,
+            0,
+            KEY_SET_VALUE | KEY_QUERY_VALUE,
+            nullptr,
+            &key,
+            nullptr) != ERROR_SUCCESS) {
+        return false;
+    }
+
+    LONG result = ERROR_SUCCESS;
+    if (enabled) {
+        const std::wstring command = CurrentExecutableCommand();
+        if (command.empty()) {
+            RegCloseKey(key);
+            return false;
+        }
+        result = RegSetValueExW(
+            key,
+            kRunValue,
+            0,
+            REG_SZ,
+            reinterpret_cast<const BYTE*>(command.c_str()),
+            static_cast<DWORD>((command.size() + 1) * sizeof(wchar_t)));
+    } else {
+        result = RegDeleteValueW(key, kRunValue);
+        if (result == ERROR_FILE_NOT_FOUND) {
+            result = ERROR_SUCCESS;
+        }
+    }
+
+    RegCloseKey(key);
+    return result == ERROR_SUCCESS;
+}
+
+void TrimWorkingSet() {
+    // Do not free live objects here. This only asks Windows to reclaim resident
+    // pages which are no longer actively used after capture/encoding work.
+    SetProcessWorkingSetSize(
+        GetCurrentProcess(),
+        static_cast<SIZE_T>(-1),
+        static_cast<SIZE_T>(-1));
 }
 }
 
@@ -103,6 +192,7 @@ bool App::Initialize() {
         ShowNotice(L"部分全局快捷键注册失败，可能被其他程序占用");
     }
 
+    TrimWorkingSet();
     return true;
 }
 
@@ -167,6 +257,11 @@ void App::ShowTrayMenu() {
     AppendMenuW(menu, MF_STRING, CMD_FULLSCREEN, L"全屏截图\tCtrl+Shift+F");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, CMD_OPEN_FOLDER, L"打开截图目录");
+    AppendMenuW(
+        menu,
+        MF_STRING | (IsStartupEnabled() ? MF_CHECKED : MF_UNCHECKED),
+        CMD_AUTOSTART,
+        L"开机自启动");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, CMD_EXIT, L"退出 Snap-Lite");
 
@@ -197,6 +292,7 @@ void App::StartSnip() {
                 } else {
                     ShowNotice(L"截图保存失败");
                 }
+                TrimWorkingSet();
                 return;
             }
 
@@ -251,6 +347,8 @@ void App::CommitCapture(HBITMAP bitmap) {
     } else {
         ShowNotice(L"截图处理失败");
     }
+
+    TrimWorkingSet();
 }
 
 LRESULT App::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
@@ -287,6 +385,15 @@ LRESULT App::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
         case CMD_OPEN_FOLDER:
             ShellExecuteW(hwnd_, L"open", ScreenshotDirectory().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
             return 0;
+        case CMD_AUTOSTART: {
+            const bool next = !IsStartupEnabled();
+            if (SetStartupEnabled(next)) {
+                ShowNotice(next ? L"已开启开机自启动" : L"已关闭开机自启动");
+            } else {
+                ShowNotice(L"修改开机自启动失败");
+            }
+            return 0;
+        }
         case CMD_EXIT:
             DestroyWindow(hwnd_);
             return 0;
