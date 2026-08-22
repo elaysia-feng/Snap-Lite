@@ -69,13 +69,21 @@ public:
     static bool Register(HINSTANCE instance);
     static bool Start(HINSTANCE instance, HWND owner, CaptureCallback callback);
 
-    // UI bridge used by the floating anime-style editor toolbar. Keeping this
-    // bridge small means the capture/selection implementation stays isolated.
     bool UiHasSelection() const;
     RECT UiSelectionRect() const;
     RECT UiLegacyToolbarRect() const;
     int UiActiveTool() const;
     void UiSetTool(int toolIndex);
+
+    int UiShapeKind() const;
+    void UiSetShapeKind(int kind);
+    int UiShapeFillMode() const;
+    void UiSetShapeFillMode(int mode);
+    int UiArrowKind() const;
+    void UiSetArrowKind(int kind);
+    int UiStrokeWidth() const;
+    void UiSetStrokeWidth(int width);
+
     COLORREF UiColor() const;
     void UiSetColor(COLORREF color);
     int UiTextSize() const;
