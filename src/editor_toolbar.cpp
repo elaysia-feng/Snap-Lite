@@ -1,5 +1,6 @@
 #include "anime_toolbar.h"
 #include "snip_window.h"
+#include "toolbar_icon_render_gdi.h"
 
 #include <commctrl.h>
 #include <commdlg.h>
@@ -64,6 +65,8 @@ struct TextItem {
     HFONT font{};
     std::wstring text;
     std::wstring editBackup;
+    COLORREF editBackupColor{RGB(235, 70, 70)};
+    int editBackupSizePt{16};
     POINT origin{};
     COLORREF color{RGB(235, 70, 70)};
     int sizePt{16};
@@ -216,24 +219,82 @@ public:
 
     void AttachToolbar(HWND child) {
         toolbar_ = child;
+        ApplyRoundedRegion();
         UpdatePosition();
     }
 
+    bool HasSecondaryOptions() const {
+        return category_ == Category::Shape || category_ == Category::Arrow ||
+               category_ == Category::Pen || category_ == Category::Text;
+    }
+
+    int DesiredHeight() const {
+        return HasSecondaryOptions() ? kToolbarHeight : kPrimaryHeight;
+    }
+
+    bool SelectionDragActive() const {
+        return parent_ && GetCapture() == parent_ && snip_ && snip_->UiActiveTool() < 0;
+    }
+
+    void ApplyRoundedRegion() {
+        if (!toolbar_) return;
+        RECT client{};
+        if (!GetClientRect(toolbar_, &client)) return;
+        const int width = std::max(1L, client.right - client.left);
+        const int height = std::max(1L, client.bottom - client.top);
+        const int ellipse = height <= kPrimaryHeight ? 18 : 16;
+        HRGN region = CreateRoundRectRgn(0, 0, width + 1, height + 1, ellipse, ellipse);
+        if (region && SetWindowRgn(toolbar_, region, TRUE) == 0) {
+            DeleteObject(region);
+        }
+    }
+
+    void HideToolbarAndRestoreBackground() {
+        if (!toolbar_ || !IsWindowVisible(toolbar_)) return;
+        RECT screenRect{};
+        if (!GetWindowRect(toolbar_, &screenRect)) {
+            ShowWindow(toolbar_, SW_HIDE);
+            return;
+        }
+        POINT topLeft{screenRect.left, screenRect.top};
+        POINT bottomRight{screenRect.right, screenRect.bottom};
+        ScreenToClient(parent_, &topLeft);
+        ScreenToClient(parent_, &bottomRight);
+        RECT dirty{topLeft.x, topLeft.y, bottomRight.x, bottomRight.y};
+        ShowWindow(toolbar_, SW_HIDE);
+        InflateRect(&dirty, 3, 3);
+        RedrawWindow(parent_, &dirty, nullptr,
+                     RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOCHILDREN);
+    }
+
     void UpdatePosition() {
-        if (!toolbar_ || !snip_ || !snip_->UiHasSelection()) return;
+        if (!toolbar_ || !snip_) return;
+        if (!snip_->UiHasSelection()) {
+            HideToolbarAndRestoreBackground();
+            return;
+        }
+        if (SelectionDragActive()) {
+            HideToolbarAndRestoreBackground();
+            return;
+        }
+
         const RECT selection = snip_->UiSelectionRect();
         const RECT legacy = snip_->UiLegacyToolbarRect();
         RECT client{};
         GetClientRect(parent_, &client);
+        const int height = DesiredHeight();
 
         int x = static_cast<int>(legacy.left);
         int y = static_cast<int>(legacy.top);
-        if (legacy.top < selection.top) y = static_cast<int>(legacy.bottom) - kToolbarHeight;
+        if (legacy.top < selection.top) {
+            y = static_cast<int>(legacy.bottom) - height;
+        }
         x = std::clamp(x, 6, std::max(6, static_cast<int>(client.right) - kToolbarWidth - 6));
-        y = std::clamp(y, 6, std::max(6, static_cast<int>(client.bottom) - kToolbarHeight - 6));
+        y = std::clamp(y, 6, std::max(6, static_cast<int>(client.bottom) - height - 6));
 
-        SetWindowPos(toolbar_, HWND_TOP, x, y, kToolbarWidth, kToolbarHeight,
+        SetWindowPos(toolbar_, HWND_TOP, x, y, kToolbarWidth, height,
                      SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        ApplyRoundedRegion();
     }
 
     void SyncCategoryFromTool() {
@@ -243,6 +304,7 @@ public:
             const Category next = static_cast<Category>(tool + 1);
             if (next != category_) {
                 category_ = next;
+                UpdatePosition();
                 InvalidateRect(toolbar_, nullptr, FALSE);
             }
         }
@@ -310,8 +372,9 @@ public:
             redoActions_.clear();
         }
 
-        if (message == WM_PAINT || message == WM_MOUSEMOVE || message == WM_LBUTTONUP ||
-            message == WM_KEYDOWN || message == WM_SIZE || message == WM_DPICHANGED) {
+        if (message == WM_PAINT || message == WM_LBUTTONDOWN || message == WM_MOUSEMOVE ||
+            message == WM_LBUTTONUP || message == WM_KEYDOWN || message == WM_SIZE ||
+            message == WM_DPICHANGED) {
             SyncCategoryFromTool();
             UpdatePosition();
         }
@@ -369,8 +432,24 @@ public:
         if (!item) return DefWindowProcW(hwnd, message, wParam, lParam);
 
         switch (message) {
-        case WM_ERASEBKGND:
+        case WM_ERASEBKGND: {
+            // Repaint the real capture pixels under a transparent EDIT control.
+            // This makes Backspace/Delete erase glyphs immediately instead of
+            // leaving stale text until editing ends.
+            HDC dc = reinterpret_cast<HDC>(wParam);
+            RECT client{};
+            GetClientRect(hwnd, &client);
+            HBITMAP capture = snip_ ? snip_->UiCaptureBitmap() : nullptr;
+            HDC source = capture ? CreateCompatibleDC(dc) : nullptr;
+            if (source) {
+                const HGDIOBJ old = SelectObject(source, capture);
+                BitBlt(dc, 0, 0, client.right, client.bottom,
+                       source, item->origin.x, item->origin.y, SRCCOPY);
+                SelectObject(source, old);
+                DeleteDC(source);
+            }
             return 1;
+        }
         case WM_CTLCOLOREDIT: {
             HDC dc = reinterpret_cast<HDC>(wParam);
             SetTextColor(dc, item->color);
@@ -434,10 +513,17 @@ public:
             }
             break;
         case WM_COMMAND:
-            if (item->edit && reinterpret_cast<HWND>(lParam) == item->edit &&
-                HIWORD(wParam) == EN_KILLFOCUS) {
-                CommitTextEdit(item);
-                return 0;
+            if (item->edit && reinterpret_cast<HWND>(lParam) == item->edit) {
+                const WORD notify = HIWORD(wParam);
+                if (notify == EN_UPDATE) {
+                    RedrawWindow(hwnd, nullptr, nullptr,
+                                 RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_ALLCHILDREN);
+                    return 0;
+                }
+                if (notify == EN_KILLFOCUS) {
+                    CommitTextEdit(item);
+                    return 0;
+                }
             }
             break;
         case WM_PAINT:
@@ -452,9 +538,10 @@ public:
     void CommitTextEdit(TextItem* item) {
         if (!item || !item->edit) return;
 
-        const int length = GetWindowTextLengthW(item->edit);
-        std::wstring text(static_cast<size_t>(std::max(0, length)), L'\0');
+        const int length = std::max(0, GetWindowTextLengthW(item->edit));
+        std::wstring text(static_cast<size_t>(length) + 1, L'\0');
         if (length > 0) GetWindowTextW(item->edit, text.data(), length + 1);
+        text.resize(static_cast<size_t>(length));
 
         HWND edit = item->edit;
         item->edit = nullptr;
@@ -483,6 +570,8 @@ public:
     void CancelTextEdit(TextItem* item) {
         if (!item || !item->edit) return;
         const bool wasNew = item->editWasNew;
+        const COLORREF backupColor = item->editBackupColor;
+        const int backupSize = item->editBackupSizePt;
         HWND edit = item->edit;
         item->edit = nullptr;
         RemoveWindowSubclass(edit, EditSubclassProc, kEditSubclassId);
@@ -495,6 +584,9 @@ public:
             return;
         }
         item->text = item->editBackup;
+        item->color = backupColor;
+        item->sizePt = backupSize;
+        RecreateTextFont(item);
         ResizeTextItem(item);
         InvalidateRect(item->hwnd, nullptr, FALSE);
     }
@@ -641,13 +733,13 @@ private:
         }
         const HGDIOBJ oldBitmap = SelectObject(mem, bitmap);
         RECT all{0, 0, kToolbarWidth, kToolbarHeight};
-        HBRUSH background = CreateSolidBrush(RGB(250, 250, 251));
+        HBRUSH background = CreateSolidBrush(RGB(252, 250, 247));
         FillRect(mem, &all, background);
         DeleteObject(background);
 
         Gdiplus::Graphics g(mem);
         g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
-        Gdiplus::Pen divider(Gdiplus::Color(255, 229, 230, 233), 1.0f);
+        Gdiplus::Pen divider(Gdiplus::Color(255, 232, 226, 219), 1.0f);
         g.DrawLine(&divider, 10.0f, static_cast<float>(kPrimaryHeight),
                    static_cast<float>(kToolbarWidth - 10), static_cast<float>(kPrimaryHeight));
         g.DrawLine(&divider, 10.0f, static_cast<float>(kPrimaryHeight + kSecondaryHeight),
@@ -666,11 +758,11 @@ private:
                 FillRoundRect(g,
                     Gdiplus::RectF(static_cast<float>(r.left), static_cast<float>(r.top),
                                    static_cast<float>(r.right-r.left), static_cast<float>(r.bottom-r.top)),
-                    7.0f, active ? Gdiplus::Color(255, 232, 236, 244)
-                                 : Gdiplus::Color(255, 241, 242, 244));
+                    7.0f, active ? Gdiplus::Color(255, 240, 233, 224)
+                                 : Gdiplus::Color(255, 247, 243, 238));
             }
-            SetTextColor(mem, active ? RGB(63, 78, 104) : RGB(65, 66, 70));
-            DrawTextW(mem, kToolLabels[i], -1, &r, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            SetTextColor(mem, active ? RGB(99, 82, 62) : RGB(58, 56, 53));
+            toolbaricons_gdi::DrawTextOrIcon(mem, kToolLabels[i], -1, &r, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         }
 
         for (int i = 0; i < static_cast<int>(kActionLabels.size()); ++i) {
@@ -681,12 +773,12 @@ private:
                     Gdiplus::RectF(static_cast<float>(r.left), static_cast<float>(r.top),
                                    static_cast<float>(r.right-r.left), static_cast<float>(r.bottom-r.top)),
                     7.0f, static_cast<PrimaryAction>(i) == PrimaryAction::Cancel
-                              ? Gdiplus::Color(255, 250, 236, 236)
-                              : Gdiplus::Color(255, 241, 242, 244));
+                              ? Gdiplus::Color(255, 251, 237, 235)
+                              : Gdiplus::Color(255, 247, 243, 238));
             }
             SetTextColor(mem, static_cast<PrimaryAction>(i) == PrimaryAction::Cancel
-                                  ? RGB(170, 72, 72) : RGB(72, 73, 77));
-            DrawTextW(mem, kActionLabels[i], -1, &r, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                                  ? RGB(196, 76, 72) : RGB(70, 67, 63));
+            toolbaricons_gdi::DrawTextOrIcon(mem, kActionLabels[i], -1, &r, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         }
 
         const auto items = BuildSecondary(category_);
@@ -704,8 +796,8 @@ private:
                 Gdiplus::SolidBrush swatch(Gdiplus::Color(
                     255, GetRValue(item.color), GetGValue(item.color), GetBValue(item.color)));
                 g.FillEllipse(&swatch, cx - 6.0f, cy - 6.0f, 12.0f, 12.0f);
-                Gdiplus::Pen border(selected ? Gdiplus::Color(255, 75, 94, 128)
-                                             : Gdiplus::Color(255, 190, 192, 197),
+                Gdiplus::Pen border(selected ? Gdiplus::Color(255, 151, 128, 99)
+                                             : Gdiplus::Color(255, 198, 190, 181),
                                     selected ? 2.0f : 1.0f);
                 g.DrawEllipse(&border, cx - 7.0f, cy - 7.0f, 14.0f, 14.0f);
                 continue;
@@ -715,22 +807,31 @@ private:
                 FillRoundRect(g,
                     Gdiplus::RectF(static_cast<float>(r.left), static_cast<float>(r.top),
                                    static_cast<float>(r.right-r.left), static_cast<float>(r.bottom-r.top)),
-                    6.0f, selected ? Gdiplus::Color(255, 230, 235, 245)
-                                    : hovered ? Gdiplus::Color(255, 240, 241, 243)
-                                              : Gdiplus::Color(255, 247, 247, 248));
+                    6.0f, selected ? Gdiplus::Color(255, 239, 232, 222)
+                                    : hovered ? Gdiplus::Color(255, 247, 243, 238)
+                                              : Gdiplus::Color(255, 252, 250, 247));
             }
-            SetTextColor(mem, selected ? RGB(59, 76, 108) : RGB(78, 79, 84));
-            DrawTextW(mem, item.label.c_str(), -1, &r,
+            SetTextColor(mem, selected ? RGB(105, 84, 62) : RGB(82, 78, 73));
+            toolbaricons_gdi::DrawTextOrIcon(mem, item.label.c_str(), -1, &r,
                       DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
         }
 
         RECT hint{kPad, kPrimaryHeight + kSecondaryHeight, kToolbarWidth-kPad, kToolbarHeight};
-        SetTextColor(mem, RGB(116, 117, 122));
+        SetTextColor(mem, RGB(137, 128, 118));
         DrawTextW(mem, HintText().c_str(), -1, &hint,
                   DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 
         SelectObject(mem, oldFont);
         BitBlt(dc, 0, 0, kToolbarWidth, kToolbarHeight, mem, 0, 0, SRCCOPY);
+        RECT client{};
+        GetClientRect(hwnd, &client);
+        HPEN border = CreatePen(PS_SOLID, 1, RGB(229, 223, 216));
+        const HGDIOBJ oldPen = SelectObject(dc, border);
+        const HGDIOBJ oldBrush = SelectObject(dc, GetStockObject(NULL_BRUSH));
+        RoundRect(dc, 0, 0, client.right, client.bottom, 18, 18);
+        SelectObject(dc, oldBrush);
+        SelectObject(dc, oldPen);
+        DeleteObject(border);
         SelectObject(mem, oldBitmap);
         DeleteObject(bitmap);
         DeleteDC(mem);
@@ -748,6 +849,7 @@ private:
         case Category::Text: snip_->UiSetTool(4); break;
         case Category::Select: snip_->UiSetTool(-1); break;
         }
+        UpdatePosition();
         InvalidateRect(toolbar_, nullptr, FALSE);
     }
 
@@ -776,11 +878,16 @@ private:
 
     void ApplyColor(COLORREF color) {
         if (selectedText_) {
-            const auto before = SnapshotTextStates();
+            const bool editing = selectedText_->edit != nullptr;
+            const auto before = editing ? std::vector<TextState>{} : SnapshotTextStates();
             selectedText_->color = color;
-            if (selectedText_->edit) InvalidateRect(selectedText_->edit, nullptr, TRUE);
-            InvalidateRect(selectedText_->hwnd, nullptr, FALSE);
-            RecordTextAction(before, SnapshotTextStates());
+            if (selectedText_->edit) {
+                RedrawWindow(selectedText_->hwnd, nullptr, nullptr,
+                             RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_ALLCHILDREN);
+            } else {
+                InvalidateRect(selectedText_->hwnd, nullptr, FALSE);
+                RecordTextAction(before, SnapshotTextStates());
+            }
         }
         snip_->UiSetColor(color);
         InvalidateRect(toolbar_, nullptr, FALSE);
@@ -788,15 +895,19 @@ private:
 
     void ApplyTextSize(int points) {
         if (selectedText_) {
-            const auto before = SnapshotTextStates();
+            const bool editing = selectedText_->edit != nullptr;
+            const auto before = editing ? std::vector<TextState>{} : SnapshotTextStates();
             selectedText_->sizePt = std::clamp(points, 10, 72);
             RecreateTextFont(selectedText_);
             ResizeTextItem(selectedText_);
             if (selectedText_->edit && selectedText_->font) {
                 SendMessageW(selectedText_->edit, WM_SETFONT,
                              reinterpret_cast<WPARAM>(selectedText_->font), TRUE);
+                RedrawWindow(selectedText_->hwnd, nullptr, nullptr,
+                             RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_ALLCHILDREN);
+            } else {
+                RecordTextAction(before, SnapshotTextStates());
             }
-            RecordTextAction(before, SnapshotTextStates());
         }
         snip_->UiSetTextSize(points);
         InvalidateRect(toolbar_, nullptr, FALSE);
@@ -936,6 +1047,8 @@ private:
         SelectText(item);
         if (!preserveBefore) item->editBefore = SnapshotTextStates();
         item->editBackup = item->text;
+        item->editBackupColor = item->color;
+        item->editBackupSizePt = item->sizePt;
         EnsureTextFont(item);
 
         RECT client{};
@@ -1115,7 +1228,10 @@ private:
         overlays.reserve(texts_.size());
         for (const auto& item : texts_) {
             if (item->text.empty()) continue;
-            overlays.push_back({item->text, item->origin, item->color, item->sizePt});
+            // PaintTextItem renders committed text with this content inset.
+            // Bake using the same coordinates so saved/copied images match preview.
+            overlays.push_back({item->text, {item->origin.x + 4, item->origin.y + 2},
+                                item->color, item->sizePt});
         }
         return overlays;
     }
@@ -1248,8 +1364,8 @@ void AnimeToolbar::ShowForSnip(HINSTANCE instance) {
         WS_EX_NOACTIVATE,
         kToolbarClass,
         L"",
-        WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
-        0, 0, kToolbarWidth, kToolbarHeight,
+        WS_CHILD | WS_CLIPSIBLINGS,
+        0, 0, kToolbarWidth, kPrimaryHeight,
         parent,
         nullptr,
         instance,

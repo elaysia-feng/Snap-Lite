@@ -9,9 +9,11 @@
 #include <commdlg.h>
 #include <shellapi.h>
 #include <shlobj.h>
+#include <shobjidl.h>
 
 #include <filesystem>
 #include <string>
+#include <vector>
 
 namespace snaplite {
 namespace {
@@ -116,39 +118,58 @@ bool SetStartupEnabled(bool enabled) {
     return result == ERROR_SUCCESS;
 }
 
-int CALLBACK BrowseFolderCallback(HWND hwnd, UINT message, LPARAM, LPARAM data) {
-    if (message == BFFM_INITIALIZED && data) {
-        SendMessageW(hwnd, BFFM_SETSELECTIONW, TRUE, data);
-    }
-    return 0;
-}
-
 std::filesystem::path ChooseScreenshotFolder(HWND owner) {
-    const std::wstring initial = ConfiguredScreenshotDirectory().wstring();
-    BROWSEINFOW browse{};
-    browse.hwndOwner = owner;
-    browse.lpszTitle = L"选择 Snap-Lite 默认截图保存目录";
-    browse.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
-    browse.lpfn = BrowseFolderCallback;
-    browse.lParam = reinterpret_cast<LPARAM>(initial.c_str());
+    const HRESULT init = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+    const bool shouldUninitialize = SUCCEEDED(init);
 
-    PIDLIST_ABSOLUTE item = SHBrowseForFolderW(&browse);
-    if (!item) {
+    IFileOpenDialog* dialog = nullptr;
+    HRESULT hr = CoCreateInstance(
+        CLSID_FileOpenDialog,
+        nullptr,
+        CLSCTX_INPROC_SERVER,
+        IID_PPV_ARGS(&dialog));
+    if (FAILED(hr) || !dialog) {
+        if (shouldUninitialize) CoUninitialize();
         return {};
     }
 
-    wchar_t path[MAX_PATH]{};
-    const bool ok = SHGetPathFromIDListW(item, path) != FALSE;
-    CoTaskMemFree(item);
-    return ok ? std::filesystem::path(path) : std::filesystem::path{};
+    DWORD options = 0;
+    if (SUCCEEDED(dialog->GetOptions(&options))) {
+        dialog->SetOptions(options | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST);
+    }
+    dialog->SetTitle(L"选择 Snap-Lite 默认截图保存目录");
+
+    const std::filesystem::path initial = ConfiguredScreenshotDirectory();
+    IShellItem* initialItem = nullptr;
+    if (SUCCEEDED(SHCreateItemFromParsingName(initial.c_str(), nullptr, IID_PPV_ARGS(&initialItem)))) {
+        dialog->SetFolder(initialItem);
+        initialItem->Release();
+    }
+
+    std::filesystem::path selected;
+    if (SUCCEEDED(dialog->Show(owner))) {
+        IShellItem* item = nullptr;
+        if (SUCCEEDED(dialog->GetResult(&item)) && item) {
+            PWSTR path = nullptr;
+            if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &path)) && path) {
+                selected = path;
+                CoTaskMemFree(path);
+            }
+            item->Release();
+        }
+    }
+
+    dialog->Release();
+    if (shouldUninitialize) CoUninitialize();
+    return selected;
 }
 
 std::filesystem::path ChooseSaveAsPath(HWND owner) {
     const std::filesystem::path suggested = NextConfiguredScreenshotPath();
     const std::wstring initialDirectory = ConfiguredScreenshotDirectory().wstring();
 
-    wchar_t file[MAX_PATH]{};
-    wcsncpy_s(file, suggested.filename().c_str(), _TRUNCATE);
+    std::vector<wchar_t> file(32768, L'\0');
+    wcsncpy_s(file.data(), file.size(), suggested.filename().c_str(), _TRUNCATE);
 
     static constexpr wchar_t filter[] =
         L"PNG 图片 (*.png)\0*.png\0"
@@ -158,8 +179,8 @@ std::filesystem::path ChooseSaveAsPath(HWND owner) {
     dialog.lStructSize = sizeof(dialog);
     dialog.hwndOwner = owner;
     dialog.lpstrFilter = filter;
-    dialog.lpstrFile = file;
-    dialog.nMaxFile = MAX_PATH;
+    dialog.lpstrFile = file.data();
+    dialog.nMaxFile = static_cast<DWORD>(file.size());
     dialog.lpstrInitialDir = initialDirectory.c_str();
     dialog.lpstrDefExt = L"png";
     dialog.Flags = OFN_EXPLORER | OFN_PATHMUSTEXIST | OFN_OVERWRITEPROMPT | OFN_NOCHANGEDIR;
@@ -167,7 +188,7 @@ std::filesystem::path ChooseSaveAsPath(HWND owner) {
     if (!GetSaveFileNameW(&dialog)) {
         return {};
     }
-    return std::filesystem::path(file);
+    return std::filesystem::path(file.data());
 }
 
 void TrimWorkingSet() {
@@ -186,7 +207,12 @@ App::~App() {
 
 bool App::Initialize() {
     singleInstance_ = CreateMutexW(nullptr, TRUE, L"Local\\SnapLiteSingleInstance");
-    if (!singleInstance_ || GetLastError() == ERROR_ALREADY_EXISTS) {
+    if (!singleInstance_) {
+        return false;
+    }
+    if (GetLastError() == ERROR_ALREADY_EXISTS) {
+        CloseHandle(singleInstance_);
+        singleInstance_ = nullptr;
         return false;
     }
 
@@ -333,6 +359,16 @@ void App::ShowTrayMenu() {
 }
 
 void App::StartSnip() {
+    // All annotation state is session-scoped by behavior. Keep one snip window
+    // alive at a time so rapid F1 presses cannot create competing full-screen
+    // overlays or attach the editor toolbar to the wrong window.
+    if (HWND existing = FindWindowW(L"SnapLiteSnipWindow", nullptr)) {
+        ShowWindow(existing, SW_SHOW);
+        SetForegroundWindow(existing);
+        SetFocus(existing);
+        return;
+    }
+
     const bool started = SnipWindow::Start(
         instance_,
         hwnd_,

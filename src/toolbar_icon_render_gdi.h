@@ -267,4 +267,3 @@ inline int DrawTextOrIcon(HDC dc, LPCWSTR text, int count, LPRECT rect, UINT for
 
 } // namespace snaplite::toolbaricons_gdi
 
-#define DrawTextW(...) snaplite::toolbaricons_gdi::DrawTextOrIcon(__VA_ARGS__)

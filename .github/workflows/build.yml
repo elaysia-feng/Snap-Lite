@@ -13,6 +13,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Source invariants
+        shell: pwsh
+        run: |
+          $snip = Get-Content src/snip_window_original.inc -Raw
+          if ($snip.Contains('PaintToolbar(frameDc);')) { throw 'Legacy toolbar paint path is active.' }
+          $editor = Get-Content src/editor_toolbar.cpp -Raw
+          if ($editor.Contains('#define DrawTextW')) { throw 'Toolbar icon macro interception returned.' }
+          if (Test-Path src/editor_window.cpp) { throw 'Dead legacy EditorWindow source returned.' }
+          if (Test-Path .github/workflows/fix-beta2-once.yml) { throw 'One-time source mutation workflow must not ship.' }
+          if (Test-Path .github/workflows/release-beta.yml) { throw 'Beta source-mutation release workflow must not ship.' }
+
       - name: Configure
         run: cmake -S . -B build -A x64
 

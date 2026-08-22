@@ -395,7 +395,10 @@ bool CopyTextToClipboard(HWND owner, const std::wstring& text) {
         return false;
     }
 
-    EmptyClipboard();
+    if (!EmptyClipboard()) {
+        CloseClipboard();
+        return false;
+    }
     const SIZE_T bytes = (text.size() + 1) * sizeof(wchar_t);
     HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, bytes);
     if (!memory) {
@@ -468,7 +471,19 @@ std::filesystem::path NextScreenshotPath() {
         now.wSecond,
         now.wMilliseconds);
 
-    return ScreenshotDirectory() / filename;
+    const std::filesystem::path directory = ScreenshotDirectory();
+    std::filesystem::path candidate = directory / filename;
+    std::error_code error;
+    for (int suffix = 1; std::filesystem::exists(candidate, error) && !error; ++suffix) {
+        wchar_t unique[112]{};
+        swprintf_s(
+            unique,
+            L"SnapLite_%04u-%02u-%02u_%02u-%02u-%02u-%03u-%d.png",
+            now.wYear, now.wMonth, now.wDay,
+            now.wHour, now.wMinute, now.wSecond, now.wMilliseconds, suffix);
+        candidate = directory / unique;
+    }
+    return candidate;
 }
 
 }  // namespace snaplite

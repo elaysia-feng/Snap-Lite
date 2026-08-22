@@ -1,6 +1,18 @@
 cmake_minimum_required(VERSION 3.20)
 project(SnapLite VERSION 1.3.3 LANGUAGES CXX RC)
 
+set(SNAPLITE_NORMALIZED_ICON "${CMAKE_CURRENT_BINARY_DIR}/SnapLite.ico")
+execute_process(
+    COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+            -File "${CMAKE_CURRENT_SOURCE_DIR}/scripts/normalize_ico.ps1"
+            -InputBase64Path "${CMAKE_CURRENT_SOURCE_DIR}/resources/SnapLite-icon.png.b64"
+            -OutputPath "${SNAPLITE_NORMALIZED_ICON}"
+    RESULT_VARIABLE SNAP_LITE_ICON_NORMALIZE_RESULT
+)
+if(NOT SNAP_LITE_ICON_NORMALIZE_RESULT EQUAL 0)
+    message(FATAL_ERROR "Failed to generate Snap-Lite icon resource")
+endif()
+
 configure_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/resources/SnapLite.rc.in
     ${CMAKE_CURRENT_BINARY_DIR}/SnapLite.rc
@@ -13,7 +25,6 @@ add_executable(SnapLite WIN32
     src/editor_toolbar.cpp
     src/capture.cpp
     src/capture_settings.cpp
-    src/editor_window.cpp
     src/pin_window.cpp
     src/snip_window.cpp
     src/snip_text_overlay.cpp
@@ -41,13 +52,6 @@ if(MSVC)
         SOURCE src/snip_window.cpp
         APPEND PROPERTY COMPILE_OPTIONS
         "/FI${CMAKE_CURRENT_SOURCE_DIR}/src/window_bounds_fix.h"
-    )
-    set_property(
-        SOURCE src/editor_toolbar.cpp
-        APPEND PROPERTY COMPILE_OPTIONS
-        "/FI${CMAKE_CURRENT_SOURCE_DIR}/src/toolbar_visual_theme.h"
-        "/FI${CMAKE_CURRENT_SOURCE_DIR}/src/toolbar_icon_render_gdi.h"
-        "/FI${CMAKE_CURRENT_SOURCE_DIR}/src/toolbar_compact_behavior.h"
     )
 endif()
 

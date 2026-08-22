@@ -97,7 +97,19 @@ std::filesystem::path NextConfiguredScreenshotPath() {
         now.wSecond,
         now.wMilliseconds);
 
-    return ConfiguredScreenshotDirectory() / filename;
+    const std::filesystem::path directory = ConfiguredScreenshotDirectory();
+    std::filesystem::path candidate = directory / filename;
+    std::error_code error;
+    for (int suffix = 1; std::filesystem::exists(candidate, error) && !error; ++suffix) {
+        wchar_t unique[112]{};
+        swprintf_s(
+            unique,
+            L"SnapLite_%04u-%02u-%02u_%02u-%02u-%02u-%03u-%d.png",
+            now.wYear, now.wMonth, now.wDay,
+            now.wHour, now.wMinute, now.wSecond, now.wMilliseconds, suffix);
+        candidate = directory / unique;
+    }
+    return candidate;
 }
 
 }  // namespace snaplite

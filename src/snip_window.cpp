@@ -426,5 +426,36 @@ void SnipWindow::UiRedo() { Redo(); }
 void SnipWindow::UiFinish(FinishAction action) { Finish(action); }
 void SnipWindow::UiCancel() { if (hwnd_) DestroyWindow(hwnd_); }
 HWND SnipWindow::UiHwnd() const { return hwnd_; }
+HBITMAP SnipWindow::UiCaptureBitmap() const { return capture_; }
+
+HDC SnipWindow::AcquireFrameBuffer(HDC reference) {
+    if (frameDc_ && frameBitmap_) {
+        return frameDc_;
+    }
+    ReleaseFrameBuffer();
+    frameDc_ = CreateCompatibleDC(reference);
+    frameBitmap_ = frameDc_ ? CreateCompatibleBitmap(reference, screen_.width, screen_.height) : nullptr;
+    if (!frameDc_ || !frameBitmap_) {
+        ReleaseFrameBuffer();
+        return nullptr;
+    }
+    frameOldBitmap_ = SelectObject(frameDc_, frameBitmap_);
+    return frameDc_;
+}
+
+void SnipWindow::ReleaseFrameBuffer() {
+    if (frameDc_ && frameOldBitmap_) {
+        SelectObject(frameDc_, frameOldBitmap_);
+    }
+    frameOldBitmap_ = nullptr;
+    if (frameBitmap_) {
+        DeleteObject(frameBitmap_);
+        frameBitmap_ = nullptr;
+    }
+    if (frameDc_) {
+        DeleteDC(frameDc_);
+        frameDc_ = nullptr;
+    }
+}
 
 }  // namespace snaplite
