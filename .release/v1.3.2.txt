@@ -1,0 +1,8 @@
+Snap-Lite v1.3.2
+
+Warm minimal toolbar visual refresh:
+- warm ivory toolbar surface
+- muted beige selected states
+- softer neutral hover states
+- rounded toolbar region and subtle border
+- keeps compact secondary panel behavior, icon-first controls, editable text annotations, anti-flicker child toolbar, and accurate Win11 window bounds
