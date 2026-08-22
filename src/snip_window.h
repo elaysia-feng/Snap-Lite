@@ -102,6 +102,7 @@ public:
     void UiFinish(FinishAction action);
     void UiCancel();
     HWND UiHwnd() const;
+    HBITMAP UiCaptureBitmap() const;
 
 private:
     enum class Tool {
@@ -136,6 +137,8 @@ private:
     void UpdateHover();
     void EnsureFonts();
     void Paint();
+    HDC AcquireFrameBuffer(HDC reference);
+    void ReleaseFrameBuffer();
     void PaintMagnifier(HDC dc, POINT clientPoint);
     void PaintSelection(HDC dc);
     void PaintHint(HDC dc);
@@ -176,6 +179,9 @@ private:
     HWND owner_{};
     HWND hwnd_{};
     HBITMAP capture_{};
+    HDC frameDc_{};
+    HBITMAP frameBitmap_{};
+    HGDIOBJ frameOldBitmap_{};
     VirtualScreen screen_{};
     CaptureCallback callback_;
 

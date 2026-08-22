@@ -1,6 +1,0 @@
-Snap-Lite v1.3.3-beta.2
-
-Beta verification:
-- remove legacy dark toolbar
-- repaint transparent text edits immediately on delete
-- keep F1 clean capture state and drag ghosting fixes

@@ -11,7 +11,9 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#include <cstdint>
 #include <filesystem>
+#include <limits>
 #include <unordered_map>
 #include <vector>
 
@@ -396,7 +398,38 @@ HBITMAP BitmapFromDibClipboard(UINT format) {
     }
 
     const auto* header = reinterpret_cast<const BITMAPINFOHEADER*>(base);
-    if (header->biSize < sizeof(BITMAPINFOHEADER) || header->biWidth == 0 || header->biHeight == 0) {
+    if (header->biSize < sizeof(BITMAPINFOHEADER) ||
+        static_cast<SIZE_T>(header->biSize) > totalBytes ||
+        header->biPlanes != 1 ||
+        header->biWidth <= 0 ||
+        header->biHeight == 0 ||
+        header->biHeight == std::numeric_limits<LONG>::min()) {
+        GlobalUnlock(memory);
+        return nullptr;
+    }
+
+    const WORD bitCount = header->biBitCount;
+    const bool supportedBitCount =
+        bitCount == 1 || bitCount == 4 || bitCount == 8 ||
+        bitCount == 16 || bitCount == 24 || bitCount == 32;
+    const bool supportedCompression =
+        header->biCompression == BI_RGB || header->biCompression == BI_BITFIELDS
+#ifdef BI_ALPHABITFIELDS
+        || header->biCompression == BI_ALPHABITFIELDS
+#endif
+        ;
+    if (!supportedBitCount || !supportedCompression) {
+        GlobalUnlock(memory);
+        return nullptr;
+    }
+
+    const std::uint64_t width64 = static_cast<std::uint64_t>(header->biWidth);
+    const std::uint64_t height64 = static_cast<std::uint64_t>(
+        header->biHeight < 0 ? -static_cast<std::int64_t>(header->biHeight)
+                             : static_cast<std::int64_t>(header->biHeight));
+    constexpr std::uint64_t kMaxClipboardDimension = 32768;
+    if (width64 == 0 || height64 == 0 ||
+        width64 > kMaxClipboardDimension || height64 > kMaxClipboardDimension) {
         GlobalUnlock(memory);
         return nullptr;
     }
@@ -425,12 +458,19 @@ HBITMAP BitmapFromDibClipboard(UINT format) {
         return nullptr;
     }
 
-    const int width = std::abs(header->biWidth);
-    const int height = std::abs(header->biHeight);
-    if (width <= 0 || height <= 0) {
+    // For uncompressed/bitfield DIBs, every scanline is DWORD aligned. Validate
+    // that the advertised dimensions actually fit inside the clipboard block
+    // before StretchDIBits sees the foreign buffer.
+    const std::uint64_t bitsPerRow = width64 * bitCount;
+    const std::uint64_t stride64 = ((bitsPerRow + 31u) / 32u) * 4u;
+    if (stride64 == 0 || stride64 > totalBytes - pixelOffset ||
+        height64 > (totalBytes - pixelOffset) / stride64) {
         GlobalUnlock(memory);
         return nullptr;
     }
+
+    const int width = static_cast<int>(width64);
+    const int height = static_cast<int>(height64);
 
     const void* pixels = base + pixelOffset;
     const auto* info = reinterpret_cast<const BITMAPINFO*>(base);
@@ -588,25 +628,35 @@ bool PinWindow::Create(HINSTANCE instance, HBITMAP bitmap) {
         return false;
     }
 
-    const int maxWidth = static_cast<int>(GetSystemMetrics(SM_CXSCREEN) * 0.65);
-    const int maxHeight = static_cast<int>(GetSystemMetrics(SM_CYSCREEN) * 0.65);
+    POINT cursor{};
+    GetCursorPos(&cursor);
+    MONITORINFO monitorInfo{sizeof(monitorInfo)};
+    const HMONITOR monitor = MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST);
+    GetMonitorInfoW(monitor, &monitorInfo);
+    const int workWidth = std::max(1L, monitorInfo.rcWork.right - monitorInfo.rcWork.left);
+    const int workHeight = std::max(1L, monitorInfo.rcWork.bottom - monitorInfo.rcWork.top);
+    const int maxWidth = static_cast<int>(workWidth * 0.65);
+    const int maxHeight = static_cast<int>(workHeight * 0.65);
     self->zoom_ = std::min({1.0,
         static_cast<double>(maxWidth) / self->bitmapWidth_,
         static_cast<double>(maxHeight) / self->bitmapHeight_});
 
     const int width = std::max(1, static_cast<int>(self->bitmapWidth_ * self->zoom_));
     const int height = std::max(1, static_cast<int>(self->bitmapHeight_ * self->zoom_));
-
-    POINT cursor{};
-    GetCursorPos(&cursor);
+    int x = cursor.x + 16;
+    int y = cursor.y + 16;
+    x = std::clamp(x, static_cast<int>(monitorInfo.rcWork.left),
+                   std::max(static_cast<int>(monitorInfo.rcWork.left), static_cast<int>(monitorInfo.rcWork.right) - width));
+    y = std::clamp(y, static_cast<int>(monitorInfo.rcWork.top),
+                   std::max(static_cast<int>(monitorInfo.rcWork.top), static_cast<int>(monitorInfo.rcWork.bottom) - height));
 
     HWND hwnd = CreateWindowExW(
         WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED,
         kPinClass,
         L"Snap-Lite Pin",
         WS_POPUP,
-        cursor.x + 16,
-        cursor.y + 16,
+        x,
+        y,
         width,
         height,
         nullptr,
@@ -655,20 +705,37 @@ bool PinWindow::CreateFromClipboard(HINSTANCE instance) {
 void PinWindow::ResizeForZoom() {
     RECT current{};
     GetWindowRect(hwnd_, &current);
+    const POINT center{
+        static_cast<LONG>((current.left + current.right) / 2),
+        static_cast<LONG>((current.top + current.bottom) / 2)};
 
-    const int width = std::clamp(static_cast<int>(bitmapWidth_ * zoom_), 48, 4096);
-    const int height = std::clamp(static_cast<int>(bitmapHeight_ * zoom_), 48, 4096);
-    const int centerX = static_cast<int>((current.left + current.right) / 2);
-    const int centerY = static_cast<int>((current.top + current.bottom) / 2);
+    MONITORINFO monitorInfo{sizeof(monitorInfo)};
+    const HMONITOR monitor = MonitorFromPoint(center, MONITOR_DEFAULTTONEAREST);
+    GetMonitorInfoW(monitor, &monitorInfo);
+    const int workWidth = std::max(1L, monitorInfo.rcWork.right - monitorInfo.rcWork.left);
+    const int workHeight = std::max(1L, monitorInfo.rcWork.bottom - monitorInfo.rcWork.top);
 
-    SetWindowPos(
-        hwnd_,
-        HWND_TOPMOST,
-        centerX - width / 2,
-        centerY - height / 2,
-        width,
-        height,
-        SWP_NOACTIVATE);
+    // Clamp the zoom itself, not width and height independently, so very wide
+    // or very tall images never get distorted.
+    const double monitorMaxZoom = std::min(
+        static_cast<double>(workWidth) / bitmapWidth_,
+        static_cast<double>(workHeight) / bitmapHeight_);
+    const double hardMaxZoom = std::min(
+        4096.0 / bitmapWidth_,
+        4096.0 / bitmapHeight_);
+    const double maxZoom = std::max(0.01, std::min(8.0, std::min(monitorMaxZoom, hardMaxZoom)));
+    zoom_ = std::clamp(zoom_, 0.01, maxZoom);
+
+    const int width = std::max(1, static_cast<int>(bitmapWidth_ * zoom_));
+    const int height = std::max(1, static_cast<int>(bitmapHeight_ * zoom_));
+    int x = center.x - width / 2;
+    int y = center.y - height / 2;
+    x = std::clamp(x, static_cast<int>(monitorInfo.rcWork.left),
+                   std::max(static_cast<int>(monitorInfo.rcWork.left), static_cast<int>(monitorInfo.rcWork.right) - width));
+    y = std::clamp(y, static_cast<int>(monitorInfo.rcWork.top),
+                   std::max(static_cast<int>(monitorInfo.rcWork.top), static_cast<int>(monitorInfo.rcWork.bottom) - height));
+
+    SetWindowPos(hwnd_, HWND_TOPMOST, x, y, width, height, SWP_NOACTIVATE);
     InvalidateRect(hwnd_, nullptr, FALSE);
 }
 

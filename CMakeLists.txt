@@ -13,7 +13,6 @@ add_executable(SnapLite WIN32
     src/editor_toolbar.cpp
     src/capture.cpp
     src/capture_settings.cpp
-    src/editor_window.cpp
     src/pin_window.cpp
     src/snip_window.cpp
     src/snip_text_overlay.cpp
@@ -41,13 +40,6 @@ if(MSVC)
         SOURCE src/snip_window.cpp
         APPEND PROPERTY COMPILE_OPTIONS
         "/FI${CMAKE_CURRENT_SOURCE_DIR}/src/window_bounds_fix.h"
-    )
-    set_property(
-        SOURCE src/editor_toolbar.cpp
-        APPEND PROPERTY COMPILE_OPTIONS
-        "/FI${CMAKE_CURRENT_SOURCE_DIR}/src/toolbar_visual_theme.h"
-        "/FI${CMAKE_CURRENT_SOURCE_DIR}/src/toolbar_icon_render_gdi.h"
-        "/FI${CMAKE_CURRENT_SOURCE_DIR}/src/toolbar_compact_behavior.h"
     )
 endif()
 

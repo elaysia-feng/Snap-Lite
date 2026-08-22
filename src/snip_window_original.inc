@@ -222,6 +222,7 @@ SnipWindow::SnipWindow(HINSTANCE instance, HWND owner, CaptureCallback callback)
     : instance_(instance), owner_(owner), callback_(std::move(callback)), screen_(GetVirtualScreen()) {}
 
 SnipWindow::~SnipWindow() {
+    ReleaseFrameBuffer();
     if (textEdit_) {
         DestroyWindow(textEdit_);
         textEdit_ = nullptr;
@@ -403,21 +404,10 @@ SnipWindow::DragMode SnipWindow::HitSelection(POINT point) const {
     return PtInRect(&r, point) ? DragMode::Move : DragMode::None;
 }
 
-int SnipWindow::HitToolbar(POINT point) const {
-    if (!selected_) {
-        return -1;
-    }
-    const RECT bar = ToolbarRect();
-    if (!PtInRect(&bar, point)) {
-        return -1;
-    }
-    for (int i = 0; i < kToolbarButtons; ++i) {
-        const RECT button = ToolbarButtonRect(bar, i);
-        if (point.x >= button.left && point.x < button.right) {
-            return i;
-        }
-    }
-    return -1;  // landed on a group divider
+int SnipWindow::HitToolbar(POINT) const {
+    // The child editor toolbar is the only interactive toolbar. Keeping the
+    // legacy hit-test disabled prevents an invisible click target underneath it.
+    return -1;
 }
 
 void SnipWindow::SetCursorForPoint(POINT point) {
@@ -885,21 +875,14 @@ void SnipWindow::Paint() {
     PAINTSTRUCT ps{};
     HDC dc = BeginPaint(hwnd_, &ps);
 
-    HDC frameDc = CreateCompatibleDC(dc);
-    HBITMAP frameBitmap = CreateCompatibleBitmap(dc, screen_.width, screen_.height);
-    if (!frameDc || !frameBitmap) {
-        if (frameBitmap) DeleteObject(frameBitmap);
-        if (frameDc) DeleteDC(frameDc);
+    HDC frameDc = AcquireFrameBuffer(dc);
+    if (!frameDc) {
         EndPaint(hwnd_, &ps);
         return;
     }
-    const HGDIOBJ oldFrame = SelectObject(frameDc, frameBitmap);
 
     HDC captureDc = CreateCompatibleDC(dc);
     if (!captureDc) {
-        SelectObject(frameDc, oldFrame);
-        DeleteObject(frameBitmap);
-        DeleteDC(frameDc);
         EndPaint(hwnd_, &ps);
         return;
     }
@@ -911,7 +894,7 @@ void SnipWindow::Paint() {
     if (selected_) {
         PaintSelection(frameDc);
         PaintPreview(frameDc);
-        PaintToolbar(frameDc);
+        // Legacy toolbar disabled; editor_toolbar.cpp owns the only visible toolbar.
     } else {
         // Same gesture as the selection state, one step earlier: dim the desktop
         // and leave the region under the cursor lit, so what a click would grab
@@ -966,9 +949,6 @@ void SnipWindow::Paint() {
 
     BitBlt(dc, 0, 0, screen_.width, screen_.height, frameDc, 0, 0, SRCCOPY);
 
-    SelectObject(frameDc, oldFrame);
-    DeleteObject(frameBitmap);
-    DeleteDC(frameDc);
     EndPaint(hwnd_, &ps);
 }
 
@@ -1416,11 +1396,7 @@ LRESULT SnipWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
         if (!selected_) {
             UpdateHover();
         } else {
-            const int hovered = HitToolbar(point);
-            if (hovered != hoverToolbar_) {
-                hoverToolbar_ = hovered;
-                InvalidateRect(hwnd_, nullptr, FALSE);
-            }
+            hoverToolbar_ = -1;
             SetCursorForPoint(point);
         }
         return 0;
@@ -1428,19 +1404,8 @@ LRESULT SnipWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
 
     case WM_LBUTTONDOWN: {
         POINT point{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
-        const int toolbarIndex = HitToolbar(point);
-        if (toolbarIndex >= 0) {
-            HandleToolbarClick(toolbarIndex);
-            return 0;
-        }
-        // Group dividers are part of the bar: swallow the click rather than
-        // letting it start a new selection behind the toolbar.
-        if (selected_) {
-            const RECT bar = ToolbarRect();
-            if (PtInRect(&bar, point)) {
-                return 0;
-            }
-        }
+        // Legacy toolbar input is disabled. The visible child toolbar owns
+        // every toolbar click, so the parent must never keep a hidden hot zone.
 
         if (!selected_) {
             BeginSelectionDrag(point);

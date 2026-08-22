@@ -1,3 +1,0 @@
-Snap-Lite v1.3.3-beta.1
-
-Beta verification build for F1 toolbar timing and fast-drag ghosting fixes.
