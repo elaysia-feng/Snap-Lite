@@ -316,14 +316,11 @@ private:
     void SyncCategoryFromTool() {
         if (categoryLocked_) return;
         const int tool = snip_->UiActiveTool();
-        if (tool >= 0 && tool <= 4) {
-            category_ = static_cast<Category>(tool + 1);
-        }
+        if (tool >= 0 && tool <= 4) category_ = static_cast<Category>(tool + 1);
     }
 
     RECT ToolbarRect() const {
         if (!snip_ || !snip_->UiHasSelection()) return {};
-
         const RECT selection = snip_->UiSelectionRect();
         const RECT legacy = snip_->UiLegacyToolbarRect();
         RECT client{};
@@ -331,9 +328,7 @@ private:
 
         int x = static_cast<int>(legacy.left);
         int y = static_cast<int>(legacy.top);
-        if (legacy.top < selection.top) {
-            y = static_cast<int>(legacy.bottom) - kToolbarHeight;
-        }
+        if (legacy.top < selection.top) y = static_cast<int>(legacy.bottom) - kToolbarHeight;
 
         x = std::clamp(x, 6, std::max(6, static_cast<int>(client.right) - kToolbarWidth - 6));
         y = std::clamp(y, 6, std::max(6, static_cast<int>(client.bottom) - kToolbarHeight - 6));
@@ -418,35 +413,43 @@ private:
 
         switch (category) {
         case Category::Select:
-            graphics.DrawLine(&pen, x - 5, y - 7, x + 5, y + 5);
-            graphics.DrawLine(&pen, x - 5, y - 7, x - 1, y + 7);
+            graphics.DrawLine(&pen, x - 5.0f, y - 7.0f, x + 5.0f, y + 5.0f);
+            graphics.DrawLine(&pen, x - 5.0f, y - 7.0f, x - 1.0f, y + 7.0f);
             break;
         case Category::Shape:
-            graphics.DrawRectangle(&pen, x - 6, y - 6, 12, 12);
+            graphics.DrawRectangle(&pen, x - 6.0f, y - 6.0f, 12.0f, 12.0f);
             break;
         case Category::Arrow:
-            graphics.DrawLine(&pen, x - 7, y + 5, x + 5, y - 5);
-            graphics.DrawLine(&pen, x + 5, y - 5, x, y - 5);
-            graphics.DrawLine(&pen, x + 5, y - 5, x + 5, y);
+            graphics.DrawLine(&pen, x - 7.0f, y + 5.0f, x + 5.0f, y - 5.0f);
+            graphics.DrawLine(&pen, x + 5.0f, y - 5.0f, x, y - 5.0f);
+            graphics.DrawLine(&pen, x + 5.0f, y - 5.0f, x + 5.0f, y);
             break;
         case Category::Pen:
-            graphics.DrawLine(&pen, x - 6, y + 6, x + 6, y - 6);
-            graphics.DrawLine(&pen, x - 7, y + 7, x - 2, y + 5);
+            graphics.DrawLine(&pen, x - 6.0f, y + 6.0f, x + 6.0f, y - 6.0f);
+            graphics.DrawLine(&pen, x - 7.0f, y + 7.0f, x - 2.0f, y + 5.0f);
             break;
         case Category::Mosaic:
-            for (int r = 0; r < 2; ++r) for (int c = 0; c < 2; ++c)
-                graphics.FillRectangle(&brush, x - 6 + c * 7, y - 6 + r * 7, 5, 5);
+            for (int r = 0; r < 2; ++r) {
+                for (int c = 0; c < 2; ++c) {
+                    graphics.FillRectangle(
+                        &brush,
+                        x - 6.0f + static_cast<float>(c) * 7.0f,
+                        y - 6.0f + static_cast<float>(r) * 7.0f,
+                        5.0f,
+                        5.0f);
+                }
+            }
             break;
         case Category::Text:
-            graphics.DrawLine(&pen, x - 6, y - 6, x + 6, y - 6);
-            graphics.DrawLine(&pen, x, y - 6, x, y + 7);
+            graphics.DrawLine(&pen, x - 6.0f, y - 6.0f, x + 6.0f, y - 6.0f);
+            graphics.DrawLine(&pen, x, y - 6.0f, x, y + 7.0f);
             break;
         case Category::Pin:
-            graphics.FillRectangle(&brush, x - 5, y - 6, 10, 4);
-            graphics.DrawLine(&pen, x, y - 2, x, y + 7);
+            graphics.FillRectangle(&brush, x - 5.0f, y - 6.0f, 10.0f, 4.0f);
+            graphics.DrawLine(&pen, x, y - 2.0f, x, y + 7.0f);
             break;
         case Category::Actions:
-            graphics.DrawArc(&pen, x - 6, y - 6, 12, 12, 200, 230);
+            graphics.DrawArc(&pen, x - 6.0f, y - 6.0f, 12.0f, 12.0f, 200.0f, 230.0f);
             break;
         }
     }
@@ -476,10 +479,18 @@ private:
         graphics.DrawPath(&border, &bodyPath);
 
         Gdiplus::Pen divider(Gdiplus::Color(255, 232, 233, 236), 1.0f);
-        graphics.DrawLine(&divider, bar.left + 10.0f, bar.top + kPrimaryHeight,
-                          bar.right - 10.0f, bar.top + kPrimaryHeight);
-        graphics.DrawLine(&divider, bar.left + 10.0f, bar.top + kPrimaryHeight + kSecondaryHeight,
-                          bar.right - 10.0f, bar.top + kPrimaryHeight + kSecondaryHeight);
+        graphics.DrawLine(
+            &divider,
+            static_cast<float>(bar.left + 10),
+            static_cast<float>(bar.top + kPrimaryHeight),
+            static_cast<float>(bar.right - 10),
+            static_cast<float>(bar.top + kPrimaryHeight));
+        graphics.DrawLine(
+            &divider,
+            static_cast<float>(bar.left + 10),
+            static_cast<float>(bar.top + kPrimaryHeight + kSecondaryHeight),
+            static_cast<float>(bar.right - 10),
+            static_cast<float>(bar.top + kPrimaryHeight + kSecondaryHeight));
 
         const HGDIOBJ oldFont = SelectObject(dc, font_);
         SetBkMode(dc, TRANSPARENT);
@@ -519,15 +530,15 @@ private:
             const bool hovered = hoverSecondary_ == static_cast<int>(i);
 
             if (item.action == ItemAction::ColorPreset) {
-                const float cx = (rect.left + rect.right) / 2.0f;
-                const float cy = (rect.top + rect.bottom) / 2.0f;
+                const float cx = static_cast<float>(rect.left + rect.right) / 2.0f;
+                const float cy = static_cast<float>(rect.top + rect.bottom) / 2.0f;
                 Gdiplus::SolidBrush swatch(Gdiplus::Color(
                     255, GetRValue(item.color), GetGValue(item.color), GetBValue(item.color)));
-                graphics.FillEllipse(&swatch, cx - 7, cy - 7, 14, 14);
+                graphics.FillEllipse(&swatch, cx - 7.0f, cy - 7.0f, 14.0f, 14.0f);
                 Gdiplus::Pen swatchBorder(
                     selected ? Gdiplus::Color(255, 75, 94, 128) : Gdiplus::Color(255, 190, 192, 197),
                     selected ? 2.0f : 1.0f);
-                graphics.DrawEllipse(&swatchBorder, cx - 8, cy - 8, 16, 16);
+                graphics.DrawEllipse(&swatchBorder, cx - 8.0f, cy - 8.0f, 16.0f, 16.0f);
                 continue;
             }
 
