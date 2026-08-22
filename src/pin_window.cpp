@@ -6,6 +6,7 @@
 #include <gdiplus.h>
 #include <objidl.h>
 #include <shellapi.h>
+#include <windowsx.h>
 
 #include <algorithm>
 #include <cstdlib>
@@ -65,9 +66,11 @@ int HitMenuRow(POINT point) {
 
 BYTE OpacityFromX(int x) {
     const RECT slider = SliderRect();
-    const int clamped = std::clamp(x, slider.left, slider.right);
-    const double ratio = static_cast<double>(clamped - slider.left) /
-                         static_cast<double>(slider.right - slider.left);
+    const int left = static_cast<int>(slider.left);
+    const int right = static_cast<int>(slider.right);
+    const int clamped = std::clamp(x, left, right);
+    const double ratio = static_cast<double>(clamped - left) /
+                         static_cast<double>(right - left);
     const int value = static_cast<int>(kMinOpacity + ratio * (255 - kMinOpacity));
     return static_cast<BYTE>(std::clamp(value, static_cast<int>(kMinOpacity), 255));
 }
@@ -76,7 +79,8 @@ int SliderXFromOpacity(BYTE opacity) {
     const RECT slider = SliderRect();
     const double ratio = static_cast<double>(opacity - kMinOpacity) /
                          static_cast<double>(255 - kMinOpacity);
-    return slider.left + static_cast<int>(ratio * (slider.right - slider.left));
+    return static_cast<int>(slider.left) +
+           static_cast<int>(ratio * (slider.right - slider.left));
 }
 
 void UpdateMenuOpacity(HWND hwnd, PinMenuState* state, int x) {
@@ -121,7 +125,7 @@ void PaintPinMenu(HWND hwnd, PinMenuState* state) {
     DrawTextW(dc, opacityText, -1, &label, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
     const RECT slider = SliderRect();
-    const int centerY = (slider.top + slider.bottom) / 2;
+    const int centerY = static_cast<int>((slider.top + slider.bottom) / 2);
     const int knobX = SliderXFromOpacity(state->opacity);
 
     HPEN basePen = CreatePen(PS_SOLID, 4, RGB(68, 81, 111));
@@ -151,11 +155,7 @@ void PaintPinMenu(HWND hwnd, PinMenuState* state) {
             DeleteObject(hover);
         }
 
-        if (row == 2) {
-            SetTextColor(dc, RGB(255, 166, 190));
-        } else {
-            SetTextColor(dc, RGB(224, 241, 255));
-        }
+        SetTextColor(dc, row == 2 ? RGB(255, 166, 190) : RGB(224, 241, 255));
         RECT textRect = rect;
         textRect.left += 10;
         DrawTextW(dc, labels[row], -1, &textRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
@@ -280,10 +280,10 @@ HWND CreatePinMenu(HWND owner, BYTE opacity, POINT cursor) {
     int x = cursor.x;
     int y = cursor.y;
     if (x + kMenuWidth > monitorInfo.rcWork.right) {
-        x = monitorInfo.rcWork.right - kMenuWidth;
+        x = static_cast<int>(monitorInfo.rcWork.right) - kMenuWidth;
     }
     if (y + kMenuHeight > monitorInfo.rcWork.bottom) {
-        y = monitorInfo.rcWork.bottom - kMenuHeight;
+        y = static_cast<int>(monitorInfo.rcWork.bottom) - kMenuHeight;
     }
     x = std::max(x, static_cast<int>(monitorInfo.rcWork.left));
     y = std::max(y, static_cast<int>(monitorInfo.rcWork.top));
@@ -658,8 +658,8 @@ void PinWindow::ResizeForZoom() {
 
     const int width = std::clamp(static_cast<int>(bitmapWidth_ * zoom_), 48, 4096);
     const int height = std::clamp(static_cast<int>(bitmapHeight_ * zoom_), 48, 4096);
-    const int centerX = (current.left + current.right) / 2;
-    const int centerY = (current.top + current.bottom) / 2;
+    const int centerX = static_cast<int>((current.left + current.right) / 2);
+    const int centerY = static_cast<int>((current.top + current.bottom) / 2);
 
     SetWindowPos(
         hwnd_,
