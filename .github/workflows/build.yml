@@ -19,27 +19,21 @@ jobs:
           ref: ${{ github.event_name == 'pull_request' && github.head_ref || github.ref_name }}
           fetch-depth: 0
 
-      # STABILITY_MIGRATION_BEGIN
       - name: Apply one-time stability migration
-        if: github.event_name == 'pull_request' && github.head_ref == 'agent/stability-fix-all'
+        if: github.event_name == 'pull_request' && github.head_ref == 'agent/stability-fix-all' && hashFiles('scripts/apply_stability_fixes.py') != ''
         shell: pwsh
         run: |
           python scripts/apply_stability_fixes.py
 
-          # Remove this temporary self-migration block and restore least-privilege
-          # workflow permissions before committing the real source changes.
-          $path = '.github/workflows/build.yml'
-          $text = Get-Content $path -Raw
-          $text = $text -replace "(?s)permissions:\r?\n  contents: write\r?\n\r?\n", ""
-          $text = $text -replace "(?s)      # STABILITY_MIGRATION_BEGIN\r?\n.*?      # STABILITY_MIGRATION_END\r?\n", ""
-          [System.IO.File]::WriteAllText($path, $text, [System.Text.UTF8Encoding]::new($false))
+          # GitHub Actions tokens cannot update workflow files. Restore workflow
+          # files in this commit; they are cleaned separately through the connector.
+          git checkout HEAD -- .github/workflows
 
           git config user.name 'Snap-Lite CI'
           git config user.email 'actions@users.noreply.github.com'
           git add -A
           git commit -m 'Fix screenshot stability and remove legacy paths'
           git push origin HEAD:${{ github.head_ref }}
-      # STABILITY_MIGRATION_END
 
       - name: Configure
         run: cmake -S . -B build -A x64
