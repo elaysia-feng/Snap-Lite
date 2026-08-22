@@ -20,10 +20,14 @@ private:
     void ResizeForZoom();
     void AdjustZoom(int wheelDelta);
     void AdjustOpacity(int wheelDelta);
+    void SetOpacity(BYTE opacity);
     void ShowContextMenu();
+    void CopyPin();
+    void SavePinAs();
 
     HINSTANCE instance_{};
     HWND hwnd_{};
+    HWND contextMenu_{};
     HBITMAP bitmap_{};
     int bitmapWidth_{};
     int bitmapHeight_{};
