@@ -3,50 +3,55 @@ param(
     [Parameter(Mandatory=$true)][string]$OutputPath
 )
 
-Add-Type -AssemblyName System.Drawing
-Add-Type @'
-using System;
-using System.Runtime.InteropServices;
-public static class SnapLiteNativeIcon {
-    [DllImport("user32.dll", SetLastError = true)]
-    public static extern bool DestroyIcon(IntPtr hIcon);
-}
-'@
-
 $base64 = (Get-Content $InputBase64Path -Raw).Trim()
 if ([string]::IsNullOrWhiteSpace($base64)) { throw 'Icon source is empty.' }
-$pngBytes = [Convert]::FromBase64String($base64)
-$stream = New-Object System.IO.MemoryStream(,$pngBytes)
-$source = [System.Drawing.Image]::FromStream($stream)
-$bitmap = New-Object System.Drawing.Bitmap 128, 128, ([System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
-$graphics = [System.Drawing.Graphics]::FromImage($bitmap)
-$graphics.Clear([System.Drawing.Color]::Transparent)
-$graphics.CompositingMode = [System.Drawing.Drawing2D.CompositingMode]::SourceCopy
-$graphics.CompositingQuality = [System.Drawing.Drawing2D.CompositingQuality]::HighQuality
-$graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
-$graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
-$graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
-$graphics.DrawImage($source, 0, 0, 128, 128)
-$graphics.Dispose()
+$png = [Convert]::FromBase64String($base64)
+if ($png.Length -lt 24) { throw 'PNG source is too small.' }
 
-$hIcon = $bitmap.GetHicon()
-if ($hIcon -eq [IntPtr]::Zero) { throw 'Failed to create Windows HICON.' }
+# Validate PNG signature and read dimensions from IHDR (network byte order).
+$signature = [byte[]](137,80,78,71,13,10,26,10)
+for ($i = 0; $i -lt $signature.Length; $i++) {
+    if ($png[$i] -ne $signature[$i]) { throw 'Icon source is not a PNG.' }
+}
+function Read-UInt32BE([byte[]]$bytes, [int]$offset) {
+    return ([uint32]$bytes[$offset] -shl 24) -bor
+           ([uint32]$bytes[$offset + 1] -shl 16) -bor
+           ([uint32]$bytes[$offset + 2] -shl 8) -bor
+           [uint32]$bytes[$offset + 3]
+}
+$width = Read-UInt32BE $png 16
+$height = Read-UInt32BE $png 20
+if ($width -lt 1 -or $height -lt 1 -or $width -gt 256 -or $height -gt 256) {
+    throw "PNG dimensions $width x $height are not valid for this ICO source."
+}
+
+# ICO header + one ICONDIRENTRY + PNG payload. PNG-compressed icon entries are
+# natively supported by Windows Vista+ and avoid legacy DIB resource issues.
+$headerSize = 6
+$entrySize = 16
+$offset = $headerSize + $entrySize
+$stream = New-Object System.IO.MemoryStream
+$writer = New-Object System.IO.BinaryWriter($stream)
 try {
-    $icon = [System.Drawing.Icon]::FromHandle($hIcon)
-    $file = [System.IO.File]::Create($OutputPath)
-    try {
-        $icon.Save($file)
-    } finally {
-        $file.Dispose()
-        $icon.Dispose()
-    }
+    $writer.Write([uint16]0) # reserved
+    $writer.Write([uint16]1) # icon type
+    $writer.Write([uint16]1) # one image
+    $writer.Write([byte](if ($width -eq 256) { 0 } else { $width }))
+    $writer.Write([byte](if ($height -eq 256) { 0 } else { $height }))
+    $writer.Write([byte]0)   # palette colors
+    $writer.Write([byte]0)   # reserved
+    $writer.Write([uint16]1) # color planes
+    $writer.Write([uint16]32)
+    $writer.Write([uint32]$png.Length)
+    $writer.Write([uint32]$offset)
+    $writer.Write($png)
+    $writer.Flush()
+    [System.IO.File]::WriteAllBytes($OutputPath, $stream.ToArray())
 } finally {
-    [SnapLiteNativeIcon]::DestroyIcon($hIcon) | Out-Null
-    $bitmap.Dispose()
-    $source.Dispose()
+    $writer.Dispose()
     $stream.Dispose()
 }
 
-if (-not (Test-Path $OutputPath) -or (Get-Item $OutputPath).Length -lt 100) {
+if (-not (Test-Path $OutputPath) -or (Get-Item $OutputPath).Length -le $offset) {
     throw 'Generated ICO is invalid.'
 }
