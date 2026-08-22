@@ -1,0 +1,121 @@
+name: fix-beta2-once
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/fix-beta2-once.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: snaplite-fix-beta2-once
+  cancel-in-progress: true
+
+jobs:
+  patch:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Apply fixes
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $utf8 = [System.Text.UTF8Encoding]::new($false)
+
+          $snipPath = 'src/snip_window_original.inc'
+          $snip = [System.IO.File]::ReadAllText($snipPath)
+          $legacyCall = '        PaintToolbar(frameDc);'
+          $legacyReplacement = '        // Legacy toolbar disabled; editor_toolbar.cpp owns the only visible toolbar.'
+          if ($snip.Contains($legacyCall)) {
+            $snip = $snip.Replace($legacyCall, $legacyReplacement)
+            [System.IO.File]::WriteAllText($snipPath, $snip, $utf8)
+          } elseif (-not $snip.Contains('Legacy toolbar disabled; editor_toolbar.cpp owns the only visible toolbar.')) {
+            throw 'Could not locate the legacy toolbar paint call.'
+          }
+
+          $editorPath = 'src/editor_toolbar.cpp'
+          $editor = [System.IO.File]::ReadAllText($editorPath)
+
+          $oldErase = @'
+        case WM_ERASEBKGND:
+            return 1;
+'@
+          $newErase = @'
+        case WM_ERASEBKGND: {
+            // Text annotations are transparent, so copy the already-rendered
+            // snip surface underneath this child before the EDIT control paints.
+            // This prevents removed glyphs from remaining as stale pixels.
+            HDC dc = reinterpret_cast<HDC>(wParam);
+            RECT client{};
+            GetClientRect(hwnd, &client);
+            POINT source{0, 0};
+            MapWindowPoints(hwnd, parent_, &source, 1);
+            HDC parentDc = GetDC(parent_);
+            if (parentDc) {
+                BitBlt(dc, 0, 0,
+                       client.right - client.left,
+                       client.bottom - client.top,
+                       parentDc, source.x, source.y, SRCCOPY);
+                ReleaseDC(parent_, parentDc);
+            }
+            return 1;
+        }
+'@
+          if ($editor.Contains($oldErase)) {
+            $editor = $editor.Replace($oldErase, $newErase)
+          } elseif (-not $editor.Contains('This prevents removed glyphs from remaining as stale pixels.')) {
+            throw 'Could not locate the text background erase block.'
+          }
+
+          $oldCommand = @'
+        case WM_COMMAND:
+            if (item->edit && reinterpret_cast<HWND>(lParam) == item->edit &&
+                HIWORD(wParam) == EN_KILLFOCUS) {
+                CommitTextEdit(item);
+                return 0;
+            }
+            break;
+'@
+          $newCommand = @'
+        case WM_COMMAND:
+            if (item->edit && reinterpret_cast<HWND>(lParam) == item->edit) {
+                const WORD notify = HIWORD(wParam);
+                if (notify == EN_UPDATE) {
+                    // EN_UPDATE fires after the edit buffer changes but before
+                    // the control redraws. Erase from the snip surface first,
+                    // then repaint the transparent EDIT immediately.
+                    RedrawWindow(hwnd, nullptr, nullptr,
+                                 RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_ALLCHILDREN);
+                    return 0;
+                }
+                if (notify == EN_KILLFOCUS) {
+                    CommitTextEdit(item);
+                    return 0;
+                }
+            }
+            break;
+'@
+          if ($editor.Contains($oldCommand)) {
+            $editor = $editor.Replace($oldCommand, $newCommand)
+          } elseif (-not $editor.Contains('EN_UPDATE fires after the edit buffer changes')) {
+            throw 'Could not locate the text WM_COMMAND block.'
+          }
+
+          [System.IO.File]::WriteAllText($editorPath, $editor, $utf8)
+
+      - name: Commit fixes
+        shell: pwsh
+        run: |
+          git config user.name 'Snap-Lite CI'
+          git config user.email 'actions@users.noreply.github.com'
+          git add src/snip_window_original.inc src/editor_toolbar.cpp
+          if (git diff --cached --quiet) {
+            Write-Host 'No changes to commit.'
+            exit 0
+          }
+          git commit -m 'Fix legacy toolbar and live text deletion repaint'
+          git push origin HEAD:main
