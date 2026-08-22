@@ -2,6 +2,7 @@
 
 #include "capture.h"
 #include "pin_window.h"
+#include "resource.h"
 #include "snip_window.h"
 
 #include <shellapi.h>
@@ -24,6 +25,11 @@ constexpr UINT CMD_FULLSCREEN = 1002;
 constexpr UINT CMD_PIN = 1003;
 constexpr UINT CMD_OPEN_FOLDER = 1004;
 constexpr UINT CMD_EXIT = 1005;
+
+HICON LoadAppIcon(HINSTANCE instance) {
+    HICON icon = LoadIconW(instance, MAKEINTRESOURCEW(IDI_SNAPLITE));
+    return icon ? icon : LoadIconW(nullptr, IDI_APPLICATION);
+}
 }
 
 App::App(HINSTANCE instance) : instance_(instance) {}
@@ -47,7 +53,8 @@ bool App::Initialize() {
     wc.cbSize = sizeof(wc);
     wc.lpfnWndProc = WindowProc;
     wc.hInstance = instance_;
-    wc.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
+    wc.hIcon = LoadAppIcon(instance_);
+    wc.hIconSm = wc.hIcon;
     wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
     wc.lpszClassName = kMainClass;
 
@@ -131,7 +138,7 @@ void App::AddTrayIcon() {
     tray_.uID = 1;
     tray_.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
     tray_.uCallbackMessage = WM_TRAYICON;
-    tray_.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
+    tray_.hIcon = LoadAppIcon(instance_);
     wcscpy_s(tray_.szTip, L"Snap-Lite · F1 截图 · F3 贴图");
     Shell_NotifyIconW(NIM_ADD, &tray_);
 }
