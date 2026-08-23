@@ -545,7 +545,6 @@ public:
 
         HWND edit = item->edit;
         item->edit = nullptr;
-        RemoveWindowSubclass(edit, EditSubclassProc, kEditSubclassId);
         DestroyWindow(edit);
 
         if (text.empty()) {
@@ -878,13 +877,12 @@ private:
 
     void ApplyColor(COLORREF color) {
         if (selectedText_) {
-            const bool editing = selectedText_->edit != nullptr;
-            const auto before = editing ? std::vector<TextState>{} : SnapshotTextStates();
             selectedText_->color = color;
             if (selectedText_->edit) {
                 RedrawWindow(selectedText_->hwnd, nullptr, nullptr,
                              RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_ALLCHILDREN);
             } else {
+                const auto before = SnapshotTextStates();
                 InvalidateRect(selectedText_->hwnd, nullptr, FALSE);
                 RecordTextAction(before, SnapshotTextStates());
             }
@@ -895,8 +893,6 @@ private:
 
     void ApplyTextSize(int points) {
         if (selectedText_) {
-            const bool editing = selectedText_->edit != nullptr;
-            const auto before = editing ? std::vector<TextState>{} : SnapshotTextStates();
             selectedText_->sizePt = std::clamp(points, 10, 72);
             RecreateTextFont(selectedText_);
             ResizeTextItem(selectedText_);
@@ -906,6 +902,7 @@ private:
                 RedrawWindow(selectedText_->hwnd, nullptr, nullptr,
                              RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_ALLCHILDREN);
             } else {
+                const auto before = SnapshotTextStates();
                 RecordTextAction(before, SnapshotTextStates());
             }
         }
@@ -914,8 +911,10 @@ private:
     }
 
     void ClickSecondary(int index) {
+        const auto rects = SecondaryRects();
         const auto items = BuildSecondary(category_);
-        if (index < 0 || index >= static_cast<int>(items.size()) || !snip_) return;
+        const size_t n = std::min(rects.size(), items.size());
+        if (index < 0 || static_cast<size_t>(index) >= n || !snip_) return;
         const auto& item = items[index];
         switch (item.action) {
         case ItemAction::ShapeKind: snip_->UiSetShapeKind(item.value); break;

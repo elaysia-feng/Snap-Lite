@@ -273,8 +273,12 @@ bool App::Initialize() {
         } else {
             ShowNotice(L"F3 热键注册失败，可右键托盘图标选择“贴图”");
         }
-    } else if (!snipHotkeyRegistered || !fullscreenHotkeyRegistered) {
-        ShowNotice(L"部分全局快捷键注册失败，可能被其他程序占用");
+    }
+    if (!snipHotkeyRegistered) {
+        ShowNotice(L"F1 截图热键注册失败，可能被其他程序占用");
+    }
+    if (!fullscreenHotkeyRegistered) {
+        ShowNotice(L"Ctrl+Shift+F 全屏截图热键注册失败，可能被其他程序占用");
     }
 
     TrimWorkingSet();
@@ -323,7 +327,7 @@ void App::ShowNotice(const wchar_t* message) {
         return;
     }
 
-    tray_.uFlags = NIF_INFO;
+    tray_.uFlags = NIF_INFO | NIF_MESSAGE | NIF_ICON | NIF_TIP;
     wcscpy_s(tray_.szInfoTitle, kAppName);
     wcsncpy_s(tray_.szInfo, message, _TRUNCATE);
     tray_.dwInfoFlags = NIIF_INFO;
@@ -354,6 +358,11 @@ void App::ShowTrayMenu() {
     POINT cursor{};
     GetCursorPos(&cursor);
     SetForegroundWindow(hwnd_);
+    // TrackPopupMenu returns only after the menu dismisses; the WM_COMMAND for
+    // the selected item is posted to hwnd_'s queue and dispatched on the next
+    // message-pump turn. WM_COMMAND carries only the command id (no menu
+    // handle), so DestroyMenu here is safe today. Keep this ordering if you
+    // later adopt TPM_RETURNCMD or asynchronous menu handling.
     TrackPopupMenu(menu, TPM_RIGHTBUTTON | TPM_LEFTALIGN, cursor.x, cursor.y, 0, hwnd_, nullptr);
     DestroyMenu(menu);
 }

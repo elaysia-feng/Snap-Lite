@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "entries": {
+    "459c54e5f35d6a58dcd90d2aecc21fa6d1f35d241bc5b134c506f87dc7b6d67b": {
+      "last_emitted_at_ms": 1787496845038,
+      "message": "Combine searches in parallel when investigating multiple patterns."
+    },
+    "466399dafa2d20f60587180bad0a07358eb7f2bce724df0ff682f038ad33f5ad": {
+      "last_emitted_at_ms": 1787496815166,
+      "message": "Read multiple files in parallel when possible for faster analysis."
+    },
+    "79a93d4a2f8f50b95f852280616242fee1855dc99a3c75211917f55e72e95fae": {
+      "last_emitted_at_ms": 1787496783322,
+      "message": "Use parallel execution for independent tasks. Use run_in_background for long operations (npm install, builds, tests)."
+    },
+    "647d09466dff0a46e3c28d25c18cbf13345500fa2c0e3507ddbcd1feaf20fc65": {
+      "last_emitted_at_ms": 1787496763536,
+      "message": "Spawning agent: oh-my-claudecode:code-reviewer (sonnet) | Task: 审查 pin_window.cpp"
+    },
+    "f0a4837402e1b1beb501d1e86385ed26bfd208cf02800d075bc54151c71afeab": {
+      "last_emitted_at_ms": 1787496762420,
+      "message": "Spawning agent: oh-my-claudecode:code-reviewer (sonnet) | Task: 审查 app.cpp"
+    },
+    "c14aeb197a6396ff8ce62e38aef6b94aab9bc43ed0f4c592369f1fec5953b53b": {
+      "last_emitted_at_ms": 1787496761229,
+      "message": "Spawning agent: oh-my-claudecode:code-reviewer (sonnet) | Task: 审查 capture.cpp"
+    },
+    "74558e0a349901435301c54cbd7e6d3c5ea93617d0dc81c571b6c0fd12392bc1": {
+      "last_emitted_at_ms": 1787496760151,
+      "message": "Spawning agent: oh-my-claudecode:code-reviewer (sonnet) | Task: 审查 snip_window 修复"
+    },
+    "db2b7b0ec7011f13d58fb144f21b3042eb56caa08d71ece5aed9ecef87eee92d": {
+      "last_emitted_at_ms": 1787496758504,
+      "message": "Spawning agent: oh-my-claudecode:code-reviewer (sonnet) | Task: 审查 editor_toolbar.cpp"
+    },
+    "54fbd439862360f29383edd9f3b1a3564da0ded5bbce5aaed33749c281c0c6bf": {
+      "last_emitted_at_ms": 1787494754053,
+      "message": "Spawning agent: oh-my-claudecode:verifier (sonnet) | Task: 验证所有 bug 修复"
+    },
+    "445ed27a3872b681d98190bae61ccb84954e1bc4e140df5370be958dee776b3a": {
+      "last_emitted_at_ms": 1787494152036,
+      "message": "Verify changes work after editing. Test functionality before marking complete."
+    },
+    "ec41f8c93eb31fbb0a6d29cf0f86935216a279624e20d7b5d43d3588aef48bd3": {
+      "last_emitted_at_ms": 1787493806581,
+      "message": "Spawning agent: oh-my-claudecode:executor (opus) | Task: 修复 pin_window.cpp 的 bug"
+    },
+    "2b56ba4370534a2281da8d20ff2b149950ea70014191ec89fc6fb7cdc25af7a1": {
+      "last_emitted_at_ms": 1787493803216,
+      "message": "Spawning agent: oh-my-claudecode:executor (opus) | Task: 修复 editor_toolbar.cpp 的 bug"
+    },
+    "17bc6d9f6f3c2eff184c03fbe147cc5d06ec8e7b6bb3dc1e223e2c96eda4a1fe": {
+      "last_emitted_at_ms": 1787493799752,
+      "message": "Spawning agent: oh-my-claudecode:executor (opus) | Task: 修复 snip_window 文件的 bug"
+    },
+    "465592cdffaab12c92ddc15bbf7bccd56167d924615ed6f86ba3e92ec66a6d72": {
+      "last_emitted_at_ms": 1787493793340,
+      "message": "Spawning agent: oh-my-claudecode:executor (opus) | Task: 修复 capture.cpp 的 bug"
+    },
+    "041f729f9884124eedd0a5b569c6163cec5befa55de45e4cdfd12135e5917afb": {
+      "last_emitted_at_ms": 1787493790119,
+      "message": "Spawning agent: oh-my-claudecode:executor (opus) | Task: 修复 app.cpp 的 bug"
+    }
+  },
+  "updated_at": "2026-08-23T14:54:05.038Z"
+}

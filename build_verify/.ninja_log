@@ -1,0 +1,19 @@
+# ninja log v7
+27	307	8091976064138334	CMakeFiles/SnapLite.dir/SnapLite.rc.obj	ad632e18503feb4a
+1791	3953	8091994883387382	CMakeFiles/SnapLite.dir/src/capture_settings.cpp.obj	7674c69dad471449
+23	3002	8091994865703510	CMakeFiles/SnapLite.dir/src/capture.cpp.obj	a6d93ee5c8a6e0c6
+17	3212	8091994865638316	CMakeFiles/SnapLite.dir/src/app.cpp.obj	b97dd2ebd384ab7f
+3002	5785	8091994895495323	CMakeFiles/SnapLite.dir/src/pin_window.cpp.obj	79dddadc1d3fbf7f
+13	1791	8091994865603247	CMakeFiles/SnapLite.dir/src/main.cpp.obj	d6f2d635a671a950
+19	5315	8091994865668355	CMakeFiles/SnapLite.dir/src/editor_toolbar.cpp.obj	34e2c48b5a76bd2e
+3953	6106	8091994905011720	CMakeFiles/SnapLite.dir/src/snip_text_overlay.cpp.obj	80394cf03b3213b8
+3212	6717	8091994897600558	CMakeFiles/SnapLite.dir/src/snip_window.cpp.obj	b842fbb03c8668e4
+8	3157	8091995415429908	CMakeFiles/SnapLite.dir/src/main.cpp.obj	9314c97d45e94008
+28	3648	8091995415623062	CMakeFiles/SnapLite.dir/src/snip_text_overlay.cpp.obj	eacb2061d549d975
+19	3684	8091995415542895	CMakeFiles/SnapLite.dir/src/capture_settings.cpp.obj	60ce3a606c4e7800
+22	4413	8091995415567993	CMakeFiles/SnapLite.dir/src/pin_window.cpp.obj	b89ac2e891945045
+17	4523	8091995415514987	CMakeFiles/SnapLite.dir/src/capture.cpp.obj	b7242613c726fa5f
+12	4743	8091995415459952	CMakeFiles/SnapLite.dir/src/app.cpp.obj	3eec0f3cb51e7278
+25	5164	8091995415597990	CMakeFiles/SnapLite.dir/src/snip_window.cpp.obj	af1600a54dc386fb
+14	6588	8091995415489949	CMakeFiles/SnapLite.dir/src/editor_toolbar.cpp.obj	b47b2dfde0080889
+6589	7007	8091995481230719	SnapLite.exe	4b2c6b450eadce7b

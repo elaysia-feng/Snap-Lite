@@ -1070,26 +1070,49 @@ void SnipWindow::RestoreSelection(HBITMAP snapshot) {
 
     const RECT r = NormalizedSelection();
     HDC screenDc = GetDC(nullptr);
-    HDC sourceDc = CreateCompatibleDC(screenDc);
-    HDC targetDc = CreateCompatibleDC(screenDc);
-    const HGDIOBJ oldSource = SelectObject(sourceDc, snapshot);
-    const HGDIOBJ oldTarget = SelectObject(targetDc, capture_);
+    HDC sourceDc = nullptr;
+    HDC targetDc = nullptr;
+    HGDIOBJ oldSource = nullptr;
+    HGDIOBJ oldTarget = nullptr;
+    // Track each step so partial GDI failures release the resources
+    // already obtained instead of leaking DCs/handles when the system
+    // is under GDI pressure.
+    bool failed = false;
+
+    sourceDc = CreateCompatibleDC(screenDc);
+    if (!sourceDc) {
+        failed = true;
+        goto cleanup;
+    }
+
+    targetDc = CreateCompatibleDC(screenDc);
+    if (!targetDc) {
+        failed = true;
+        goto cleanup;
+    }
+
+    oldSource = SelectObject(sourceDc, snapshot);
+    oldTarget = SelectObject(targetDc, capture_);
     BitBlt(targetDc, r.left, r.top, r.right - r.left, r.bottom - r.top, sourceDc, 0, 0, SRCCOPY);
-    SelectObject(sourceDc, oldSource);
-    SelectObject(targetDc, oldTarget);
-    DeleteDC(sourceDc);
-    DeleteDC(targetDc);
-    ReleaseDC(nullptr, screenDc);
+
+cleanup:
+    if (oldSource) SelectObject(sourceDc, oldSource);
+    if (oldTarget && targetDc) SelectObject(targetDc, oldTarget);
+    if (sourceDc) DeleteDC(sourceDc);
+    if (targetDc) DeleteDC(targetDc);
+    if (screenDc) ReleaseDC(nullptr, screenDc);
+
+    if (failed) {
+        return;
+    }
 }
 
 void SnipWindow::BeginEdit() {
     HBITMAP snapshot = SnapshotSelection();
     if (snapshot) {
+        // BitmapHistory::Trim enforces size > 6 OR bytes > 32MB on every
+        // push_back, so no manual trimming is needed here.
         undo_.push_back(snapshot);
-        if (undo_.size() > 20) {
-            DeleteObject(undo_.front());
-            undo_.erase(undo_.begin());
-        }
     }
     DeleteBitmaps(redo_);
     edited_ = true;
@@ -1256,9 +1279,12 @@ void SnipWindow::CommitTextEdit() {
         GetWindowTextW(textEdit_, text.data(), length + 1);
     }
 
+    // Destroy the edit control BEFORE clearing textEdit_ so any pending
+    // WM_COMMAND(EN_KILLFOCUS) re-entering CommitTextEdit finds textEdit_
+    // still set and bails out cleanly instead of double-committing.
     HWND edit = textEdit_;
-    textEdit_ = nullptr;
     DestroyWindow(edit);
+    textEdit_ = nullptr;
 
     if (!text.empty()) {
         HDC dc = CreateCompatibleDC(nullptr);

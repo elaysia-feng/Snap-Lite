@@ -1,6 +1,6 @@
 {
   "version": "1.0.0",
-  "lastScanned": 1787278961542,
+  "lastScanned": 1787492953662,
   "projectRoot": "F:\\myInterestingProgram\\Snap-Lite",
   "techStack": {
     "languages": [
@@ -34,6 +34,7 @@
     "isMonorepo": false,
     "workspaces": [],
     "mainDirectories": [
+      "scripts",
       "src"
     ],
     "gitBranches": {
@@ -43,67 +44,161 @@
   },
   "customNotes": [],
   "directoryMap": {
+    "resources": {
+      "path": "resources",
+      "purpose": null,
+      "fileCount": 4,
+      "lastAccessed": 1787492953613,
+      "keyFiles": [
+        "resource.h",
+        "SnapLite-icon.png.b64",
+        "SnapLite.ico",
+        "SnapLite.rc.in"
+      ]
+    },
+    "scripts": {
+      "path": "scripts",
+      "purpose": "Build/utility scripts",
+      "fileCount": 2,
+      "lastAccessed": 1787492953614,
+      "keyFiles": [
+        "check_pe_icon.py",
+        "normalize_ico.ps1"
+      ]
+    },
     "src": {
       "path": "src",
       "purpose": "Source code",
-      "fileCount": 11,
-      "lastAccessed": 1787278961473,
+      "fileCount": 18,
+      "lastAccessed": 1787492953615,
       "keyFiles": [
+        "anime_toolbar.h",
         "app.cpp",
         "app.h",
         "capture.cpp",
-        "capture.h",
-        "editor_window.cpp"
+        "capture.h"
       ]
     }
   },
   "hotPaths": [
     {
-      "path": "src/snip_window.cpp",
-      "accessCount": 28,
-      "lastAccessed": 1787281554127,
-      "type": "file"
-    },
-    {
-      "path": "src/snip_window.h",
-      "accessCount": 4,
-      "lastAccessed": 1787280608035,
-      "type": "file"
-    },
-    {
-      "path": "C:/Users/seele/.claude/projects/F--myInterestingProgram-Snap-Lite/a503b547-6715-45c0-8e3a-6b6345d41b2c/tool-results/ba4uic861.txt",
-      "accessCount": 3,
-      "lastAccessed": 1787280719847,
+      "path": "src/editor_toolbar.cpp",
+      "accessCount": 38,
+      "lastAccessed": 1787496849477,
       "type": "file"
     },
     {
       "path": "src",
-      "accessCount": 2,
-      "lastAccessed": 1787280779907,
+      "accessCount": 21,
+      "lastAccessed": 1787496845702,
       "type": "directory"
     },
     {
-      "path": "README.md",
-      "accessCount": 1,
-      "lastAccessed": 1787279198625,
+      "path": "src/pin_window.cpp",
+      "accessCount": 20,
+      "lastAccessed": 1787496194532,
       "type": "file"
     },
     {
-      "path": "src/paint_block.inc",
-      "accessCount": 1,
-      "lastAccessed": 1787280231126,
+      "path": "src/capture.cpp",
+      "accessCount": 20,
+      "lastAccessed": 1787496830826,
+      "type": "file"
+    },
+    {
+      "path": "src/snip_window.h",
+      "accessCount": 18,
+      "lastAccessed": 1787496985740,
+      "type": "file"
+    },
+    {
+      "path": "src/snip_window.cpp",
+      "accessCount": 17,
+      "lastAccessed": 1787496986447,
+      "type": "file"
+    },
+    {
+      "path": "src/snip_window_original.inc",
+      "accessCount": 16,
+      "lastAccessed": 1787496919660,
       "type": "file"
     },
     {
       "path": "src/app.cpp",
-      "accessCount": 1,
-      "lastAccessed": 1787280798778,
-      "type": "directory"
+      "accessCount": 11,
+      "lastAccessed": 1787495783550,
+      "type": "file"
+    },
+    {
+      "path": "src/snip_text_overlay.cpp",
+      "accessCount": 4,
+      "lastAccessed": 1787493891332,
+      "type": "file"
+    },
+    {
+      "path": "src/main.cpp",
+      "accessCount": 3,
+      "lastAccessed": 1787493113247,
+      "type": "file"
     },
     {
       "path": "src/capture.h",
+      "accessCount": 2,
+      "lastAccessed": 1787493090957,
+      "type": "file"
+    },
+    {
+      "path": "src/capture_settings.cpp",
+      "accessCount": 2,
+      "lastAccessed": 1787493094033,
+      "type": "file"
+    },
+    {
+      "path": "src/app.h",
+      "accessCount": 2,
+      "lastAccessed": 1787493105457,
+      "type": "file"
+    },
+    {
+      "path": "src/window_bounds_fix.h",
+      "accessCount": 2,
+      "lastAccessed": 1787493115292,
+      "type": "file"
+    },
+    {
+      "path": "src/drag_repaint_fix.h",
+      "accessCount": 2,
+      "lastAccessed": 1787493115305,
+      "type": "file"
+    },
+    {
+      "path": "src/pin_window.h",
+      "accessCount": 2,
+      "lastAccessed": 1787493134885,
+      "type": "file"
+    },
+    {
+      "path": "CMakeLists.txt",
+      "accessCount": 2,
+      "lastAccessed": 1787493900294,
+      "type": "file"
+    },
+    {
+      "path": "README.md",
       "accessCount": 1,
-      "lastAccessed": 1787280988353,
+      "lastAccessed": 1787492997202,
+      "type": "file"
+    },
+    {
+      "path": "src/anime_toolbar.h",
+      "accessCount": 1,
+      "lastAccessed": 1787493016937,
+      "type": "file"
+    },
+    {
+      "path": "src/toolbar_icon_render_gdi.h",
+      "accessCount": 1,
+      "lastAccessed": 1787493126662,
       "type": "file"
     }
   ],

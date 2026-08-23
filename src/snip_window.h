@@ -10,10 +10,35 @@
 
 namespace snaplite {
 
+class SnipWindow;
+
+namespace detail {
+
+// Forward declarations for the themed GDI shims so SnipWindow can friend
+// them and grant access to the per-instance shape drawing state. The actual
+// implementations live in snip_window.cpp.
+HPEN ThemedCreatePen(SnipWindow& owner, int style, int width, COLORREF color);
+BOOL ThemedRectangle(SnipWindow& owner, HDC dc, int left, int top, int right, int bottom);
+BOOL ThemedMoveToEx(SnipWindow& owner, HDC dc, int x, int y, LPPOINT oldPoint);
+BOOL ThemedLineTo(SnipWindow& owner, HDC dc, int x, int y);
+BOOL ThemedPolygon(SnipWindow& owner, HDC dc, const POINT* points, int count);
+
+}  // namespace detail
+
+// Stable, macro-immune annotation red. RGB() is hijacked inside snip_window.cpp
+// during the .inc include, but this helper always produces the same COLORREF
+// regardless of any macro state. Use it for baked-text defaults and other
+// cross-TU color constants so the value doesn't drift when annotation themes
+// change.
+inline constexpr COLORREF kDefaultAnnotationRed() {
+    // (r=235, g=70, b=70) packed as COLORREF (0x00BBGGRR).
+    return static_cast<COLORREF>((70u << 16) | (70u << 8) | 235u);
+}
+
 struct TextOverlay {
     std::wstring text;
     POINT origin{};
-    COLORREF color{RGB(235, 70, 70)};
+    COLORREF color{kDefaultAnnotationRed()};
     int sizePt{16};
 };
 
@@ -175,6 +200,15 @@ private:
     void Finish(FinishAction action);
     void CopyCurrentColor();
 
+    // Friends: the themed GDI shims in snaplite::detail need access to the
+    // per-instance shape drawing state (shapeDrawing_, arrowFrom_, arrowTo_)
+    // because the macro hijack forwards a SnipWindow reference to them.
+    friend HPEN detail::ThemedCreatePen(SnipWindow& owner, int style, int width, COLORREF color);
+    friend BOOL detail::ThemedRectangle(SnipWindow& owner, HDC dc, int left, int top, int right, int bottom);
+    friend BOOL detail::ThemedMoveToEx(SnipWindow& owner, HDC dc, int x, int y, LPPOINT oldPoint);
+    friend BOOL detail::ThemedLineTo(SnipWindow& owner, HDC dc, int x, int y);
+    friend BOOL detail::ThemedPolygon(SnipWindow& owner, HDC dc, const POINT* points, int count);
+
     HINSTANCE instance_{};
     HWND owner_{};
     HWND hwnd_{};
@@ -203,6 +237,13 @@ private:
     POINT drawCurrent_{};
     BitmapHistory undo_;
     BitmapHistory redo_;
+
+    // Per-instance shape drawing state used by the themed GDI shims. These
+    // were previously module-level globals in snaplite::detail, which made
+    // them unsafe across multiple SnipWindow instances or toolbar leftovers.
+    bool shapeDrawing_{false};
+    POINT arrowFrom_{};
+    POINT arrowTo_{};
 
     int hoverToolbar_{-1};
 

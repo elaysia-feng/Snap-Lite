@@ -33,6 +33,9 @@ constexpr int kMenuHeight = 196;
 constexpr BYTE kMinOpacity = 26;
 
 DWORD gPendingClipboardSequence = 0;
+// Intentionally monotonic: a dismissed pin stays dismissed for the lifetime
+// of the app session to prevent re-pinning the same content from clipboard
+// updates. See README.
 DWORD gDismissedClipboardSequence = 0;
 std::unordered_map<HWND, DWORD> gPinClipboardSequences;
 
@@ -294,6 +297,9 @@ HWND CreatePinMenu(HWND owner, BYTE opacity, POINT cursor) {
     state->owner = owner;
     state->opacity = opacity;
 
+    const HINSTANCE hInst =
+        reinterpret_cast<HINSTANCE>(GetWindowLongPtrW(owner, GWLP_HINSTANCE));
+
     HWND hwnd = CreateWindowExW(
         WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
         kPinMenuClass,
@@ -305,7 +311,7 @@ HWND CreatePinMenu(HWND owner, BYTE opacity, POINT cursor) {
         kMenuHeight,
         owner,
         nullptr,
-        reinterpret_cast<HINSTANCE>(GetWindowLongPtrW(owner, GWLP_HINSTANCE)),
+        hInst,
         state);
 
     if (!hwnd) {
@@ -802,7 +808,11 @@ void PinWindow::SavePinAs() {
     dialog.lpstrFile = pathBuffer.data();
     dialog.nMaxFile = static_cast<DWORD>(pathBuffer.size());
     dialog.lpstrDefExt = L"png";
-    dialog.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+    dialog.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR
+#if defined(OFN_ALLOW_LONG_PATHS)
+                   | OFN_ALLOW_LONG_PATHS
+#endif
+        ;
 
     if (!GetSaveFileNameW(&dialog)) {
         return;

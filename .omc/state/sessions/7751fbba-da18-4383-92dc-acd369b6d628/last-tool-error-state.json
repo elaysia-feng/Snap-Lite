@@ -1,0 +1,7 @@
+{
+  "tool_name": "Bash",
+  "tool_input_preview": "{\"command\":\"cd F:/myInterestingProgram/Snap-Lite/build_verify && ninja 2>&1 | head -80\",\"description\":\"Build project to verify fixes\"}",
+  "error": "Exit code 1\n/usr/bin/bash: line 1: cd: F:/myInterestingProgram/Snap-Lite/build_verify: No such file or directory",
+  "timestamp": "2026-08-23T14:10:52.818Z",
+  "retry_count": 2
+}

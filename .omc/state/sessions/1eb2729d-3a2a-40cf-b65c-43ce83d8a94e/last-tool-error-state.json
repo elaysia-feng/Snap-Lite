@@ -1,0 +1,7 @@
+{
+  "tool_name": "Bash",
+  "tool_input_preview": "{\"command\":\"ls \\\"C:/BuildTools\\\" 2>&1; ls \\\"C:/msys64\\\" 2>&1; ls \\\"E:/VisualStudio\\\" 2>&1\",\"description\":\"Check non-standard VS locations\"}",
+  "error": "Exit code 2\nls: cannot access 'C:/BuildTools': No such file or directory\nls: cannot access 'C:/msys64': No such file or directory\nls: cannot access 'E:/VisualStudio': No such file or directory",
+  "timestamp": "2026-08-23T14:39:09.681Z",
+  "retry_count": 4
+}

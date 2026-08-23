@@ -23,10 +23,6 @@ int gShapeFillMode = 0;
 int gArrowKind = 0;
 int gStrokeWidth = 3;
 
-bool gShapeDrawing = false;
-POINT gArrowFrom{};
-POINT gArrowTo{};
-
 HFONT ThemedCreateFontW(
     int height, int width, int escapement, int orientation, int weight,
     DWORD italic, DWORD underline, DWORD strikeOut, DWORD charSet,
@@ -56,10 +52,10 @@ HWND ThemedCreateWindowExW(
         parent, menu, instance, param);
 }
 
-HPEN ThemedCreatePen(int style, int width, COLORREF color) {
+HPEN ThemedCreatePen(snaplite::SnipWindow& owner, int style, int width, COLORREF color) {
     if (color == gAnnotationColor) {
         if (width == 3 && (gActiveToolIndex == 0 || gActiveToolIndex == 1)) {
-            gShapeDrawing = true;
+            owner.shapeDrawing_ = true;
         }
         if ((width == 3 && (gActiveToolIndex == 0 || gActiveToolIndex == 1)) ||
             (width == 4 && gActiveToolIndex == 2)) {
@@ -167,12 +163,12 @@ void DrawAdvancedArrow(HDC dc, POINT from, POINT to) {
     ::DeleteObject(pen);
 }
 
-BOOL ThemedRectangle(HDC dc, int left, int top, int right, int bottom) {
-    if (!gShapeDrawing || gActiveToolIndex != 0) {
+BOOL ThemedRectangle(snaplite::SnipWindow& owner, HDC dc, int left, int top, int right, int bottom) {
+    if (!owner.shapeDrawing_ || gActiveToolIndex != 0) {
         return ::Rectangle(dc, left, top, right, bottom);
     }
 
-    gShapeDrawing = false;
+    owner.shapeDrawing_ = false;
     const int kind = std::clamp(gShapeKind, 0, 7);
     const int fillMode = std::clamp(gShapeFillMode, 0, 2);
 
@@ -237,9 +233,9 @@ BOOL ThemedRectangle(HDC dc, int left, int top, int right, int bottom) {
     return TRUE;
 }
 
-BOOL ThemedMoveToEx(HDC dc, int x, int y, LPPOINT oldPoint) {
-    if (gShapeDrawing && gActiveToolIndex == 1) {
-        gArrowFrom = {x, y};
+BOOL ThemedMoveToEx(snaplite::SnipWindow& owner, HDC dc, int x, int y, LPPOINT oldPoint) {
+    if (owner.shapeDrawing_ && gActiveToolIndex == 1) {
+        owner.arrowFrom_ = {x, y};
         if (oldPoint) {
             oldPoint->x = x;
             oldPoint->y = y;
@@ -249,18 +245,18 @@ BOOL ThemedMoveToEx(HDC dc, int x, int y, LPPOINT oldPoint) {
     return ::MoveToEx(dc, x, y, oldPoint);
 }
 
-BOOL ThemedLineTo(HDC dc, int x, int y) {
-    if (gShapeDrawing && gActiveToolIndex == 1) {
-        gArrowTo = {x, y};
+BOOL ThemedLineTo(snaplite::SnipWindow& owner, HDC dc, int x, int y) {
+    if (owner.shapeDrawing_ && gActiveToolIndex == 1) {
+        owner.arrowTo_ = {x, y};
         return TRUE;
     }
     return ::LineTo(dc, x, y);
 }
 
-BOOL ThemedPolygon(HDC dc, const POINT* points, int count) {
-    if (gShapeDrawing && gActiveToolIndex == 1) {
-        gShapeDrawing = false;
-        DrawAdvancedArrow(dc, gArrowFrom, gArrowTo);
+BOOL ThemedPolygon(snaplite::SnipWindow& owner, HDC dc, const POINT* points, int count) {
+    if (owner.shapeDrawing_ && gActiveToolIndex == 1) {
+        owner.shapeDrawing_ = false;
+        DrawAdvancedArrow(dc, owner.arrowFrom_, owner.arrowTo_);
         return TRUE;
     }
     return ::Polygon(dc, points, count);
@@ -308,13 +304,45 @@ private:
          ? snaplite::detail::gAnnotationColor \
          : SNAP_PACK_RGB((r), (g), (b)))
 
+// NOTE: The Win32 API shims below hijack a handful of macros for the duration of
+// the .inc file. This is a single-TU hack to keep the legacy capture/selection
+// engine as a verbatim text inclusion. Every macro listed here is `#undef`-ed
+// both before (defensive, in case some header pulled them in earlier) and
+// after the include so the rest of this translation unit sees the real Win32
+// API. Future refactor: split snip_window_original.inc into its own .cpp/.h
+// pair and drop the macro trick entirely.
+#ifdef CreateFontW
+#undef CreateFontW
+#endif
+#ifdef CreateWindowExW
+#undef CreateWindowExW
+#endif
+#ifdef CreatePen
+#undef CreatePen
+#endif
+#ifdef Rectangle
+#undef Rectangle
+#endif
+#ifdef MoveToEx
+#undef MoveToEx
+#endif
+#ifdef LineTo
+#undef LineTo
+#endif
+#ifdef Polygon
+#undef Polygon
+#endif
+#ifdef Color
+#undef Color
+#endif
+
 #define CreateFontW snaplite::detail::ThemedCreateFontW
 #define CreateWindowExW snaplite::detail::ThemedCreateWindowExW
-#define CreatePen(...) snaplite::detail::ThemedCreatePen(__VA_ARGS__)
-#define Rectangle(...) snaplite::detail::ThemedRectangle(__VA_ARGS__)
-#define MoveToEx(...) snaplite::detail::ThemedMoveToEx(__VA_ARGS__)
-#define LineTo(...) snaplite::detail::ThemedLineTo(__VA_ARGS__)
-#define Polygon(...) snaplite::detail::ThemedPolygon(__VA_ARGS__)
+#define CreatePen(...) snaplite::detail::ThemedCreatePen(*this, __VA_ARGS__)
+#define Rectangle(...) snaplite::detail::ThemedRectangle(*this, __VA_ARGS__)
+#define MoveToEx(...) snaplite::detail::ThemedMoveToEx(*this, __VA_ARGS__)
+#define LineTo(...) snaplite::detail::ThemedLineTo(*this, __VA_ARGS__)
+#define Polygon(...) snaplite::detail::ThemedPolygon(*this, __VA_ARGS__)
 #define Color SnapLiteThemeColor
 #include "snip_window_original.inc"
 #undef Color

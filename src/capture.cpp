@@ -120,13 +120,13 @@ HGLOBAL CreatePngClipboardData(HBITMAP bitmap) {
 
     Gdiplus::Bitmap image(bitmap, nullptr);
     const Gdiplus::Status status = image.Save(stream, &encoder, nullptr);
-    stream->Commit(STGC_DEFAULT);
+    const HRESULT hrCommit = stream->Commit(STGC_DEFAULT);
 
     HGLOBAL memory = nullptr;
     GetHGlobalFromStream(stream, &memory);
     stream->Release();
 
-    if (status != Gdiplus::Ok || !memory) {
+    if (FAILED(hrCommit) || status != Gdiplus::Ok || !memory) {
         if (memory) {
             GlobalFree(memory);
         }
@@ -369,7 +369,10 @@ bool CopyBitmapToClipboard(
 
     if (pngData) {
         const UINT pngFormat = RegisterClipboardFormatW(L"PNG");
-        if (pngFormat != 0 && SetClipboardData(pngFormat, pngData)) {
+        if (pngFormat == 0) {
+            GlobalFree(pngData);
+            pngData = nullptr;
+        } else if (SetClipboardData(pngFormat, pngData)) {
             imagePlaced = true;
             pngData = nullptr;
         }
@@ -460,7 +463,7 @@ std::filesystem::path NextScreenshotPath() {
     GetLocalTime(&now);
 
     wchar_t filename[96]{};
-    swprintf_s(
+    const int len = swprintf_s(
         filename,
         L"SnapLite_%04u-%02u-%02u_%02u-%02u-%02u-%03u.png",
         now.wYear,
@@ -470,6 +473,9 @@ std::filesystem::path NextScreenshotPath() {
         now.wMinute,
         now.wSecond,
         now.wMilliseconds);
+    if (len < 0) {
+        filename[0] = L'\0';
+    }
 
     const std::filesystem::path directory = ScreenshotDirectory();
     std::filesystem::path candidate = directory / filename;

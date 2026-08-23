@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "entries": {
+    "79a93d4a2f8f50b95f852280616242fee1855dc99a3c75211917f55e72e95fae": {
+      "last_emitted_at_ms": 1787496118057,
+      "message": "Use parallel execution for independent tasks. Use run_in_background for long operations (npm install, builds, tests)."
+    },
+    "459c54e5f35d6a58dcd90d2aecc21fa6d1f35d241bc5b134c506f87dc7b6d67b": {
+      "last_emitted_at_ms": 1787495779022,
+      "message": "Combine searches in parallel when investigating multiple patterns."
+    },
+    "466399dafa2d20f60587180bad0a07358eb7f2bce724df0ff682f038ad33f5ad": {
+      "last_emitted_at_ms": 1787495745583,
+      "message": "Read multiple files in parallel when possible for faster analysis."
+    },
+    "dfcda4fb66dfcfa056f63553ccd547cd65dadb42e0aceb611b4a428025f245bf": {
+      "last_emitted_at_ms": 1787493078156,
+      "message": "Spawning agent: oh-my-claudecode:executor (sonnet) | Task: Worker-4 检查 editor_toolbar bug"
+    },
+    "489bbe8643b6c2fafef1cd7e66f58fec527049141e61e6796cee7a187739a8c9": {
+      "last_emitted_at_ms": 1787493078148,
+      "message": "Spawning agent: oh-my-claudecode:executor (sonnet) | Task: Worker-5 检查 pin_window bug"
+    },
+    "92098728d8c9fd457b25af8cc6a6cf80370f7ffd72299ccf77edeb68a8100369": {
+      "last_emitted_at_ms": 1787493078076,
+      "message": "Spawning agent: oh-my-claudecode:executor (sonnet) | Task: Worker-3 检查 snip_window 模块 bug"
+    },
+    "018d3f36f469da398b6bbafe43ae60c1ef2bf574edbe6d586a8263dbd577a626": {
+      "last_emitted_at_ms": 1787493078065,
+      "message": "Spawning agent: oh-my-claudecode:executor (sonnet) | Task: Worker-2 检查 app/main.cpp bug"
+    },
+    "dcb2cec49a3feb3c25ba1b724f36d7811abbc83e3a961121c7798cda22f2cd97": {
+      "last_emitted_at_ms": 1787493078028,
+      "message": "Spawning agent: oh-my-claudecode:executor (sonnet) | Task: Worker-1 检查 capture.cpp/h bug"
+    }
+  },
+  "updated_at": "2026-08-23T14:41:58.057Z"
+}

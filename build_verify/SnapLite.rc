@@ -1,0 +1,3 @@
+#include "F:/myInterestingProgram/Snap-Lite/resources/resource.h"
+
+IDI_SNAPLITE ICON "F:/myInterestingProgram/Snap-Lite/build_verify/SnapLite.ico"
