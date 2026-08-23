@@ -28,14 +28,14 @@ inline void ResizeEditToContent(HWND edit) {
     if (dc) {
         HFONT font = reinterpret_cast<HFONT>(SendMessageW(edit, WM_GETFONT, 0, 0));
         HGDIOBJ old = font ? SelectObject(dc, font) : nullptr;
-        if (!text.empty()) GetTextExtentPoint32W(dc, text.c_str(), (int)text.size(), &size);
+        if (!text.empty()) GetTextExtentPoint32W(dc, text.c_str(), static_cast<int>(text.size()), &size);
         GetTextMetricsW(dc, &tm);
         if (old) SelectObject(dc, old);
         ReleaseDC(edit, dc);
     }
 
-    int width = std::max(56, size.cx + 18);
-    int height = std::max(28, (int)tm.tmHeight + 10);
+    int width = std::max(56, static_cast<int>(size.cx) + 18);
+    int height = std::max(28, static_cast<int>(tm.tmHeight) + 10);
 
     SetWindowPos(edit, nullptr, 0, 0, width, height,
         SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
