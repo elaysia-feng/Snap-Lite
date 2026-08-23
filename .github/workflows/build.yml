@@ -30,6 +30,9 @@ jobs:
       - name: Build
         run: cmake --build build --config Release
 
+      - name: Verify embedded app icon
+        run: python scripts/check_pe_icon.py build/Release/SnapLite.exe
+
       - name: Upload executable
         uses: actions/upload-artifact@v4
         with:

@@ -63,39 +63,7 @@ jobs:
         run: cmake --build build --config Release
 
       - name: Validate embedded app icon
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $exe = (Resolve-Path 'build/Release/SnapLite.exe').Path
-          Add-Type @"
-          using System;
-          using System.Runtime.InteropServices;
-          public static class SnapLiteResourceCheck {
-              [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-              public static extern IntPtr LoadLibraryEx(string lpFileName, IntPtr hFile, uint dwFlags);
-              [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-              public static extern IntPtr FindResource(IntPtr hModule, IntPtr lpName, IntPtr lpType);
-              [DllImport("kernel32.dll", SetLastError = true)]
-              [return: MarshalAs(UnmanagedType.Bool)]
-              public static extern bool FreeLibrary(IntPtr hModule);
-          }
-          "@
-          $LOAD_LIBRARY_AS_DATAFILE = 0x00000002
-          $RT_GROUP_ICON = [IntPtr]14
-          $IDI_SNAPLITE = [IntPtr]101
-          $module = [SnapLiteResourceCheck]::LoadLibraryEx($exe, [IntPtr]::Zero, $LOAD_LIBRARY_AS_DATAFILE)
-          if ($module -eq [IntPtr]::Zero) {
-            throw "Unable to open SnapLite.exe as a resource module. Win32=$([Runtime.InteropServices.Marshal]::GetLastWin32Error())"
-          }
-          try {
-            $icon = [SnapLiteResourceCheck]::FindResource($module, $IDI_SNAPLITE, $RT_GROUP_ICON)
-            if ($icon -eq [IntPtr]::Zero) {
-              throw 'SnapLite.exe does not contain the expected application icon resource ID 101.'
-            }
-            Write-Host 'Embedded application icon verified.'
-          } finally {
-            [void][SnapLiteResourceCheck]::FreeLibrary($module)
-          }
+        run: python scripts/check_pe_icon.py build/Release/SnapLite.exe
 
       - name: Prepare package
         shell: pwsh
