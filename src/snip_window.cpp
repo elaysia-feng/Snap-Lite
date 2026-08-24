@@ -16,7 +16,7 @@
 namespace snaplite::detail {
 
 COLORREF gAnnotationColor = RGB(235, 70, 70);
-int gTextSizePt = 16;
+int gTextSizePt = 14;
 int gActiveToolIndex = -1;
 int gShapeKind = 0;
 int gShapeFillMode = 0;

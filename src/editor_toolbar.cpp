@@ -52,7 +52,7 @@ struct TextState {
     std::wstring text;
     POINT origin{};
     COLORREF color{RGB(235, 70, 70)};
-    int sizePt{16};
+    int sizePt{14};
 };
 
 bool SameTextState(const TextState& a, const TextState& b) {
@@ -76,10 +76,10 @@ struct TextItem {
     std::wstring text;
     std::wstring editBackup;
     COLORREF editBackupColor{RGB(235, 70, 70)};
-    int editBackupSizePt{16};
+    int editBackupSizePt{14};
     POINT origin{};
     COLORREF color{RGB(235, 70, 70)};
-    int sizePt{16};
+    int sizePt{14};
     bool selected{false};
     bool dragging{false};
     bool editWasNew{false};
@@ -346,6 +346,12 @@ public:
                 return true;
             }
             if (wParam == VK_RETURN) {
+                // If a text edit is active, Enter must insert a newline into
+                // the multiline EDIT, not finish the snip. Click-outside or
+                // Esc still drives commit/cancel.
+                if (selectedText_ && selectedText_->edit) {
+                    return false;
+                }
                 FinishWithText(SnipWindow::FinishAction::Copy);
                 return true;
             }
@@ -1001,9 +1007,39 @@ private:
         HDC dc = CreateCompatibleDC(nullptr);
         if (!dc) return size;
         const HGDIOBJ oldFont = item->font ? SelectObject(dc, item->font) : nullptr;
+
+        TEXTMETRICW metrics{};
+        if (oldFont) GetTextMetricsW(dc, &metrics);
+        const LONG lineHeight = std::max<LONG>(1, metrics.tmHeight);
+
         if (!item->text.empty()) {
-            GetTextExtentPoint32W(dc, item->text.c_str(), static_cast<int>(item->text.size()), &size);
+            // Multiline text uses explicit \r\n separators (the EDIT control
+            // gives us \r\n). Split on \n so a missing \r still renders as a
+            // break, and measure each line independently so the host rect
+            // grows vertically and the widest line dictates the width.
+            LONG maxWidth = 0;
+            int lineCount = 0;
+            size_t start = 0;
+            const std::wstring& text = item->text;
+            while (start <= text.size()) {
+                const size_t end = text.find(L'\n', start);
+                const size_t chunkLen = (end == std::wstring::npos) ? (text.size() - start)
+                                                                    : (end - start);
+                const std::wstring line = text.substr(start, chunkLen);
+                SIZE lineSize{};
+                if (!line.empty()) {
+                    GetTextExtentPoint32W(dc, line.c_str(), static_cast<int>(line.size()),
+                                          &lineSize);
+                }
+                maxWidth = std::max<LONG>(maxWidth, lineSize.cx);
+                ++lineCount;
+                if (end == std::wstring::npos) break;
+                start = end + 1;
+            }
+            size.cx = maxWidth;
+            size.cy = static_cast<LONG>(lineCount) * lineHeight;
         }
+
         if (oldFont) SelectObject(dc, oldFont);
         DeleteDC(dc);
         size.cx = std::max<LONG>(40, size.cx + 12);
@@ -1105,7 +1141,8 @@ private:
             0,
             L"EDIT",
             item->text.c_str(),
-            WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL,
+            WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL | ES_AUTOVSCROLL |
+                ES_MULTILINE | ES_WANTRETURN,
             0, 0, client.right, client.bottom,
             item->hwnd,
             nullptr,
@@ -1162,11 +1199,32 @@ private:
         if (!item->edit && !item->text.empty()) {
             const HGDIOBJ oldFont = item->font ? SelectObject(dc, item->font) : nullptr;
             SetTextColor(dc, item->color);
-            RECT textRect = client;
-            textRect.left += kTextInsetX;
-            textRect.top += kTextInsetY;
-            DrawTextW(dc, item->text.c_str(), -1, &textRect,
-                      DT_LEFT | DT_TOP | DT_SINGLELINE | DT_NOPREFIX);
+
+            // Render line by line so explicit \r\n separators produce hard
+            // breaks without soft-wrapping to the host rect width (per
+            // user choice: Enter-only wrap, no auto-wrap).
+            TEXTMETRICW metrics{};
+            if (oldFont) GetTextMetricsW(dc, &metrics);
+            const int lineHeight = std::max<int>(1, static_cast<int>(metrics.tmHeight));
+            int y = client.top + kTextInsetY;
+            const int x = client.left + kTextInsetX;
+
+            size_t start = 0;
+            const std::wstring& text = item->text;
+            while (start <= text.size()) {
+                const size_t end = text.find(L'\n', start);
+                const size_t chunkLen = (end == std::wstring::npos)
+                                            ? (text.size() - start)
+                                            : (end - start);
+                const std::wstring line = text.substr(start, chunkLen);
+                if (!line.empty()) {
+                    TextOutW(dc, x, y, line.c_str(), static_cast<int>(line.size()));
+                }
+                y += lineHeight;
+                if (end == std::wstring::npos) break;
+                start = end + 1;
+            }
+
             if (oldFont) SelectObject(dc, oldFont);
         }
 
@@ -1397,14 +1455,13 @@ LRESULT CALLBACK EditSubclassProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM
     if (!item || !item->host) return DefSubclassProc(hwnd, message, wParam, lParam);
 
     if (message == WM_KEYDOWN) {
-        if (wParam == VK_RETURN) {
-            item->host->CommitTextEdit(item);
-            return 0;
-        }
         if (wParam == VK_ESCAPE) {
             item->host->CancelTextEdit(item);
             return 0;
         }
+        // VK_RETURN is intentionally NOT intercepted here: with ES_MULTILINE |
+        // ES_WANTRETURN, the EDIT inserts a newline on its own and we must
+        // not commit on every Enter. Click-outside or Esc drives commit.
     }
     // Reposition IME composition window whenever the caret might have moved.
     if (message == WM_IME_COMPOSITION || message == WM_IME_STARTCOMPOSITION ||

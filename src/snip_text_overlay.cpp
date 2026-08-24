@@ -44,12 +44,30 @@ void SnipWindow::UiBakeTextOverlays(const std::vector<TextOverlay>& overlays) {
 
         const HGDIOBJ oldFont = font ? SelectObject(dc, font) : nullptr;
         SetTextColor(dc, overlay.color);
-        TextOutW(
-            dc,
-            overlay.origin.x,
-            overlay.origin.y,
-            overlay.text.c_str(),
-            static_cast<int>(overlay.text.size()));
+
+        // Render each line at an incremented y so explicit \r\n separators
+        // produce hard breaks without soft-wrapping to a box width.
+        TEXTMETRICW metrics{};
+        if (oldFont) GetTextMetricsW(dc, &metrics);
+        const int lineHeight = std::max<int>(1, static_cast<int>(metrics.tmHeight));
+        int y = overlay.origin.y;
+        const int x = overlay.origin.x;
+
+        size_t start = 0;
+        const std::wstring& text = overlay.text;
+        while (start <= text.size()) {
+            const size_t end = text.find(L'\n', start);
+            const size_t chunkLen = (end == std::wstring::npos)
+                                        ? (text.size() - start)
+                                        : (end - start);
+            const std::wstring line = text.substr(start, chunkLen);
+            if (!line.empty()) {
+                TextOutW(dc, x, y, line.c_str(), static_cast<int>(line.size()));
+            }
+            y += lineHeight;
+            if (end == std::wstring::npos) break;
+            start = end + 1;
+        }
 
         if (oldFont) {
             SelectObject(dc, oldFont);

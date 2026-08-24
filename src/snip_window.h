@@ -39,7 +39,7 @@ struct TextOverlay {
     std::wstring text;
     POINT origin{};
     COLORREF color{kDefaultAnnotationRed()};
-    int sizePt{16};
+    int sizePt{14};
 };
 
 class BitmapHistory : public std::vector<HBITMAP> {
@@ -245,7 +245,7 @@ private:
     int hoverToolbar_{-1};
 
     COLORREF annotationColor_{RGB(235, 70, 70)};
-    int textSizePt_{16};
+    int textSizePt_{14};
 
     HFONT uiFont_{};
     HFONT monoFont_{};

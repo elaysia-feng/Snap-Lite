@@ -68,15 +68,41 @@ inline SIZE MeasureLiveEdit(HWND edit) {
     const HFONT font = reinterpret_cast<HFONT>(SendMessageW(edit, WM_GETFONT, 0, 0));
     const HGDIOBJ oldFont = font ? SelectObject(dc, font) : nullptr;
     const std::wstring text = CurrentEditText(edit);
+
+    LONG maxWidth = 0;
+    int lineCount = 0;
     if (!text.empty()) {
-        GetTextExtentPoint32W(dc, text.c_str(), static_cast<int>(text.size()), &measured);
+        // Split on \n so \r\n from the multiline EDIT yields one row per
+        // visual line. The widest line dictates the width; height is the
+        // number of lines times the font's line height.
+        size_t start = 0;
+        while (start <= text.size()) {
+            const size_t end = text.find(L'\n', start);
+            const size_t chunkLen = (end == std::wstring::npos)
+                                        ? (text.size() - start)
+                                        : (end - start);
+            const std::wstring line = text.substr(start, chunkLen);
+            if (!line.empty()) {
+                SIZE lineSize{};
+                GetTextExtentPoint32W(dc, line.c_str(),
+                                      static_cast<int>(line.size()), &lineSize);
+                maxWidth = std::max<LONG>(maxWidth, lineSize.cx);
+            }
+            ++lineCount;
+            if (end == std::wstring::npos) break;
+            start = end + 1;
+        }
     }
+
     GetTextMetricsW(dc, &metrics);
     if (oldFont) SelectObject(dc, oldFont);
     ReleaseDC(edit, dc);
 
-    measured.cx = static_cast<LONG>(std::max(56, static_cast<int>(measured.cx) + 18));
-    measured.cy = static_cast<LONG>(std::max(28, static_cast<int>(metrics.tmHeight) + 10));
+    const LONG lineHeight = std::max<LONG>(1, metrics.tmHeight);
+    measured.cx = std::max<LONG>(56, maxWidth + 18);
+    measured.cy = std::max<LONG>(
+        28,
+        static_cast<LONG>(lineCount) * lineHeight + 10);
     return measured;
 }
 
