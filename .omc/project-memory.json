@@ -142,6 +142,12 @@
       "type": "file"
     },
     {
+      "path": "CMakeLists.txt",
+      "accessCount": 3,
+      "lastAccessed": 1787543643179,
+      "type": "file"
+    },
+    {
       "path": "src/capture.h",
       "accessCount": 2,
       "lastAccessed": 1787493090957,
@@ -178,12 +184,6 @@
       "type": "file"
     },
     {
-      "path": "CMakeLists.txt",
-      "accessCount": 2,
-      "lastAccessed": 1787493900294,
-      "type": "file"
-    },
-    {
       "path": "README.md",
       "accessCount": 1,
       "lastAccessed": 1787492997202,
@@ -199,6 +199,18 @@
       "path": "src/toolbar_icon_render_gdi.h",
       "accessCount": 1,
       "lastAccessed": 1787493126662,
+      "type": "file"
+    },
+    {
+      "path": ".release/v1.3.3-beta.6.md",
+      "accessCount": 1,
+      "lastAccessed": 1787543693131,
+      "type": "file"
+    },
+    {
+      "path": ".release/v1.3.3-beta.5.md",
+      "accessCount": 1,
+      "lastAccessed": 1787543693474,
       "type": "file"
     }
   ],
