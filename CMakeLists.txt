@@ -43,7 +43,7 @@ target_compile_definitions(
 )
 target_link_libraries(
     SnapLite PRIVATE
-    user32 gdi32 gdiplus shell32 ole32 uuid advapi32 comdlg32 comctl32 dwmapi
+    user32 gdi32 gdiplus shell32 ole32 uuid advapi32 comdlg32 comctl32 dwmapi imm32
 )
 
 if(MSVC)
@@ -53,11 +53,6 @@ if(MSVC)
         APPEND PROPERTY COMPILE_OPTIONS
         "/FI${CMAKE_CURRENT_SOURCE_DIR}/src/window_bounds_fix.h"
         "/FI${CMAKE_CURRENT_SOURCE_DIR}/src/drag_repaint_fix.h"
-    )
-    set_property(
-        SOURCE src/editor_toolbar.cpp
-        APPEND PROPERTY COMPILE_OPTIONS
-        "/FI${CMAKE_CURRENT_SOURCE_DIR}/src/edit_repaint_fix.h"
     )
 endif()
 

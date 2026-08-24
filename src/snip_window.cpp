@@ -387,7 +387,6 @@ int SnipWindow::UiActiveTool() const {
 }
 
 void SnipWindow::UiSetTool(int toolIndex) {
-    if (textEdit_ && toolIndex != 4) CommitTextEdit();
     switch (toolIndex) {
     case 0: tool_ = Tool::Rectangle; break;
     case 1: tool_ = Tool::Arrow; break;
@@ -425,7 +424,6 @@ COLORREF SnipWindow::UiColor() const { return annotationColor_; }
 void SnipWindow::UiSetColor(COLORREF color) {
     annotationColor_ = color;
     detail::gAnnotationColor = color;
-    if (textEdit_) InvalidateRect(textEdit_, nullptr, TRUE);
     InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
@@ -433,19 +431,6 @@ int SnipWindow::UiTextSize() const { return textSizePt_; }
 void SnipWindow::UiSetTextSize(int points) {
     textSizePt_ = std::clamp(points, 10, 72);
     detail::gTextSizePt = textSizePt_;
-    if (textFont_) {
-        DeleteObject(textFont_);
-        textFont_ = nullptr;
-    }
-    if (textEdit_) {
-        const UINT dpi = GetDpiForWindow(hwnd_);
-        const int height = -MulDiv(textSizePt_, static_cast<int>(dpi), 72);
-        textFont_ = ::CreateFontW(
-            height, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-            CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-        if (textFont_) SendMessageW(textEdit_, WM_SETFONT, reinterpret_cast<WPARAM>(textFont_), TRUE);
-    }
     InvalidateRect(hwnd_, nullptr, FALSE);
 }
 

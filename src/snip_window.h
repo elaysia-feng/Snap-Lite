@@ -193,9 +193,6 @@ private:
     void DrawPenSegment(POINT from, POINT to);
     void ApplyMosaic(POINT point);
 
-    void BeginTextEdit(POINT point);
-    void CommitTextEdit();
-
     void HandleToolbarClick(int index);
     void Finish(FinishAction action);
     void CopyCurrentColor();
@@ -250,9 +247,6 @@ private:
     COLORREF annotationColor_{RGB(235, 70, 70)};
     int textSizePt_{16};
 
-    HWND textEdit_{};
-    POINT textOrigin_{};
-    HFONT textFont_{};
     HFONT uiFont_{};
     HFONT monoFont_{};
 };

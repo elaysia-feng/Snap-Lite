@@ -1,11 +1,13 @@
 #include "anime_toolbar.h"
 #include "snip_window.h"
 #include "toolbar_icon_render_gdi.h"
+#include "edit_repaint_fix.h"
 
 #include <commctrl.h>
 #include <commdlg.h>
 #include <gdiplus.h>
 #include <windowsx.h>
+#include <imm.h>
 
 #include <algorithm>
 #include <array>
@@ -34,6 +36,14 @@ constexpr int kToolWidth = 78;
 constexpr int kPad = 10;
 constexpr int kGap = 3;
 constexpr int kActionGap = 3;
+// Distance in pixels the mouse must travel after LBDOWN before a click on a
+// text annotation is treated as a drag rather than a select. 4 px matches the
+// standard Windows drag threshold.
+constexpr int kDragThreshold = 4;
+// Horizontal / vertical inset used by both the in-canvas preview and the
+// baked overlay so saved images match what the user saw on screen.
+constexpr int kTextInsetX = 4;
+constexpr int kTextInsetY = 2;
 constexpr int kActionStart = kPad + kToolCount * kToolWidth + 12;
 
 class ToolbarHost;
@@ -314,6 +324,15 @@ public:
         if (!snip_ || !snip_->UiHasSelection()) return false;
 
         if (message == WM_KEYDOWN) {
+            // ESC layered: cancel current edit first; otherwise fall through so
+            // the parent snip window can destroy itself.
+            if (wParam == VK_ESCAPE) {
+                if (selectedText_ && selectedText_->edit) {
+                    CancelTextEdit(selectedText_);
+                    return true;
+                }
+                // No active edit — let the parent snip handle it.
+            }
             if ((GetKeyState(VK_CONTROL) & 0x8000) && wParam == 'Z') {
                 UnifiedUndo();
                 return true;
@@ -333,6 +352,8 @@ public:
         }
 
         if (message == WM_LBUTTONDBLCLK) {
+            // Text annotations handle their own DBLCLK via TextWindowProc.
+            // Clicks that reach the parent are in empty space — finish snip.
             POINT p{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
             RECT selection = snip_->UiSelectionRect();
             if (PtInRect(&selection, p)) {
@@ -342,6 +363,8 @@ public:
         }
 
         if (message == WM_LBUTTONDOWN) {
+            // Text annotations own their own mouse handling via TextWindowProc.
+            // The parent only sees clicks that hit empty space in the selection.
             POINT p{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
             RECT selection = snip_->UiSelectionRect();
             const int tool = snip_->UiActiveTool();
@@ -460,17 +483,32 @@ public:
             SelectText(item);
             return 0;
         case WM_LBUTTONDOWN:
+            // Threshold-based: a single click selects, a click-then-drag moves.
             if (!item->edit) {
                 SelectText(item);
                 SetFocus(hwnd);
-                item->dragging = true;
-                GetCursorPos(&item->dragStartScreen);
-                item->dragOrigin = item->origin;
-                item->dragBefore = SnapshotTextStates();
-                SetCapture(hwnd);
+                POINT screen{};
+                GetCursorPos(&screen);
+                pendingDrag_ = item;
+                pendingDragStart_ = screen;
+                pendingDragOrigin_ = item->origin;
             }
             return 0;
         case WM_MOUSEMOVE:
+            if (pendingDrag_ == item && (wParam & MK_LBUTTON)) {
+                POINT screen{};
+                GetCursorPos(&screen);
+                const int dx = screen.x - pendingDragStart_.x;
+                const int dy = screen.y - pendingDragStart_.y;
+                if (dx * dx + dy * dy >= kDragThreshold * kDragThreshold) {
+                    item->dragging = true;
+                    item->dragStartScreen = pendingDragStart_;
+                    item->dragOrigin = pendingDragOrigin_;
+                    item->dragBefore = SnapshotTextStates();
+                    SetCapture(hwnd);
+                    pendingDrag_ = nullptr;
+                }
+            }
             if (item->dragging && (wParam & MK_LBUTTON)) {
                 POINT screen{};
                 GetCursorPos(&screen);
@@ -480,6 +518,10 @@ public:
             }
             return 0;
         case WM_LBUTTONUP:
+            if (pendingDrag_ == item) {
+                // Released without exceeding drag threshold — it was a click.
+                pendingDrag_ = nullptr;
+            }
             if (item->dragging) {
                 item->dragging = false;
                 ReleaseCapture();
@@ -513,17 +555,13 @@ public:
             }
             break;
         case WM_COMMAND:
-            if (item->edit && reinterpret_cast<HWND>(lParam) == item->edit) {
-                const WORD notify = HIWORD(wParam);
-                if (notify == EN_UPDATE) {
-                    RedrawWindow(hwnd, nullptr, nullptr,
-                                 RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_ALLCHILDREN);
-                    return 0;
-                }
-                if (notify == EN_KILLFOCUS) {
-                    CommitTextEdit(item);
-                    return 0;
-                }
+            // EN_UPDATE is intentionally not handled here: edit_repaint_fix.h's
+            // TextEditRefreshProc re-layouts and repaints deterministically after
+            // any content-mutating message (WM_CHAR / WM_PASTE / WM_CUT / etc.).
+            if (item->edit && reinterpret_cast<HWND>(lParam) == item->edit &&
+                HIWORD(wParam) == EN_KILLFOCUS) {
+                CommitTextEdit(item);
+                return 0;
             }
             break;
         case WM_PAINT:
@@ -957,14 +995,17 @@ private:
         SIZE size{40, 24};
         if (!item) return size;
         EnsureTextFont(item);
-        HDC dc = GetDC(parent_);
+        // Use a memory DC so device-specific padding on the screen DC does
+        // not bleed into text-width measurements (regression that showed up
+        // when the parent snip window was maximised on a high-DPI display).
+        HDC dc = CreateCompatibleDC(nullptr);
         if (!dc) return size;
         const HGDIOBJ oldFont = item->font ? SelectObject(dc, item->font) : nullptr;
         if (!item->text.empty()) {
             GetTextExtentPoint32W(dc, item->text.c_str(), static_cast<int>(item->text.size()), &size);
         }
         if (oldFont) SelectObject(dc, oldFont);
-        ReleaseDC(parent_, dc);
+        DeleteDC(dc);
         size.cx = std::max<LONG>(40, size.cx + 12);
         size.cy = std::max<LONG>(24, size.cy + 8);
         return size;
@@ -1005,15 +1046,23 @@ private:
         TextItem* raw = item.get();
         texts_.push_back(std::move(item));
 
+        // Measure the initial size from the actual font/text so the host window
+        // is created at the right dimensions on the first paint — no 80x28 flash
+        // and no out-of-bounds origin near the bottom of the selection.
+        SIZE size = MeasureText(raw);
+        POINT origin = raw->origin;
+        ClampTextOrigin(raw, origin, size);
+        raw->origin = origin;
+
         raw->hwnd = CreateWindowExW(
-            WS_EX_TRANSPARENT,
+            0,
             kTextClass,
             L"",
             WS_CHILD | WS_VISIBLE,
             raw->origin.x,
             raw->origin.y,
-            80,
-            28,
+            static_cast<int>(size.cx),
+            static_cast<int>(size.cy),
             parent_,
             nullptr,
             instance_,
@@ -1023,7 +1072,6 @@ private:
             texts_.pop_back();
             return nullptr;
         }
-        ResizeTextItem(raw);
         return raw;
     }
 
@@ -1037,7 +1085,8 @@ private:
         if (!item) return;
         item->editBefore = before;
         item->editWasNew = true;
-        SelectText(item);
+        // BeginTextEdit internally calls SelectText — that keeps the category
+        // and snip tool alone (continuous creation in Text mode).
         BeginTextEdit(item, true);
     }
 
@@ -1053,7 +1102,7 @@ private:
         RECT client{};
         GetClientRect(item->hwnd, &client);
         item->edit = CreateWindowExW(
-            WS_EX_TRANSPARENT,
+            0,
             L"EDIT",
             item->text.c_str(),
             WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL,
@@ -1082,6 +1131,25 @@ private:
                      SWP_NOACTIVATE | SWP_SHOWWINDOW);
     }
 
+    // Hit-test: returns the topmost TextItem whose host rect contains `p` in
+    // parent-client coordinates. NULL if none.
+    TextItem* HitTestTexts(POINT p) {
+        TextItem* found = nullptr;
+        for (auto& item : texts_) {
+            if (!item->hwnd) continue;
+            RECT r{};
+            if (!GetWindowRect(item->hwnd, &r)) continue;
+            POINT pts[2]{{r.left, r.top}, {r.right, r.bottom}};
+            MapWindowPoints(nullptr, parent_, pts, 2);
+            RECT inParent{pts[0].x, pts[0].y, pts[1].x, pts[1].y};
+            if (PtInRect(&inParent, p)) {
+                found = item.get();
+                // Later items paint on top — keep iterating to find the real top.
+            }
+        }
+        return found;
+    }
+
     void PaintTextItem(TextItem* item, HWND hwnd) {
         PAINTSTRUCT ps{};
         HDC dc = BeginPaint(hwnd, &ps);
@@ -1095,8 +1163,8 @@ private:
             const HGDIOBJ oldFont = item->font ? SelectObject(dc, item->font) : nullptr;
             SetTextColor(dc, item->color);
             RECT textRect = client;
-            textRect.left += 4;
-            textRect.top += 2;
+            textRect.left += kTextInsetX;
+            textRect.top += kTextInsetY;
             DrawTextW(dc, item->text.c_str(), -1, &textRect,
                       DT_LEFT | DT_TOP | DT_SINGLELINE | DT_NOPREFIX);
             if (oldFont) SelectObject(dc, oldFont);
@@ -1123,8 +1191,9 @@ private:
         selectedText_ = item;
         if (selectedText_) {
             selectedText_->selected = true;
-            category_ = Category::Select;
-            snip_->UiSetTool(-1);
+            // Do not touch category_ or snip_->UiSetTool here. Selecting an
+            // existing text annotation must not silently switch the user back
+            // to the Select tool — that breaks continuous text creation.
             InvalidateRect(selectedText_->hwnd, nullptr, FALSE);
         }
         InvalidateRect(toolbar_, nullptr, FALSE);
@@ -1142,6 +1211,8 @@ private:
 
     void RemoveTextItem(TextItem* target) {
         if (!target) return;
+        // Snapshot before destruction so callers cannot forget to record undo.
+        const auto before = SnapshotTextStates();
         if (selectedText_ == target) selectedText_ = nullptr;
         for (auto it = texts_.begin(); it != texts_.end(); ++it) {
             if (it->get() == target) {
@@ -1154,13 +1225,13 @@ private:
             }
         }
         InvalidateRect(toolbar_, nullptr, FALSE);
+        RecordTextAction(before, SnapshotTextStates());
     }
 
     void DeleteText(TextItem* item) {
         if (!item) return;
-        const auto before = SnapshotTextStates();
+        // RemoveTextItem records the undo action internally.
         RemoveTextItem(item);
-        RecordTextAction(before, SnapshotTextStates());
     }
 
     std::vector<TextState> SnapshotTextStates() const {
@@ -1229,7 +1300,8 @@ private:
             if (item->text.empty()) continue;
             // PaintTextItem renders committed text with this content inset.
             // Bake using the same coordinates so saved/copied images match preview.
-            overlays.push_back({item->text, {item->origin.x + 4, item->origin.y + 2},
+            overlays.push_back({item->text,
+                                {item->origin.x + kTextInsetX, item->origin.y + kTextInsetY},
                                 item->color, item->sizePt});
         }
         return overlays;
@@ -1255,6 +1327,11 @@ private:
     int hoverSecondary_{-1};
     bool rasterPending_{false};
     TextItem* selectedText_{};
+    // Pending click on a text annotation. Resolved to a real drag in the
+    // host's WM_MOUSEMOVE once movement exceeds kDragThreshold pixels.
+    TextItem* pendingDrag_{};
+    POINT pendingDragStart_{};
+    POINT pendingDragOrigin_{};
     std::vector<std::unique_ptr<TextItem>> texts_;
     std::vector<HistoryAction> undoActions_;
     std::vector<HistoryAction> redoActions_;
@@ -1283,6 +1360,37 @@ LRESULT CALLBACK TextWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM l
                                 : DefWindowProcW(hwnd, message, wParam, lParam);
 }
 
+namespace {
+
+// Reposition the IME composition / candidate window so it follows the EDIT
+// caret in screen coordinates. Without this, Chinese/Japanese IMEs can show
+// the candidate list far from the cursor when the host window has unusual
+// position/size attributes (transparent ancestors, high DPI, etc.).
+void PositionImeCompositionWindow(HWND edit) {
+    HIMC context = ImmGetContext(edit);
+    if (!context) return;
+
+    POINT caret{};
+    if (GetCaretPos(&caret)) {
+        COMPOSITIONFORM form{};
+        form.dwStyle = CFS_POINT;
+        ClientToScreen(edit, &caret);
+        // 4 px below the caret baseline — matches Windows default heuristic.
+        caret.y += 4;
+        form.ptCurrentPos = caret;
+        ImmSetCompositionWindow(context, &form);
+
+        CANDIDATEFORM candidate{};
+        candidate.dwStyle = CFS_CANDIDATEPOS;
+        candidate.ptCurrentPos = caret;
+        candidate.dwIndex = 0;
+        ImmSetCandidateWindow(context, &candidate);
+    }
+    ImmReleaseContext(edit, context);
+}
+
+}  // namespace
+
 LRESULT CALLBACK EditSubclassProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam,
                                  UINT_PTR, DWORD_PTR refData) {
     auto* item = reinterpret_cast<TextItem*>(refData);
@@ -1297,6 +1405,12 @@ LRESULT CALLBACK EditSubclassProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM
             item->host->CancelTextEdit(item);
             return 0;
         }
+    }
+    // Reposition IME composition window whenever the caret might have moved.
+    if (message == WM_IME_COMPOSITION || message == WM_IME_STARTCOMPOSITION ||
+        message == WM_IME_ENDCOMPOSITION || message == WM_SETFOCUS ||
+        message == WM_KEYUP || message == WM_LBUTTONUP) {
+        PositionImeCompositionWindow(hwnd);
     }
     if (message == WM_NCDESTROY) {
         RemoveWindowSubclass(hwnd, EditSubclassProc, kEditSubclassId);

@@ -223,14 +223,6 @@ SnipWindow::SnipWindow(HINSTANCE instance, HWND owner, CaptureCallback callback)
 
 SnipWindow::~SnipWindow() {
     ReleaseFrameBuffer();
-    if (textEdit_) {
-        DestroyWindow(textEdit_);
-        textEdit_ = nullptr;
-    }
-    if (textFont_) {
-        DeleteObject(textFont_);
-        textFont_ = nullptr;
-    }
     if (uiFont_) {
         DeleteObject(uiFont_);
         uiFont_ = nullptr;
@@ -959,7 +951,6 @@ void SnipWindow::ClearHistory() {
 }
 
 void SnipWindow::BeginSelectionDrag(POINT point) {
-    CommitTextEdit();
     ClearHistory();
     tool_ = Tool::None;
     selected_ = false;
@@ -1119,7 +1110,6 @@ void SnipWindow::BeginEdit() {
 }
 
 void SnipWindow::Undo() {
-    CommitTextEdit();
     if (undo_.empty()) {
         return;
     }
@@ -1137,7 +1127,6 @@ void SnipWindow::Undo() {
 }
 
 void SnipWindow::Redo() {
-    CommitTextEdit();
     if (redo_.empty()) {
         return;
     }
@@ -1227,86 +1216,9 @@ void SnipWindow::ApplyMosaic(POINT point) {
     DeleteDC(dc);
 }
 
-void SnipWindow::BeginTextEdit(POINT point) {
-    CommitTextEdit();
-    if (!selected_) {
-        return;
-    }
-
-    BeginEdit();
-    textOrigin_ = ClampPoint(point, NormalizedSelection());
-    const RECT r = NormalizedSelection();
-    const int width = std::max(80, std::min(240, static_cast<int>(r.right - textOrigin_.x)));
-
-    textEdit_ = CreateWindowExW(
-        WS_EX_TOPMOST,
-        L"EDIT",
-        L"",
-        WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL,
-        textOrigin_.x,
-        textOrigin_.y,
-        width,
-        30,
-        hwnd_,
-        nullptr,
-        instance_,
-        nullptr);
-
-    if (!textEdit_) {
-        return;
-    }
-
-    if (!textFont_) {
-        textFont_ = CreateFontW(
-            -20, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-            CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-    }
-    if (textFont_) {
-        SendMessageW(textEdit_, WM_SETFONT, reinterpret_cast<WPARAM>(textFont_), TRUE);
-    }
-    SetFocus(textEdit_);
-}
-
-void SnipWindow::CommitTextEdit() {
-    if (!textEdit_) {
-        return;
-    }
-
-    const int length = GetWindowTextLengthW(textEdit_);
-    std::wstring text(static_cast<size_t>(std::max(0, length)), L'\0');
-    if (length > 0) {
-        GetWindowTextW(textEdit_, text.data(), length + 1);
-    }
-
-    // Destroy the edit control BEFORE clearing textEdit_ so any pending
-    // WM_COMMAND(EN_KILLFOCUS) re-entering CommitTextEdit finds textEdit_
-    // still set and bails out cleanly instead of double-committing.
-    HWND edit = textEdit_;
-    DestroyWindow(edit);
-    textEdit_ = nullptr;
-
-    if (!text.empty()) {
-        HDC dc = CreateCompatibleDC(nullptr);
-        const HGDIOBJ oldBitmap = SelectObject(dc, capture_);
-        const HGDIOBJ oldFont = textFont_ ? SelectObject(dc, textFont_) : nullptr;
-        SetBkMode(dc, TRANSPARENT);
-        SetTextColor(dc, RGB(235, 70, 70));
-        TextOutW(dc, textOrigin_.x, textOrigin_.y, text.c_str(), static_cast<int>(text.size()));
-        if (oldFont) SelectObject(dc, oldFont);
-        SelectObject(dc, oldBitmap);
-        DeleteDC(dc);
-    }
-    InvalidateRect(hwnd_, nullptr, FALSE);
-}
-
 void SnipWindow::HandleToolbarClick(int index) {
     if (index < 0 || index >= kToolbarButtons) {
         return;
-    }
-
-    if (index != 4) {
-        CommitTextEdit();
     }
 
     switch (index) {
@@ -1350,7 +1262,6 @@ void SnipWindow::HandleToolbarClick(int index) {
 }
 
 void SnipWindow::Finish(FinishAction action) {
-    CommitTextEdit();
     if (!selected_) {
         return;
     }
@@ -1438,13 +1349,7 @@ LRESULT SnipWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
             return 0;
         }
 
-        CommitTextEdit();
         const RECT r = NormalizedSelection();
-        if (tool_ == Tool::Text && PtInRect(&r, point)) {
-            BeginTextEdit(point);
-            return 0;
-        }
-
         if (tool_ != Tool::None && PtInRect(&r, point)) {
             drawing_ = true;
             drawStart_ = ClampPoint(point, r);
@@ -1510,24 +1415,15 @@ LRESULT SnipWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
     case WM_RBUTTONDOWN:
         if (tool_ != Tool::None) {
             tool_ = Tool::None;
-            CommitTextEdit();
             InvalidateRect(hwnd_, nullptr, FALSE);
         } else {
             DestroyWindow(hwnd_);
         }
         return 0;
 
-    case WM_COMMAND:
-        if (textEdit_ && reinterpret_cast<HWND>(lParam) == textEdit_ && HIWORD(wParam) == EN_KILLFOCUS) {
-            CommitTextEdit();
-            return 0;
-        }
-        break;
-
     case WM_KEYDOWN:
         if (wParam == VK_ESCAPE) {
-            if (tool_ != Tool::None || textEdit_) {
-                CommitTextEdit();
+            if (tool_ != Tool::None) {
                 tool_ = Tool::None;
                 InvalidateRect(hwnd_, nullptr, FALSE);
             } else {
