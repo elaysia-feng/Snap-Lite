@@ -199,10 +199,14 @@ inline void ResizeHostToLiveText(HWND edit) {
 
     // Redraw only the screenshot parent here. The edit itself is painted below,
     // so shrinking a text box cannot leave pixels from the old, wider box behind.
-    ::RedrawWindow(snipHwnd,
-                   &dirty,
-                   nullptr,
-                   RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOCHILDREN);
+    // RDW_UPDATENOW is intentionally avoided: it forces snipHwnd to repaint
+    // synchronously, which BitBlts capture pixels over the EDIT before the
+    // child window composition step can lay it back down — that is the visible
+    // "flash" on every keystroke. Asynchronous invalidation lets the EDIT
+    // repaint and the child window composition finish first; WS_CLIPCHILDREN
+    // already prevents snipHwnd from overwriting the live text region when
+    // it eventually processes the dirty rect.
+    ::InvalidateRect(snipHwnd, &dirty, FALSE);
 }
 
 inline void RefreshEditVisual(HWND edit) {
