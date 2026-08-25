@@ -4,6 +4,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName PresentationCore
+Add-Type -AssemblyName WindowsBase
 
 $base64 = (Get-Content $InputBase64Path -Raw).Trim()
 if ([string]::IsNullOrWhiteSpace($base64)) {
@@ -29,44 +31,91 @@ function Read-PngU32BE([byte[]]$data, [int]$offset) {
            [uint32]$data[$offset + 3]
 }
 
-$width = [int](Read-PngU32BE $png 16)
-$height = [int](Read-PngU32BE $png 20)
-if ($width -lt 1 -or $height -lt 1 -or $width -gt 256 -or $height -gt 256) {
-    throw "PNG dimensions ${width}x${height} are invalid for an ICO entry."
+$input = New-Object System.IO.MemoryStream(,$png)
+try {
+    $decoder = [System.Windows.Media.Imaging.PngBitmapDecoder]::new(
+        $input,
+        [System.Windows.Media.Imaging.BitmapCreateOptions]::PreservePixelFormat,
+        [System.Windows.Media.Imaging.BitmapCacheOption]::OnLoad
+    )
+    $source = $decoder.Frames[0]
+} finally {
+    $input.Dispose()
 }
 
-# Keep the ICO directory metadata identical to the embedded PNG dimensions.
-# The previous package labelled one 128x128 PNG as 16/32/48/256, which made
-# the group icon structurally inconsistent and caused Windows Shell to fall
-# back to the generic executable icon.
-$widthByte = if ($width -eq 256) { [byte]0 } else { [byte]$width }
-$heightByte = if ($height -eq 256) { [byte]0 } else { [byte]$height }
+if (-not $source -or $source.PixelWidth -lt 1 -or $source.PixelHeight -lt 1) {
+    throw 'WIC could not decode the icon PNG source.'
+}
+
+$sizes = @(16, 32, 48, 128)
+$entries = @()
+
+foreach ($size in $sizes) {
+    if ($source.PixelWidth -eq $size -and $source.PixelHeight -eq $size) {
+        $frame = $source
+    } else {
+        $scaleX = $size / [double]$source.PixelWidth
+        $scaleY = $size / [double]$source.PixelHeight
+        $transform = [System.Windows.Media.ScaleTransform]::new($scaleX, $scaleY)
+        $frame = [System.Windows.Media.Imaging.TransformedBitmap]::new($source, $transform)
+    }
+
+    $encoder = [System.Windows.Media.Imaging.PngBitmapEncoder]::new()
+    $encoder.Frames.Add([System.Windows.Media.Imaging.BitmapFrame]::Create($frame))
+
+    $pngStream = New-Object System.IO.MemoryStream
+    try {
+        $encoder.Save($pngStream)
+        $layer = $pngStream.ToArray()
+    } finally {
+        $pngStream.Dispose()
+    }
+
+    $actualWidth = [int](Read-PngU32BE $layer 16)
+    $actualHeight = [int](Read-PngU32BE $layer 20)
+    if ($actualWidth -ne $size -or $actualHeight -ne $size) {
+        throw "Generated PNG layer ${actualWidth}x${actualHeight} does not match requested ${size}x${size}."
+    }
+
+    $entries += [PSCustomObject]@{
+        Size = $size
+        Data = $layer
+    }
+}
+
 $headerSize = 6
 $entrySize = 16
-$payloadOffset = $headerSize + $entrySize
-
+$offset = $headerSize + $entrySize * $entries.Count
 $stream = New-Object System.IO.MemoryStream
 $writer = New-Object System.IO.BinaryWriter($stream)
+
 try {
     $writer.Write([uint16]0)
     $writer.Write([uint16]1)
-    $writer.Write([uint16]1)
+    $writer.Write([uint16]$entries.Count)
 
-    $writer.Write($widthByte)
-    $writer.Write($heightByte)
-    $writer.Write([byte]0)
-    $writer.Write([byte]0)
-    $writer.Write([uint16]1)
-    $writer.Write([uint16]32)
-    $writer.Write([uint32]$png.Length)
-    $writer.Write([uint32]$payloadOffset)
-    $writer.Write($png)
+    foreach ($entry in $entries) {
+        $dimension = if ($entry.Size -eq 256) { [byte]0 } else { [byte]$entry.Size }
+        $writer.Write($dimension)
+        $writer.Write($dimension)
+        $writer.Write([byte]0)
+        $writer.Write([byte]0)
+        $writer.Write([uint16]1)
+        $writer.Write([uint16]32)
+        $writer.Write([uint32]$entry.Data.Length)
+        $writer.Write([uint32]$offset)
+        $offset += $entry.Data.Length
+    }
+
+    foreach ($entry in $entries) {
+        $writer.Write([byte[]]$entry.Data)
+    }
+
     $writer.Flush()
-
     [System.IO.File]::WriteAllBytes($OutputPath, $stream.ToArray())
 } finally {
     $writer.Dispose()
     $stream.Dispose()
 }
 
-Write-Host "Generated valid ${width}x${height} PNG-compressed ICO: $OutputPath"
+Write-Host "Generated valid multi-size ICO: $($sizes -join ', ') px -> $OutputPath"
