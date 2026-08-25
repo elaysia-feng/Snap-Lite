@@ -1,11 +1,11 @@
 cmake_minimum_required(VERSION 3.20)
-project(SnapLite VERSION 1.3.3 LANGUAGES CXX RC)
+project(SnapLite VERSION 1.3.4 LANGUAGES CXX RC)
 
 set(SNAPLITE_ICON "${CMAKE_CURRENT_BINARY_DIR}/SnapLite.ico")
 execute_process(
     COMMAND powershell -NoProfile -ExecutionPolicy Bypass
             -File "${CMAKE_CURRENT_SOURCE_DIR}/scripts/normalize_ico.ps1"
-            -InputBase64Path "${CMAKE_CURRENT_SOURCE_DIR}/resources/SnapLite-icon.png.b64"
+            -InputIconPath "${CMAKE_CURRENT_SOURCE_DIR}/resources/SnapLite.ico"
             -OutputPath "${SNAPLITE_ICON}"
     RESULT_VARIABLE SNAP_LITE_ICON_NORMALIZE_RESULT
 )
