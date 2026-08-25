@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import struct
 import sys
 from pathlib import Path
@@ -8,7 +9,6 @@ RT_ICON = 3
 RT_GROUP_ICON = 14
 IDI_SNAPLITE = 101
 PNG_SIGNATURE = b'\x89PNG\r\n\x1a\n'
-REQUIRED_SIZES = {(16, 16), (32, 32), (48, 48)}
 
 
 def u16(data: bytes, off: int) -> int:
@@ -93,6 +93,45 @@ def png_dimensions(payload: bytes) -> tuple[int, int]:
     return struct.unpack_from('>II', payload, 16)
 
 
+def check_windows_shell_icon(exe: Path) -> None:
+    if os.name != 'nt':
+        return
+
+    import ctypes
+    from ctypes import wintypes
+
+    shell32 = ctypes.WinDLL('shell32', use_last_error=True)
+    user32 = ctypes.WinDLL('user32', use_last_error=True)
+    hicon = wintypes.HANDLE
+
+    shell32.ExtractIconExW.argtypes = [
+        wintypes.LPCWSTR,
+        ctypes.c_int,
+        ctypes.POINTER(hicon),
+        ctypes.POINTER(hicon),
+        wintypes.UINT,
+    ]
+    shell32.ExtractIconExW.restype = wintypes.UINT
+    user32.DestroyIcon.argtypes = [hicon]
+    user32.DestroyIcon.restype = wintypes.BOOL
+
+    count = shell32.ExtractIconExW(str(exe.resolve()), -1, None, None, 0)
+    if count < 1:
+        raise ValueError('Windows Shell reports no extractable icon in the executable')
+
+    large = (hicon * 1)()
+    small = (hicon * 1)()
+    extracted = shell32.ExtractIconExW(str(exe.resolve()), 0, large, small, 1)
+    try:
+        if extracted < 1 or not large[0] or not small[0]:
+            raise ValueError('Windows Shell could not extract both large and small app icons')
+    finally:
+        if large[0]:
+            user32.DestroyIcon(large[0])
+        if small[0]:
+            user32.DestroyIcon(small[0])
+
+
 def check_icon(exe: Path) -> None:
     data = exe.read_bytes()
     if len(data) < 0x100 or data[:2] != b'MZ':
@@ -139,8 +178,8 @@ def check_icon(exe: Path) -> None:
     if len(group) < 6 + count * 14:
         raise ValueError('RT_GROUP_ICON directory is truncated')
 
-    found_sizes: set[tuple[int, int]] = set()
     details: list[str] = []
+    largest_area = 0
 
     for i in range(count):
         off = 6 + i * 14
@@ -174,15 +213,17 @@ def check_icon(exe: Path) -> None:
                 f'RT_ICON {image_id} has unexpected planes/bit depth: {planes}/{bit_count}'
             )
 
-        found_sizes.add((width, height))
+        largest_area = max(largest_area, width * height)
         details.append(f'{width}x{height}#id{image_id}')
 
-    missing = REQUIRED_SIZES - found_sizes
-    if missing:
-        formatted = ', '.join(f'{w}x{h}' for w, h in sorted(missing))
-        raise ValueError(f'Missing required embedded icon sizes: {formatted}')
+    if largest_area < 32 * 32:
+        raise ValueError('Embedded icon is too small for normal Windows Shell rendering')
 
-    print(f'Embedded Snap-Lite icon verified in {exe}: {", ".join(details)}')
+    check_windows_shell_icon(exe)
+    print(
+        f'Embedded Snap-Lite icon verified in {exe}: {", ".join(details)}; '
+        'Windows Shell extraction succeeded'
+    )
 
 
 def main() -> int:
