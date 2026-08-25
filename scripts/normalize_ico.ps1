@@ -1,50 +1,135 @@
 param(
-    [Parameter(Mandatory=$true)][string]$InputBase64Path,
+    [Parameter(Mandatory=$true)][string]$InputIconPath,
     [Parameter(Mandatory=$true)][string]$OutputPath
 )
 
 $ErrorActionPreference = 'Stop'
 
-$base64 = (Get-Content $InputBase64Path -Raw).Trim()
-if ([string]::IsNullOrWhiteSpace($base64)) { throw 'Icon source is empty.' }
-$png = [Convert]::FromBase64String($base64)
-if ($png.Length -lt 24) { throw 'PNG source is too small.' }
-
-$signature = [byte[]](137,80,78,71,13,10,26,10)
-for ($i = 0; $i -lt $signature.Length; $i++) {
-    if ($png[$i] -ne $signature[$i]) { throw 'Icon source is not a PNG.' }
+if (-not (Test-Path $InputIconPath)) {
+    throw "Icon source does not exist: $InputIconPath"
 }
 
-# Build a modern ICO containing several directory entries that all reference
-# PNG-compressed image data. PNG icon resources are accepted by current rc.exe
-# and avoid the legacy-DIB RC2176 failure seen with the checked-in .ico file.
-$sizes = @(16, 32, 48, 256)
+$bytes = [System.IO.File]::ReadAllBytes($InputIconPath)
+if ($bytes.Length -lt 22) {
+    throw 'ICO source is too small.'
+}
+
+function Read-U16([byte[]]$data, [int]$offset) {
+    return [BitConverter]::ToUInt16($data, $offset)
+}
+
+function Read-U32([byte[]]$data, [int]$offset) {
+    return [BitConverter]::ToUInt32($data, $offset)
+}
+
+function Read-PngU32BE([byte[]]$data, [int]$offset) {
+    return ([uint32]$data[$offset] -shl 24) -bor
+           ([uint32]$data[$offset + 1] -shl 16) -bor
+           ([uint32]$data[$offset + 2] -shl 8) -bor
+           [uint32]$data[$offset + 3]
+}
+
+if ((Read-U16 $bytes 0) -ne 0 -or (Read-U16 $bytes 2) -ne 1) {
+    throw 'Source is not a Windows ICO file.'
+}
+
+$count = Read-U16 $bytes 4
+if ($count -lt 1) {
+    throw 'ICO source has no images.'
+}
+
+$directoryEnd = 6 + 16 * $count
+if ($bytes.Length -lt $directoryEnd) {
+    throw 'ICO directory is truncated.'
+}
+
+$pngSignature = [byte[]](137,80,78,71,13,10,26,10)
+$entries = @()
+
+for ($i = 0; $i -lt $count; $i++) {
+    $entryOffset = 6 + 16 * $i
+    $widthByte = $bytes[$entryOffset]
+    $heightByte = $bytes[$entryOffset + 1]
+    $width = if ($widthByte -eq 0) { 256 } else { [int]$widthByte }
+    $height = if ($heightByte -eq 0) { 256 } else { [int]$heightByte }
+    $payloadSize = [int](Read-U32 $bytes ($entryOffset + 8))
+    $payloadOffset = [int](Read-U32 $bytes ($entryOffset + 12))
+
+    if ($payloadSize -le 0 -or $payloadOffset -lt 0 -or
+        ($payloadOffset + $payloadSize) -gt $bytes.Length) {
+        throw "ICO entry ${width}x${height} points outside the file."
+    }
+
+    $payload = New-Object byte[] $payloadSize
+    [Array]::Copy($bytes, $payloadOffset, $payload, 0, $payloadSize)
+
+    $isPng = $payload.Length -ge 24
+    if ($isPng) {
+        for ($j = 0; $j -lt $pngSignature.Length; $j++) {
+            if ($payload[$j] -ne $pngSignature[$j]) {
+                $isPng = $false
+                break
+            }
+        }
+    }
+
+    # New Windows SDK resource compilers reject some legacy DIB icon layers.
+    # Keep only PNG-compressed layers, which are supported by modern Windows.
+    if (-not $isPng) {
+        Write-Host "Skipping legacy non-PNG ICO layer: ${width}x${height}"
+        continue
+    }
+
+    $pngWidth = [int](Read-PngU32BE $payload 16)
+    $pngHeight = [int](Read-PngU32BE $payload 20)
+    if ($pngWidth -ne $width -or $pngHeight -ne $height) {
+        throw "ICO metadata ${width}x${height} does not match PNG payload ${pngWidth}x${pngHeight}."
+    }
+
+    $entries += [PSCustomObject]@{
+        WidthByte  = $widthByte
+        HeightByte = $heightByte
+        ColorCount = $bytes[$entryOffset + 2]
+        Reserved   = $bytes[$entryOffset + 3]
+        Planes     = Read-U16 $bytes ($entryOffset + 4)
+        BitCount   = Read-U16 $bytes ($entryOffset + 6)
+        Width      = $width
+        Height     = $height
+        Data       = $payload
+    }
+}
+
+foreach ($required in @(16, 32, 48)) {
+    if (-not ($entries | Where-Object { $_.Width -eq $required -and $_.Height -eq $required })) {
+        throw "Required ${required}x${required} PNG icon layer is missing."
+    }
+}
+
 $headerSize = 6
 $entrySize = 16
-$offset = $headerSize + $entrySize * $sizes.Count
-
+$offset = $headerSize + $entrySize * $entries.Count
 $stream = New-Object System.IO.MemoryStream
 $writer = New-Object System.IO.BinaryWriter($stream)
+
 try {
     $writer.Write([uint16]0)
     $writer.Write([uint16]1)
-    $writer.Write([uint16]$sizes.Count)
+    $writer.Write([uint16]$entries.Count)
 
-    foreach ($size in $sizes) {
-        $dimension = if ($size -eq 256) { [byte]0 } else { [byte]$size }
-        $writer.Write($dimension)
-        $writer.Write($dimension)
-        $writer.Write([byte]0)
-        $writer.Write([byte]0)
-        $writer.Write([uint16]1)
-        $writer.Write([uint16]32)
-        $writer.Write([uint32]$png.Length)
+    foreach ($entry in $entries) {
+        $writer.Write([byte]$entry.WidthByte)
+        $writer.Write([byte]$entry.HeightByte)
+        $writer.Write([byte]$entry.ColorCount)
+        $writer.Write([byte]$entry.Reserved)
+        $writer.Write([uint16]$entry.Planes)
+        $writer.Write([uint16]$entry.BitCount)
+        $writer.Write([uint32]$entry.Data.Length)
         $writer.Write([uint32]$offset)
-        $offset += $png.Length
+        $offset += $entry.Data.Length
     }
 
-    foreach ($size in $sizes) {
-        $writer.Write($png)
+    foreach ($entry in $entries) {
+        $writer.Write([byte[]]$entry.Data)
     }
 
     $writer.Flush()
@@ -54,6 +139,4 @@ try {
     $stream.Dispose()
 }
 
-if (-not (Test-Path $OutputPath) -or (Get-Item $OutputPath).Length -le ($headerSize + $entrySize * $sizes.Count)) {
-    throw 'Generated ICO is invalid.'
-}
+Write-Host "Normalized ICO written to $OutputPath with $($entries.Count) valid PNG layers."
