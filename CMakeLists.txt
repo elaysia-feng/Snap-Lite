@@ -1,5 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
-project(SnapLite VERSION 1.3.4 LANGUAGES CXX RC)
+project(SnapLite VERSION 1.3.5 LANGUAGES CXX RC)
+
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
 set(SNAPLITE_ICON "${CMAKE_CURRENT_BINARY_DIR}/SnapLite.ico")
 execute_process(
@@ -13,6 +15,18 @@ if(NOT SNAP_LITE_ICON_NORMALIZE_RESULT EQUAL 0)
     message(FATAL_ERROR "Failed to generate Snap-Lite icon resource")
 endif()
 
+set(SNAPLITE_EDITOR_SOURCE "${CMAKE_CURRENT_BINARY_DIR}/editor_toolbar_anime.cpp")
+execute_process(
+    COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/scripts/generate_anime_toolbar_source.py"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/editor_toolbar.cpp"
+            "${SNAPLITE_EDITOR_SOURCE}"
+    RESULT_VARIABLE SNAP_LITE_TOOLBAR_GENERATE_RESULT
+)
+if(NOT SNAP_LITE_TOOLBAR_GENERATE_RESULT EQUAL 0)
+    message(FATAL_ERROR "Failed to generate compact anime toolbar source")
+endif()
+
 configure_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/resources/SnapLite.rc.in
     ${CMAKE_CURRENT_BINARY_DIR}/SnapLite.rc
@@ -22,7 +36,7 @@ configure_file(
 add_executable(SnapLite WIN32
     src/main.cpp
     src/app.cpp
-    src/editor_toolbar.cpp
+    ${SNAPLITE_EDITOR_SOURCE}
     src/capture.cpp
     src/capture_settings.cpp
     src/pin_window.cpp
@@ -33,6 +47,7 @@ add_executable(SnapLite WIN32
 
 target_include_directories(SnapLite PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/resources
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
 target_compile_features(SnapLite PRIVATE cxx_std_17)
