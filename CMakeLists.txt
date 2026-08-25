@@ -1,12 +1,16 @@
 cmake_minimum_required(VERSION 3.20)
 project(SnapLite VERSION 1.3.3 LANGUAGES CXX RC)
 
-# Use the checked-in multi-size Windows icon directly. Re-wrapping a single
-# PNG into an ICO drops the 16/32/48px variants that Explorer, the taskbar and
-# the notification area select at different DPI/scales.
-set(SNAPLITE_ICON "${CMAKE_CURRENT_SOURCE_DIR}/resources/SnapLite.ico")
-if(NOT EXISTS "${SNAPLITE_ICON}")
-    message(FATAL_ERROR "Missing Snap-Lite icon resource: ${SNAPLITE_ICON}")
+set(SNAPLITE_ICON "${CMAKE_CURRENT_BINARY_DIR}/SnapLite.ico")
+execute_process(
+    COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+            -File "${CMAKE_CURRENT_SOURCE_DIR}/scripts/normalize_ico.ps1"
+            -InputBase64Path "${CMAKE_CURRENT_SOURCE_DIR}/resources/SnapLite-icon.png.b64"
+            -OutputPath "${SNAPLITE_ICON}"
+    RESULT_VARIABLE SNAP_LITE_ICON_NORMALIZE_RESULT
+)
+if(NOT SNAP_LITE_ICON_NORMALIZE_RESULT EQUAL 0)
+    message(FATAL_ERROR "Failed to generate Snap-Lite icon resource")
 endif()
 
 configure_file(
