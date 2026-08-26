@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(SnapLite VERSION 1.3.7 LANGUAGES CXX RC)
+project(SnapLite VERSION 1.3.8 LANGUAGES CXX RC)
 
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
@@ -25,6 +25,16 @@ execute_process(
 )
 if(NOT SNAP_LITE_TOOLBAR_GENERATE_RESULT EQUAL 0)
     message(FATAL_ERROR "Failed to generate compact anime toolbar source")
+endif()
+
+execute_process(
+    COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/scripts/add_toolbar_tooltips.py"
+            "${SNAPLITE_EDITOR_SOURCE}"
+    RESULT_VARIABLE SNAP_LITE_TOOLTIP_PATCH_RESULT
+)
+if(NOT SNAP_LITE_TOOLTIP_PATCH_RESULT EQUAL 0)
+    message(FATAL_ERROR "Failed to add toolbar hover tooltips")
 endif()
 
 configure_file(
