@@ -8,6 +8,7 @@
 #undef DrawTextOrIcon
 
 #include "toolbar_chibi_assets.h"
+#include "toolbar_chibi_azusa_v2.h"
 
 #include <gdiplus.h>
 
@@ -110,7 +111,7 @@ inline const std::array<std::uint32_t, 32 * 32>& SpritePixels(Girl girl) {
     static const auto mio = DecodeSprite(snaplite::toolbar_chibi_assets::kMio);
     static const auto mugi = DecodeSprite(snaplite::toolbar_chibi_assets::kMugi);
     static const auto ritsu = DecodeSprite(snaplite::toolbar_chibi_assets::kRitsu);
-    static const auto azusa = DecodeSprite(snaplite::toolbar_chibi_assets::kAzusa);
+    static const auto azusa = DecodeSprite(snaplite::toolbar_chibi_assets::kAzusaV2);
 
     switch (girl) {
     case Girl::Yui:   return yui;
