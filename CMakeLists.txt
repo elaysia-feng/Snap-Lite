@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(SnapLite VERSION 1.3.5 LANGUAGES CXX RC)
+project(SnapLite VERSION 1.3.6 LANGUAGES CXX RC)
 
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
