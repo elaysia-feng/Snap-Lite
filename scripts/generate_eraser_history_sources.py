@@ -15,6 +15,15 @@ PATCHED_FILES = (
     "toolbar_icon_render_gdi_anime.h",
 )
 
+# These headers are not modified by the eraser patch, but they include
+# snip_window.h by a quoted relative include. Copying them beside the generated
+# header prevents one translation unit from loading both generated and original
+# SnipWindow definitions.
+COMPANION_HEADERS = (
+    "edit_repaint_fix.h",
+    "window_bounds_fix.h",
+)
+
 
 def main() -> int:
     if len(sys.argv) != 3:
@@ -30,7 +39,7 @@ def main() -> int:
     generated_src.mkdir(parents=True, exist_ok=True)
     (output_root / ".release").mkdir(parents=True, exist_ok=True)
 
-    for name in PATCHED_FILES:
+    for name in PATCHED_FILES + COMPANION_HEADERS:
         shutil.copy2(source_root / "src" / name, generated_src / name)
 
     # The patch helper also bumps CMake/release metadata when run against the
@@ -49,7 +58,7 @@ def main() -> int:
         check=True,
     )
 
-    required = [generated_src / name for name in PATCHED_FILES]
+    required = [generated_src / name for name in PATCHED_FILES + COMPANION_HEADERS]
     missing = [str(path) for path in required if not path.exists()]
     if missing:
         raise RuntimeError(f"generated eraser sources missing: {missing}")
