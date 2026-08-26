@@ -1,0 +1,34 @@
+name: apply-eraser-history-once
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/apply-eraser-history-once.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Apply source patch
+        shell: pwsh
+        run: python scripts/apply_eraser_history_patch.py
+      - name: Remove one-time patch machinery
+        shell: pwsh
+        run: |
+          git rm .github/workflows/apply-eraser-history-once.yml
+          git rm scripts/apply_eraser_history_patch.py
+      - name: Commit patched sources
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "feat: add eraser and expand undo history"
+          git push origin HEAD:main
