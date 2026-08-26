@@ -26,12 +26,12 @@ def main() -> int:
         "        if (smallFont_) DeleteObject(smallFont_);\n"
         "    }",
         "    ~ToolbarHost() {\n"
-        "        HideTrackedTooltip();\n"
+        "        HideHoverPopup();\n"
         "        if (tooltip_ && IsWindow(tooltip_)) DestroyWindow(tooltip_);\n"
         "        if (font_) DeleteObject(font_);\n"
         "        if (smallFont_) DeleteObject(smallFont_);\n"
         "    }",
-        "tooltip cleanup",
+        "hover popup cleanup",
     )
 
     text = replace_once(
@@ -43,33 +43,24 @@ def main() -> int:
         "    }",
         "    void AttachToolbar(HWND child) {\n"
         "        toolbar_ = child;\n"
-        "        EnsureTooltips();\n"
+        "        EnsureHoverPopup();\n"
         "        ApplyRoundedRegion();\n"
         "        UpdatePosition();\n"
         "    }\n\n"
-        "    void EnsureTooltips() {\n"
+        "    void EnsureHoverPopup() {\n"
         "        if (tooltip_ || !toolbar_) return;\n"
-        "        INITCOMMONCONTROLSEX controls{sizeof(controls), ICC_WIN95_CLASSES};\n"
-        "        InitCommonControlsEx(&controls);\n"
         "        tooltip_ = CreateWindowExW(\n"
-        "            WS_EX_TOPMOST | WS_EX_TOOLWINDOW,\n"
-        "            TOOLTIPS_CLASSW,\n"
-        "            nullptr,\n"
-        "            WS_POPUP | TTS_NOPREFIX | TTS_ALWAYSTIP,\n"
-        "            CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,\n"
+        "            WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,\n"
+        "            L\"STATIC\",\n"
+        "            L\"\",\n"
+        "            WS_POPUP | WS_BORDER | SS_CENTER | SS_CENTERIMAGE,\n"
+        "            0, 0, 0, 0,\n"
         "            parent_, nullptr, instance_, nullptr);\n"
-        "        if (!tooltip_) return;\n\n"
+        "        if (!tooltip_) return;\n"
+        "        SendMessageW(tooltip_, WM_SETFONT,\n"
+        "                     reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), FALSE);\n"
         "        SetWindowPos(tooltip_, HWND_TOPMOST, 0, 0, 0, 0,\n"
-        "                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);\n"
-        "        SendMessageW(tooltip_, TTM_SETMAXTIPWIDTH, 0, 160);\n\n"
-        "        TOOLINFOW info{};\n"
-        "        info.cbSize = sizeof(info);\n"
-        "        info.uFlags = TTF_TRACK | TTF_ABSOLUTE;\n"
-        "        info.hwnd = toolbar_;\n"
-        "        info.uId = 1;\n"
-        "        info.lpszText = const_cast<LPWSTR>(L\"\");\n"
-        "        SendMessageW(tooltip_, TTM_ADDTOOLW, 0,\n"
-        "                     reinterpret_cast<LPARAM>(&info));\n"
+        "                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_HIDEWINDOW);\n"
         "    }\n\n"
         "    const wchar_t* HoverTooltipLabel() const {\n"
         "        if (hoverTool_ >= 0 && hoverTool_ < kToolCount) {\n"
@@ -80,42 +71,53 @@ def main() -> int:
         "        }\n"
         "        return nullptr;\n"
         "    }\n\n"
-        "    void HideTrackedTooltip() {\n"
-        "        if (!tooltip_ || !tooltipVisible_) return;\n"
-        "        TOOLINFOW info{};\n"
-        "        info.cbSize = sizeof(info);\n"
-        "        info.hwnd = toolbar_;\n"
-        "        info.uId = 1;\n"
-        "        SendMessageW(tooltip_, TTM_TRACKACTIVATE, FALSE,\n"
-        "                     reinterpret_cast<LPARAM>(&info));\n"
-        "        tooltipVisible_ = false;\n"
+        "    void HideHoverPopup() {\n"
+        "        if (tooltip_ && IsWindowVisible(tooltip_)) {\n"
+        "            ShowWindow(tooltip_, SW_HIDE);\n"
+        "        }\n"
         "    }\n\n"
-        "    void UpdateTrackedTooltip(POINT clientPoint) {\n"
+        "    void UpdateHoverPopup(POINT clientPoint) {\n"
         "        const wchar_t* label = HoverTooltipLabel();\n"
-        "        if (!tooltip_ || !label) {\n"
-        "            HideTrackedTooltip();\n"
+        "        if (!tooltip_ || !label || !*label) {\n"
+        "            HideHoverPopup();\n"
         "            return;\n"
         "        }\n\n"
         "        tooltipText_ = label;\n"
-        "        TOOLINFOW info{};\n"
-        "        info.cbSize = sizeof(info);\n"
-        "        info.uFlags = TTF_TRACK | TTF_ABSOLUTE;\n"
-        "        info.hwnd = toolbar_;\n"
-        "        info.uId = 1;\n"
-        "        info.lpszText = tooltipText_.data();\n"
-        "        SendMessageW(tooltip_, TTM_UPDATETIPTEXTW, 0,\n"
-        "                     reinterpret_cast<LPARAM>(&info));\n\n"
+        "        SetWindowTextW(tooltip_, tooltipText_.c_str());\n\n"
+        "        SIZE textSize{40, 18};\n"
+        "        HDC dc = GetDC(tooltip_);\n"
+        "        if (dc) {\n"
+        "            HFONT font = reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));\n"
+        "            HGDIOBJ oldFont = font ? SelectObject(dc, font) : nullptr;\n"
+        "            SIZE measured{};\n"
+        "            if (GetTextExtentPoint32W(dc, tooltipText_.c_str(),\n"
+        "                                      static_cast<int>(tooltipText_.size()), &measured)) {\n"
+        "                textSize = measured;\n"
+        "            }\n"
+        "            if (oldFont) SelectObject(dc, oldFont);\n"
+        "            ReleaseDC(tooltip_, dc);\n"
+        "        }\n\n"
+        "        const int width = std::max(44, static_cast<int>(textSize.cx) + 18);\n"
+        "        const int height = std::max(26, static_cast<int>(textSize.cy) + 10);\n"
         "        POINT screen = clientPoint;\n"
         "        ClientToScreen(toolbar_, &screen);\n"
         "        screen.x += 12;\n"
-        "        screen.y += 22;\n"
-        "        SendMessageW(tooltip_, TTM_TRACKPOSITION, 0,\n"
-        "                     MAKELPARAM(screen.x, screen.y));\n"
-        "        SendMessageW(tooltip_, TTM_TRACKACTIVATE, TRUE,\n"
-        "                     reinterpret_cast<LPARAM>(&info));\n"
-        "        tooltipVisible_ = true;\n"
+        "        screen.y += 20;\n\n"
+        "        HMONITOR monitor = MonitorFromPoint(screen, MONITOR_DEFAULTTONEAREST);\n"
+        "        MONITORINFO monitorInfo{sizeof(monitorInfo)};\n"
+        "        if (monitor && GetMonitorInfoW(monitor, &monitorInfo)) {\n"
+        "            if (screen.x + width > monitorInfo.rcWork.right - 4)\n"
+        "                screen.x = monitorInfo.rcWork.right - width - 4;\n"
+        "            if (screen.y + height > monitorInfo.rcWork.bottom - 4)\n"
+        "                screen.y -= height + 28;\n"
+        "            screen.x = std::max(screen.x, static_cast<int>(monitorInfo.rcWork.left) + 4);\n"
+        "            screen.y = std::max(screen.y, static_cast<int>(monitorInfo.rcWork.top) + 4);\n"
+        "        }\n\n"
+        "        SetWindowPos(tooltip_, HWND_TOPMOST, screen.x, screen.y, width, height,\n"
+        "                     SWP_NOACTIVATE | SWP_SHOWWINDOW);\n"
+        "        RedrawWindow(tooltip_, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);\n"
         "    }",
-        "actively tracked primary hover tooltips",
+        "explicit hover popup",
     )
 
     text = replace_once(
@@ -141,9 +143,9 @@ def main() -> int:
         "            hoverSecondary_ = secondary;\n"
         "            InvalidateRect(toolbar_, nullptr, FALSE);\n"
         "        }\n"
-        "        UpdateTrackedTooltip(p);\n"
+        "        UpdateHoverPopup(p);\n"
         "    }",
-        "active tooltip hover updates",
+        "hover popup updates",
     )
 
     text = replace_once(
@@ -155,13 +157,13 @@ def main() -> int:
         "            }\n"
         "            return 0;",
         "        case WM_MOUSELEAVE:\n"
-        "            HideTrackedTooltip();\n"
+        "            HideHoverPopup();\n"
         "            if (hoverTool_ != -1 || hoverAction_ != -1 || hoverSecondary_ != -1) {\n"
         "                hoverTool_ = hoverAction_ = hoverSecondary_ = -1;\n"
         "                InvalidateRect(hwnd, nullptr, FALSE);\n"
         "            }\n"
         "            return 0;",
-        "hide tracked tooltip on leave",
+        "hide popup on mouse leave",
     )
 
     text = replace_once(
@@ -169,15 +171,14 @@ def main() -> int:
         "    HFONT font_{};\n"
         "    HFONT smallFont_{};",
         "    HWND tooltip_{};\n"
-        "    bool tooltipVisible_{false};\n"
         "    std::wstring tooltipText_;\n"
         "    HFONT font_{};\n"
         "    HFONT smallFont_{};",
-        "tooltip members",
+        "hover popup members",
     )
 
     path.write_text(text, encoding="utf-8", newline="\n")
-    print(f"Added actively tracked toolbar hover tooltips: {path}")
+    print(f"Added explicit toolbar hover popup: {path}")
     return 0
 
 
