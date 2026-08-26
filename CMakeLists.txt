@@ -95,7 +95,7 @@ if(MSVC)
     set_property(
         SOURCE ${SNAPLITE_SNIP_SOURCE}
         APPEND PROPERTY COMPILE_OPTIONS
-        "/FI${CMAKE_CURRENT_SOURCE_DIR}/src/window_bounds_fix.h"
+        "/FI${SNAPLITE_GENERATED_SRC}/window_bounds_fix.h"
         "/FI${CMAKE_CURRENT_SOURCE_DIR}/src/drag_repaint_fix.h"
     )
 endif()
