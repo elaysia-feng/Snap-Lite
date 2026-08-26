@@ -1,5 +1,6 @@
 name: apply-eraser-history-once
 
+# One-time source migration; this file deletes itself after a successful patch.
 on:
   push:
     branches: [main]
