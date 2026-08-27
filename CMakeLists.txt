@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(SnapLite VERSION 1.3.11 LANGUAGES CXX RC)
+project(SnapLite VERSION 1.3.12 LANGUAGES CXX RC)
 
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
@@ -15,9 +15,9 @@ if(NOT SNAP_LITE_ICON_NORMALIZE_RESULT EQUAL 0)
     message(FATAL_ERROR "Failed to generate Snap-Lite icon resource")
 endif()
 
-# Generate the v1.3.11 editor/capture sources in the build directory. This
-# keeps the legacy capture engine source stable while the eraser and larger
-# undo-history implementation are compiled into every local/CI/release build.
+# Generate editor/capture sources in the build directory. This keeps the
+# legacy capture engine stable while the eraser, larger undo history, and OCR
+# integration are compiled into every local/CI/release build.
 set(SNAPLITE_GENERATED_ROOT "${CMAKE_CURRENT_BINARY_DIR}/generated_eraser_history")
 set(SNAPLITE_GENERATED_SRC "${SNAPLITE_GENERATED_ROOT}/src")
 execute_process(
