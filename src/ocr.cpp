@@ -1,5 +1,9 @@
 #include "ocr.h"
 
+// WIN32_LEAN_AND_MEAN removes several COM declarations that GDI+ imaging
+// expects. Pull them in explicitly before gdiplus.h.
+#include <objidl.h>
+#include <propidl.h>
 #include <gdiplus.h>
 #include <winrt/Windows.Graphics.Imaging.h>
 #include <winrt/Windows.Media.Ocr.h>
@@ -8,6 +12,8 @@
 #include <winrt/base.h>
 
 #include <algorithm>
+#include <cstdlib>
+#include <cstring>
 #include <cwctype>
 #include <filesystem>
 #include <future>
@@ -137,7 +143,7 @@ OcrResult RecognizePng(const std::filesystem::path& path) {
         using namespace winrt::Windows::Media::Ocr;
         using namespace winrt::Windows::Storage;
 
-        const auto file = StorageFile::GetFileFromPathAsync(path.wstring()).get();
+        const auto file = StorageFile::GetFileFromPathAsync(winrt::hstring(path.wstring())).get();
         const auto stream = file.OpenAsync(FileAccessMode::Read).get();
         const auto decoder = BitmapDecoder::CreateAsync(stream).get();
         const auto softwareBitmap = decoder
@@ -216,7 +222,7 @@ bool CopyUnicodeTextToClipboard(HWND owner, const std::wstring& text) {
         CloseClipboard();
         return false;
     }
-    memcpy(destination, text.c_str(), bytes);
+    std::memcpy(destination, text.c_str(), bytes);
     GlobalUnlock(memory);
 
     if (!SetClipboardData(CF_UNICODETEXT, memory)) {
