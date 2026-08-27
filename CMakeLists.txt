@@ -53,6 +53,17 @@ if(NOT SNAP_LITE_TOOLTIP_PATCH_RESULT EQUAL 0)
     message(FATAL_ERROR "Failed to add toolbar hover tooltips")
 endif()
 
+execute_process(
+    COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/scripts/add_ocr_action.py"
+            "${SNAPLITE_EDITOR_SOURCE}"
+            "${SNAPLITE_GENERATED_SRC}/toolbar_icon_render_gdi_anime.h"
+    RESULT_VARIABLE SNAP_LITE_OCR_PATCH_RESULT
+)
+if(NOT SNAP_LITE_OCR_PATCH_RESULT EQUAL 0)
+    message(FATAL_ERROR "Failed to add OCR toolbar action")
+endif()
+
 set(SNAPLITE_SNIP_SOURCE "${SNAPLITE_GENERATED_SRC}/snip_window.cpp")
 
 configure_file(
@@ -67,6 +78,7 @@ add_executable(SnapLite WIN32
     ${SNAPLITE_EDITOR_SOURCE}
     src/capture.cpp
     src/capture_settings.cpp
+    src/ocr.cpp
     src/pin_window.cpp
     ${SNAPLITE_SNIP_SOURCE}
     src/snip_text_overlay.cpp
@@ -87,7 +99,7 @@ target_compile_definitions(
 )
 target_link_libraries(
     SnapLite PRIVATE
-    user32 gdi32 gdiplus shell32 ole32 uuid advapi32 comdlg32 comctl32 dwmapi imm32
+    user32 gdi32 gdiplus shell32 ole32 uuid advapi32 comdlg32 comctl32 dwmapi imm32 windowsapp
 )
 
 if(MSVC)
