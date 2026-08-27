@@ -6,6 +6,7 @@
 #include <propidl.h>
 #include <gdiplus.h>
 #include <winrt/Windows.Foundation.h>
+#include <winrt/Windows.Globalization.h>
 #include <winrt/Windows.Graphics.Imaging.h>
 #include <winrt/Windows.Media.Ocr.h>
 #include <winrt/Windows.Storage.h>
@@ -13,17 +14,26 @@
 #include <winrt/base.h>
 
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <cwctype>
 #include <filesystem>
 #include <future>
+#include <limits>
 #include <string>
 #include <system_error>
 #include <vector>
 
 namespace snaplite {
 namespace {
+
+enum class PreparedVariant {
+    Color = 0,
+    GrayContrast,
+    Binary,
+};
 
 bool FindPngEncoder(CLSID& clsid) {
     UINT count = 0;
@@ -111,7 +121,176 @@ HBITMAP CropBitmap(HBITMAP source, const RECT& requested) {
     return cropped;
 }
 
-std::filesystem::path MakeTempOcrPath() {
+int Luminance(BYTE b, BYTE g, BYTE r) {
+    return (29 * static_cast<int>(b) + 150 * static_cast<int>(g) +
+            77 * static_cast<int>(r)) >> 8;
+}
+
+int OtsuThreshold(const BYTE* pixels, int width, int height) {
+    std::array<unsigned long long, 256> histogram{};
+    unsigned long long totalLuminance = 0;
+    const size_t pixelCount = static_cast<size_t>(width) * static_cast<size_t>(height);
+
+    for (size_t i = 0; i < pixelCount; ++i) {
+        const BYTE* p = pixels + i * 4;
+        const int gray = Luminance(p[0], p[1], p[2]);
+        ++histogram[static_cast<size_t>(gray)];
+        totalLuminance += static_cast<unsigned long long>(gray);
+    }
+
+    if (pixelCount == 0) return 128;
+
+    unsigned long long backgroundWeight = 0;
+    unsigned long long backgroundSum = 0;
+    double bestVariance = -1.0;
+    int bestThreshold = 128;
+
+    for (int threshold = 0; threshold < 256; ++threshold) {
+        backgroundWeight += histogram[static_cast<size_t>(threshold)];
+        if (backgroundWeight == 0) continue;
+
+        const unsigned long long foregroundWeight = pixelCount - backgroundWeight;
+        if (foregroundWeight == 0) break;
+
+        backgroundSum +=
+            static_cast<unsigned long long>(threshold) * histogram[static_cast<size_t>(threshold)];
+        const double backgroundMean =
+            static_cast<double>(backgroundSum) / static_cast<double>(backgroundWeight);
+        const double foregroundMean =
+            static_cast<double>(totalLuminance - backgroundSum) /
+            static_cast<double>(foregroundWeight);
+        const double difference = backgroundMean - foregroundMean;
+        const double variance =
+            static_cast<double>(backgroundWeight) * static_cast<double>(foregroundWeight) *
+            difference * difference;
+
+        if (variance > bestVariance) {
+            bestVariance = variance;
+            bestThreshold = threshold;
+        }
+    }
+
+    return bestThreshold;
+}
+
+HBITMAP PrepareBitmap(HBITMAP source, PreparedVariant variant) {
+    if (!source) return nullptr;
+
+    BITMAP sourceInfo{};
+    if (GetObjectW(source, sizeof(sourceInfo), &sourceInfo) == 0) return nullptr;
+
+    const int sourceWidth = std::abs(sourceInfo.bmWidth);
+    const int sourceHeight = std::abs(sourceInfo.bmHeight);
+    if (sourceWidth <= 0 || sourceHeight <= 0) return nullptr;
+
+    const int sourceMax = std::max(sourceWidth, sourceHeight);
+    double scale = sourceMax <= 900 ? 3.0 : 2.0;
+    if (sourceMax > 0) {
+        scale = std::min(scale, 2400.0 / static_cast<double>(sourceMax));
+    }
+    scale = std::max(0.5, scale);
+
+    const int width = std::max(1, static_cast<int>(std::lround(sourceWidth * scale)));
+    const int height = std::max(1, static_cast<int>(std::lround(sourceHeight * scale)));
+
+    BITMAPINFO bitmapInfo{};
+    bitmapInfo.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bitmapInfo.bmiHeader.biWidth = width;
+    bitmapInfo.bmiHeader.biHeight = -height;
+    bitmapInfo.bmiHeader.biPlanes = 1;
+    bitmapInfo.bmiHeader.biBitCount = 32;
+    bitmapInfo.bmiHeader.biCompression = BI_RGB;
+
+    void* bits = nullptr;
+    HBITMAP prepared = CreateDIBSection(nullptr, &bitmapInfo, DIB_RGB_COLORS, &bits, nullptr, 0);
+    if (!prepared || !bits) {
+        if (prepared) DeleteObject(prepared);
+        return nullptr;
+    }
+
+    HDC sourceDc = CreateCompatibleDC(nullptr);
+    HDC targetDc = CreateCompatibleDC(nullptr);
+    if (!sourceDc || !targetDc) {
+        if (sourceDc) DeleteDC(sourceDc);
+        if (targetDc) DeleteDC(targetDc);
+        DeleteObject(prepared);
+        return nullptr;
+    }
+
+    const HGDIOBJ oldSource = SelectObject(sourceDc, source);
+    const HGDIOBJ oldTarget = SelectObject(targetDc, prepared);
+    SetStretchBltMode(targetDc, HALFTONE);
+    SetBrushOrgEx(targetDc, 0, 0, nullptr);
+    const BOOL copied = StretchBlt(
+        targetDc,
+        0,
+        0,
+        width,
+        height,
+        sourceDc,
+        0,
+        0,
+        sourceWidth,
+        sourceHeight,
+        SRCCOPY);
+    SelectObject(targetDc, oldTarget);
+    SelectObject(sourceDc, oldSource);
+    DeleteDC(targetDc);
+    DeleteDC(sourceDc);
+
+    if (!copied) {
+        DeleteObject(prepared);
+        return nullptr;
+    }
+
+    auto* pixels = static_cast<BYTE*>(bits);
+    const size_t pixelCount = static_cast<size_t>(width) * static_cast<size_t>(height);
+
+    if (variant == PreparedVariant::Binary) {
+        const int threshold = OtsuThreshold(pixels, width, height);
+        unsigned long long sum = 0;
+        for (size_t i = 0; i < pixelCount; ++i) {
+            BYTE* p = pixels + i * 4;
+            sum += static_cast<unsigned long long>(Luminance(p[0], p[1], p[2]));
+        }
+        const double average = pixelCount == 0
+            ? 255.0
+            : static_cast<double>(sum) / static_cast<double>(pixelCount);
+        const bool darkBackground = average < 128.0;
+
+        for (size_t i = 0; i < pixelCount; ++i) {
+            BYTE* p = pixels + i * 4;
+            const int gray = Luminance(p[0], p[1], p[2]);
+            const BYTE value = darkBackground
+                ? static_cast<BYTE>(gray > threshold ? 0 : 255)
+                : static_cast<BYTE>(gray <= threshold ? 0 : 255);
+            p[0] = value;
+            p[1] = value;
+            p[2] = value;
+            p[3] = 255;
+        }
+    } else if (variant == PreparedVariant::GrayContrast) {
+        for (size_t i = 0; i < pixelCount; ++i) {
+            BYTE* p = pixels + i * 4;
+            const int gray = Luminance(p[0], p[1], p[2]);
+            const int contrasted = std::clamp(
+                static_cast<int>(std::lround((gray - 128) * 1.6 + 128)), 0, 255);
+            const BYTE value = static_cast<BYTE>(contrasted);
+            p[0] = value;
+            p[1] = value;
+            p[2] = value;
+            p[3] = 255;
+        }
+    } else {
+        for (size_t i = 0; i < pixelCount; ++i) {
+            pixels[i * 4 + 3] = 255;
+        }
+    }
+
+    return prepared;
+}
+
+std::filesystem::path MakeTempOcrPath(int index) {
     wchar_t tempDirectory[MAX_PATH + 1]{};
     const DWORD length = GetTempPathW(MAX_PATH, tempDirectory);
     if (length == 0 || length > MAX_PATH) return {};
@@ -120,6 +299,8 @@ std::filesystem::path MakeTempOcrPath() {
     name += std::to_wstring(GetCurrentProcessId());
     name += L"-";
     name += std::to_wstring(GetTickCount64());
+    name += L"-";
+    name += std::to_wstring(index);
     name += L".png";
     return std::filesystem::path(tempDirectory) / name;
 }
@@ -135,34 +316,169 @@ bool SaveBitmapAsPng(HBITMAP bitmap, const std::filesystem::path& path) {
     return image.Save(path.c_str(), &pngEncoder, nullptr) == Gdiplus::Ok;
 }
 
-OcrResult RecognizePng(const std::filesystem::path& path) {
+bool StartsWithIgnoreCase(const std::wstring& value, const wchar_t* prefix) {
+    if (!prefix) return false;
+    const std::wstring wanted(prefix);
+    if (value.size() < wanted.size()) return false;
+    for (size_t i = 0; i < wanted.size(); ++i) {
+        if (towlower(value[i]) != towlower(wanted[i])) return false;
+    }
+    return true;
+}
+
+double TextQualityScore(const std::wstring& text) {
+    if (text.empty()) return -std::numeric_limits<double>::infinity();
+
+    size_t meaningful = 0;
+    size_t cjk = 0;
+    size_t whitespace = 0;
+    size_t odd = 0;
+    size_t newlines = 0;
+
+    for (wchar_t ch : text) {
+        if (ch == L'\n') ++newlines;
+        if (iswspace(ch)) {
+            ++whitespace;
+            continue;
+        }
+
+        const bool isCjk =
+            (ch >= 0x3400 && ch <= 0x4DBF) ||
+            (ch >= 0x4E00 && ch <= 0x9FFF) ||
+            (ch >= 0xF900 && ch <= 0xFAFF);
+        if (isCjk) {
+            ++meaningful;
+            ++cjk;
+            continue;
+        }
+
+        if (iswalnum(ch)) {
+            ++meaningful;
+            continue;
+        }
+
+        switch (ch) {
+        case L'.': case L',': case L':': case L';': case L'-': case L'_':
+        case L'/': case L'\\': case L'(': case L')': case L'[': case L']':
+        case L'{': case L'}': case L'<': case L'>': case L'=': case L'+':
+        case L'*': case L'#': case L'@': case L'!': case L'?': case L'"':
+        case L'\'': case L'，': case L'。': case L'：': case L'；': case L'！':
+        case L'？': case L'（': case L'）': case L'【': case L'】':
+            ++meaningful;
+            break;
+        default:
+            ++odd;
+            break;
+        }
+    }
+
+    if (meaningful == 0) return -std::numeric_limits<double>::infinity();
+
+    const size_t visible = meaningful + odd;
+    const double cleanRatio = visible == 0
+        ? 0.0
+        : static_cast<double>(meaningful) / static_cast<double>(visible);
+
+    return static_cast<double>(meaningful) * 3.0 +
+           static_cast<double>(cjk) * 0.8 +
+           std::min<double>(static_cast<double>(newlines), 20.0) * 0.6 +
+           cleanRatio * 24.0 -
+           static_cast<double>(odd) * 1.6 -
+           static_cast<double>(whitespace) * 0.02;
+}
+
+std::wstring RecognizePng(
+    const std::filesystem::path& path,
+    const winrt::Windows::Media::Ocr::OcrEngine& engine) {
+    using namespace winrt::Windows::Graphics::Imaging;
+    using namespace winrt::Windows::Storage;
+
+    const auto file = StorageFile::GetFileFromPathAsync(winrt::hstring(path.wstring())).get();
+    const auto stream = file.OpenAsync(FileAccessMode::Read).get();
+    const auto decoder = BitmapDecoder::CreateAsync(stream).get();
+    const auto softwareBitmap = decoder
+        .GetSoftwareBitmapAsync(BitmapPixelFormat::Bgra8, BitmapAlphaMode::Premultiplied)
+        .get();
+
+    const auto result = engine.RecognizeAsync(softwareBitmap).get();
+    const auto recognized = result.Text();
+    std::wstring text(recognized.c_str(), recognized.size());
+    while (!text.empty() && iswspace(text.back())) {
+        text.pop_back();
+    }
+    return text;
+}
+
+OcrResult RecognizePreparedVariants(const std::vector<std::filesystem::path>& paths) {
     OcrResult output;
+
     try {
         winrt::init_apartment(winrt::apartment_type::multi_threaded);
 
-        using namespace winrt::Windows::Graphics::Imaging;
-        using namespace winrt::Windows::Media::Ocr;
-        using namespace winrt::Windows::Storage;
+        using winrt::Windows::Globalization::Language;
+        using winrt::Windows::Media::Ocr::OcrEngine;
 
-        const auto file = StorageFile::GetFileFromPathAsync(winrt::hstring(path.wstring())).get();
-        const auto stream = file.OpenAsync(FileAccessMode::Read).get();
-        const auto decoder = BitmapDecoder::CreateAsync(stream).get();
-        const auto softwareBitmap = decoder
-            .GetSoftwareBitmapAsync(BitmapPixelFormat::Bgra8, BitmapAlphaMode::Premultiplied)
-            .get();
+        std::vector<OcrEngine> engines;
+        std::vector<std::wstring> engineTags;
 
-        const auto engine = OcrEngine::TryCreateFromUserProfileLanguages();
-        if (!engine) {
+        auto addEngine = [&](const OcrEngine& engine) {
+            if (!engine) return;
+            const auto language = engine.RecognizerLanguage();
+            const auto tagValue = language.LanguageTag();
+            const std::wstring tag(tagValue.c_str(), tagValue.size());
+            if (std::find(engineTags.begin(), engineTags.end(), tag) != engineTags.end()) return;
+            engines.push_back(engine);
+            engineTags.push_back(tag);
+        };
+
+        const auto available = OcrEngine::AvailableRecognizerLanguages();
+
+        // Simplified Chinese is the strongest general-purpose choice for Chinese UI/text
+        // and still handles Latin characters well, so prefer it when installed.
+        for (const Language& language : available) {
+            const auto tagValue = language.LanguageTag();
+            const std::wstring tag(tagValue.c_str(), tagValue.size());
+            if (StartsWithIgnoreCase(tag, L"zh-Hans") || StartsWithIgnoreCase(tag, L"zh-CN")) {
+                addEngine(OcrEngine::TryCreateFromLanguage(language));
+            }
+        }
+
+        addEngine(OcrEngine::TryCreateFromUserProfileLanguages());
+
+        for (const Language& language : available) {
+            const auto tagValue = language.LanguageTag();
+            const std::wstring tag(tagValue.c_str(), tagValue.size());
+            if (StartsWithIgnoreCase(tag, L"en")) {
+                addEngine(OcrEngine::TryCreateFromLanguage(language));
+            }
+        }
+
+        if (engines.empty()) {
             output.error = L"Windows OCR 不可用，请在系统语言设置中安装中文或英文 OCR 语言包。";
             return output;
         }
 
-        const auto result = engine.RecognizeAsync(softwareBitmap).get();
-        const auto recognized = result.Text();
-        output.text.assign(recognized.c_str(), recognized.size());
-        while (!output.text.empty() && iswspace(output.text.back())) {
-            output.text.pop_back();
+        std::wstring bestText;
+        double bestScore = -std::numeric_limits<double>::infinity();
+
+        for (size_t engineIndex = 0; engineIndex < engines.size(); ++engineIndex) {
+            for (size_t variantIndex = 0; variantIndex < paths.size(); ++variantIndex) {
+                const std::wstring text = RecognizePng(paths[variantIndex], engines[engineIndex]);
+                double score = TextQualityScore(text);
+
+                // Prefer the first (usually zh-Hans) engine and the grayscale pass
+                // only as tiny tie-breakers; text quality remains the main signal.
+                score -= static_cast<double>(engineIndex) * 0.15;
+                if (variantIndex == 1) score += 0.10;
+
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestText = text;
+                }
+            }
         }
+
+        output.text = std::move(bestText);
         output.success = true;
         return output;
     } catch (const winrt::hresult_error& error) {
@@ -185,20 +501,40 @@ OcrResult ExtractTextFromBitmapRegion(HBITMAP bitmap, const RECT& region) {
         return output;
     }
 
-    const std::filesystem::path tempPath = MakeTempOcrPath();
-    const bool saved = SaveBitmapAsPng(cropped, tempPath);
+    const std::array<PreparedVariant, 3> variants = {
+        PreparedVariant::Color,
+        PreparedVariant::GrayContrast,
+        PreparedVariant::Binary,
+    };
+
+    std::vector<std::filesystem::path> paths;
+    paths.reserve(variants.size());
+
+    for (size_t i = 0; i < variants.size(); ++i) {
+        HBITMAP prepared = PrepareBitmap(cropped, variants[i]);
+        if (!prepared) continue;
+
+        const std::filesystem::path path = MakeTempOcrPath(static_cast<int>(i));
+        const bool saved = SaveBitmapAsPng(prepared, path);
+        DeleteObject(prepared);
+        if (saved) paths.push_back(path);
+    }
+
     DeleteObject(cropped);
-    if (!saved) {
+
+    if (paths.empty()) {
         output.error = L"无法准备 OCR 临时图像。";
         return output;
     }
 
-    output = std::async(std::launch::async, [tempPath]() {
-        return RecognizePng(tempPath);
+    output = std::async(std::launch::async, [paths]() {
+        return RecognizePreparedVariants(paths);
     }).get();
 
-    std::error_code ignored;
-    std::filesystem::remove(tempPath, ignored);
+    for (const auto& path : paths) {
+        std::error_code ignored;
+        std::filesystem::remove(path, ignored);
+    }
     return output;
 }
 
