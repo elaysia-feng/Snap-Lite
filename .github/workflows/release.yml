@@ -24,6 +24,11 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       - name: Read release version
         id: version
         shell: pwsh
@@ -56,6 +61,18 @@ jobs:
           "tag=v$releaseVersion" >> $env:GITHUB_OUTPUT
           "prerelease=$($prerelease.ToString().ToLower())" >> $env:GITHUB_OUTPUT
 
+      - name: Install RapidOCR packager
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "rapidocr==3.9.2" onnxruntime pyinstaller
+
+      - name: Build RapidOCR companion
+        shell: pwsh
+        run: |
+          python -m PyInstaller --noconfirm --clean --onefile --name SnapLiteOCR --collect-all rapidocr --collect-all onnxruntime scripts/rapidocr_worker.py
+          .\dist\SnapLiteOCR.exe --self-test
+          if ($LASTEXITCODE -ne 0) { throw 'Bundled RapidOCR self-test failed.' }
+
       - name: Configure
         run: cmake -S . -B build -A x64
 
@@ -70,11 +87,22 @@ jobs:
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          New-Item -ItemType Directory -Force -Path package | Out-Null
+          Copy-Item build/Release/SnapLite.exe package/SnapLite.exe
+          Copy-Item dist/SnapLiteOCR.exe package/SnapLiteOCR.exe
           Copy-Item build/Release/SnapLite.exe dist/SnapLite.exe
-          Compress-Archive -Path dist/SnapLite.exe -DestinationPath "dist/SnapLite-$env:VERSION-win-x64.zip" -Force
-          $hash = (Get-FileHash dist/SnapLite.exe -Algorithm SHA256).Hash.ToLower()
-          "$hash  SnapLite.exe" | Out-File dist/SHA256SUMS.txt -Encoding ascii
+
+          $zip = "dist/SnapLite-$env:VERSION-win-x64.zip"
+          Compress-Archive -Path package/* -DestinationPath $zip -Force
+
+          $mainHash = (Get-FileHash package/SnapLite.exe -Algorithm SHA256).Hash.ToLower()
+          $ocrHash = (Get-FileHash package/SnapLiteOCR.exe -Algorithm SHA256).Hash.ToLower()
+          $zipHash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+          @(
+            "$mainHash  SnapLite.exe",
+            "$ocrHash  SnapLiteOCR.exe",
+            "$zipHash  SnapLite-$env:VERSION-win-x64.zip"
+          ) | Out-File dist/SHA256SUMS.txt -Encoding ascii
 
       - name: Ensure immutable release tag
         shell: pwsh
