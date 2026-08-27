@@ -31,6 +31,19 @@ if(NOT SNAP_LITE_ERASER_GENERATE_RESULT EQUAL 0)
     message(FATAL_ERROR "Failed to generate eraser/history sources")
 endif()
 
+# Undo/redo memory policy: keep only the newest snapshots as raw HBITMAPs and
+# losslessly compress older entries in memory. This keeps deep Ctrl+Z history
+# without allowing bitmap snapshots to grow toward hundreds of megabytes.
+execute_process(
+    COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/scripts/optimize_bitmap_history.py"
+            "${SNAPLITE_GENERATED_SRC}"
+    RESULT_VARIABLE SNAP_LITE_HISTORY_OPTIMIZE_RESULT
+)
+if(NOT SNAP_LITE_HISTORY_OPTIMIZE_RESULT EQUAL 0)
+    message(FATAL_ERROR "Failed to optimize bitmap undo history")
+endif()
+
 set(SNAPLITE_EDITOR_SOURCE "${CMAKE_CURRENT_BINARY_DIR}/editor_toolbar_anime.cpp")
 execute_process(
     COMMAND "${Python3_EXECUTABLE}"
