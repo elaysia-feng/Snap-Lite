@@ -78,7 +78,7 @@ add_executable(SnapLite WIN32
     ${SNAPLITE_EDITOR_SOURCE}
     src/capture.cpp
     src/capture_settings.cpp
-    src/ocr_v2.cpp
+    src/ocr_rapid.cpp
     src/ocr_result_panel_v2.cpp
     src/pin_window.cpp
     ${SNAPLITE_SNIP_SOURCE}
