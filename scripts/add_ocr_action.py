@@ -17,7 +17,7 @@ def patch_editor(path: Path) -> None:
     text = replace_once(
         text,
         '#include "snip_window.h"\n#include "toolbar_icon_render_gdi_anime.h"',
-        '#include "snip_window.h"\n#include "ocr.h"\n#include "toolbar_icon_render_gdi_anime.h"',
+        '#include "snip_window.h"\n#include "ocr.h"\n#include "ocr_result_panel.h"\n#include "toolbar_icon_render_gdi_anime.h"',
         "OCR header include",
     )
     text = replace_once(
@@ -47,7 +47,7 @@ def patch_editor(path: Path) -> None:
         '            case PrimaryAction::Copy: return L"复制到剪贴板";\n'
         '            case PrimaryAction::Save: return L"保存到默认截图目录";',
         '            case PrimaryAction::Copy: return L"复制到剪贴板";\n'
-        '            case PrimaryAction::Ocr: return L"提取文字：识别当前选区并复制到剪贴板";\n'
+        '            case PrimaryAction::Ocr: return L"提取文字：识别当前选区并在右侧显示，可选择性复制";\n'
         '            case PrimaryAction::Save: return L"保存到默认截图目录";',
         "OCR hover hint",
     )
@@ -68,12 +68,8 @@ def patch_editor(path: Path) -> None:
         '            } else if (result.text.empty()) {\n'
         '                MessageBoxW(parent_, L"当前选区没有识别到文字。", L"Snap-Lite · 提取文字",\n'
         '                            MB_OK | MB_ICONINFORMATION);\n'
-        '            } else if (!CopyUnicodeTextToClipboard(parent_, result.text)) {\n'
-        '                MessageBoxW(parent_, L"文字已识别，但复制到剪贴板失败。", L"Snap-Lite · 提取文字",\n'
-        '                            MB_OK | MB_ICONWARNING);\n'
         '            } else {\n'
-        '                MessageBoxW(parent_, L"文字已提取并复制到剪贴板。", L"Snap-Lite · 提取文字",\n'
-        '                            MB_OK | MB_ICONINFORMATION);\n'
+        '                ShowOcrResultPanel(parent_, snip_->UiSelectionRect(), result.text);\n'
         '            }\n'
         '            break;\n'
         '        }\n'
