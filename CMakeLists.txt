@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(SnapLite VERSION 1.3.13 LANGUAGES CXX RC)
+project(SnapLite VERSION 1.3.14 LANGUAGES CXX RC)
 
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
@@ -78,8 +78,8 @@ add_executable(SnapLite WIN32
     ${SNAPLITE_EDITOR_SOURCE}
     src/capture.cpp
     src/capture_settings.cpp
-    src/ocr.cpp
-    src/ocr_result_panel.cpp
+    src/ocr_v2.cpp
+    src/ocr_result_panel_v2.cpp
     src/pin_window.cpp
     ${SNAPLITE_SNIP_SOURCE}
     src/snip_text_overlay.cpp
@@ -111,11 +111,6 @@ if(MSVC)
         APPEND PROPERTY COMPILE_OPTIONS
         "/FI${SNAPLITE_GENERATED_SRC}/window_bounds_fix.h"
         "/FI${CMAKE_CURRENT_SOURCE_DIR}/src/drag_repaint_fix.h"
-    )
-    set_property(
-        SOURCE src/ocr.cpp
-        APPEND PROPERTY COMPILE_OPTIONS
-        "/FI${CMAKE_CURRENT_SOURCE_DIR}/src/ocr_winrt_compat.h"
     )
 endif()
 
