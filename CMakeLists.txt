@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(SnapLite VERSION 1.3.17 LANGUAGES CXX RC)
+project(SnapLite VERSION 1.3.18 LANGUAGES CXX RC)
 
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
@@ -105,7 +105,7 @@ add_executable(SnapLite WIN32
     ${SNAPLITE_EDITOR_SOURCE}
     src/capture.cpp
     src/capture_settings.cpp
-    src/ocr_rapid.cpp
+    src/ocr_v2.cpp
     ${SNAPLITE_OCR_PANEL_SOURCE}
     ${SNAPLITE_PIN_SOURCE}
     ${SNAPLITE_SNIP_SOURCE}
