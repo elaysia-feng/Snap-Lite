@@ -61,18 +61,6 @@ jobs:
           "tag=v$releaseVersion" >> $env:GITHUB_OUTPUT
           "prerelease=$($prerelease.ToString().ToLower())" >> $env:GITHUB_OUTPUT
 
-      - name: Install RapidOCR packager
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install "rapidocr==3.9.2" onnxruntime pyinstaller
-
-      - name: Build RapidOCR companion
-        shell: pwsh
-        run: |
-          python -m PyInstaller --noconfirm --clean --onefile --name SnapLiteOCR --collect-all rapidocr --collect-all onnxruntime scripts/rapidocr_worker.py
-          .\dist\SnapLiteOCR.exe --self-test
-          if ($LASTEXITCODE -ne 0) { throw 'Bundled RapidOCR self-test failed.' }
-
       - name: Configure
         run: cmake -S . -B build -A x64
 
@@ -88,11 +76,12 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           New-Item -ItemType Directory -Force -Path package | Out-Null
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
           Copy-Item build/Release/SnapLite.exe package/SnapLite.exe
-          Copy-Item dist/SnapLiteOCR.exe package/SnapLiteOCR.exe
+          Copy-Item build/Release/SnapLite.exe dist/SnapLite.exe
 
           $zip = "dist/SnapLite-$env:VERSION-win-x64.zip"
-          Compress-Archive -Path package/* -DestinationPath $zip -Force
+          Compress-Archive -Path package/SnapLite.exe -DestinationPath $zip -Force
 
       - name: Install Inno Setup
         shell: pwsh
@@ -123,13 +112,11 @@ jobs:
         run: |
           $zip = "dist/SnapLite-$env:VERSION-win-x64.zip"
           $installer = "dist/SnapLite-Setup-$env:VERSION.exe"
-          $mainHash = (Get-FileHash package/SnapLite.exe -Algorithm SHA256).Hash.ToLower()
-          $ocrHash = (Get-FileHash package/SnapLiteOCR.exe -Algorithm SHA256).Hash.ToLower()
+          $mainHash = (Get-FileHash dist/SnapLite.exe -Algorithm SHA256).Hash.ToLower()
           $zipHash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
           $installerHash = (Get-FileHash $installer -Algorithm SHA256).Hash.ToLower()
           @(
             "$mainHash  SnapLite.exe",
-            "$ocrHash  SnapLiteOCR.exe",
             "$zipHash  SnapLite-$env:VERSION-win-x64.zip",
             "$installerHash  SnapLite-Setup-$env:VERSION.exe"
           ) | Out-File dist/SHA256SUMS.txt -Encoding ascii
@@ -161,6 +148,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $assets = @(
+            'dist/SnapLite.exe',
             "dist/SnapLite-Setup-$env:VERSION.exe",
             "dist/SnapLite-$env:VERSION-win-x64.zip",
             'dist/SHA256SUMS.txt'
