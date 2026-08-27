@@ -28,18 +28,8 @@ jobs:
           if (Test-Path src/editor_window.cpp) { throw 'Dead legacy EditorWindow source returned.' }
           if (Test-Path .github/workflows/fix-beta2-once.yml) { throw 'One-time source mutation workflow must not ship.' }
           if (Test-Path .github/workflows/release-beta.yml) { throw 'Beta source-mutation release workflow must not ship.' }
-
-      - name: Install RapidOCR packager
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install "rapidocr==3.9.2" onnxruntime pyinstaller
-
-      - name: Build RapidOCR companion
-        shell: pwsh
-        run: |
-          python -m PyInstaller --noconfirm --clean --onefile --name SnapLiteOCR --collect-all rapidocr --collect-all onnxruntime scripts/rapidocr_worker.py
-          .\dist\SnapLiteOCR.exe --self-test
-          if ($LASTEXITCODE -ne 0) { throw 'Bundled RapidOCR self-test failed.' }
+          if (Test-Path scripts/rapidocr_worker.py) { throw 'RapidOCR companion source must not ship in the lightweight build.' }
+          if (Test-Path src/ocr_rapid.cpp) { throw 'RapidOCR launcher source must not ship in the lightweight build.' }
 
       - name: Configure
         run: cmake -S . -B build -A x64
@@ -50,15 +40,8 @@ jobs:
       - name: Verify embedded app icon
         run: python scripts/check_pe_icon.py build/Release/SnapLite.exe
 
-      - name: Prepare artifact
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path artifact | Out-Null
-          Copy-Item build/Release/SnapLite.exe artifact/SnapLite.exe
-          Copy-Item dist/SnapLiteOCR.exe artifact/SnapLiteOCR.exe
-
-      - name: Upload executable bundle
+      - name: Upload executable
         uses: actions/upload-artifact@v4
         with:
           name: SnapLite-windows-x64
-          path: artifact/*
+          path: build/Release/SnapLite.exe
