@@ -59,8 +59,8 @@ void LayoutPanel(HWND hwnd, PanelState* state) {
 
     RECT client{};
     GetClientRect(hwnd, &client);
-    const int width = std::max(240L, client.right - client.left);
-    const int height = std::max(180L, client.bottom - client.top);
+    const int width = std::max(240, static_cast<int>(client.right - client.left));
+    const int height = std::max(180, static_cast<int>(client.bottom - client.top));
     const int pad = 12;
     const int hintHeight = 24;
     const int buttonHeight = 30;
@@ -220,14 +220,19 @@ RECT PanelBounds(HWND owner, const RECT& selectionClientRect) {
     GetMonitorInfoW(monitor, &info);
 
     const RECT work = info.rcWork;
+    const int workLeft = static_cast<int>(work.left);
+    const int workTop = static_cast<int>(work.top);
+    const int workRight = static_cast<int>(work.right);
+    const int workBottom = static_cast<int>(work.bottom);
+
     int x = rightTop.x + 12;
-    if (x + kPanelWidth > work.right) {
+    if (x + kPanelWidth > workRight) {
         x = leftTop.x - kPanelWidth - 12;
     }
-    x = std::clamp(x, work.left, std::max(work.left, work.right - kPanelWidth));
+    x = std::clamp(x, workLeft, std::max(workLeft, workRight - kPanelWidth));
 
     int y = rightTop.y;
-    y = std::clamp(y, work.top, std::max(work.top, work.bottom - kPanelHeight));
+    y = std::clamp(y, workTop, std::max(workTop, workBottom - kPanelHeight));
 
     return {x, y, x + kPanelWidth, y + kPanelHeight};
 }
