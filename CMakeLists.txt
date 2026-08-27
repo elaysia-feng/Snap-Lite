@@ -91,7 +91,8 @@ target_include_directories(SnapLite PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
-target_compile_features(SnapLite PRIVATE cxx_std_17)
+# C++/WinRT's current Windows SDK coroutine support targets standard C++20.
+target_compile_features(SnapLite PRIVATE cxx_std_20)
 target_compile_definitions(
     SnapLite PRIVATE
     UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN
