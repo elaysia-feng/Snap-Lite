@@ -39,7 +39,6 @@ Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: 
 
 [Files]
 Source: "..\package\SnapLite.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\package\SnapLiteOCR.exe"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\Snap-Lite"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"
