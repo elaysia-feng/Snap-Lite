@@ -112,6 +112,11 @@ if(MSVC)
         "/FI${SNAPLITE_GENERATED_SRC}/window_bounds_fix.h"
         "/FI${CMAKE_CURRENT_SOURCE_DIR}/src/drag_repaint_fix.h"
     )
+    set_property(
+        SOURCE src/ocr.cpp
+        APPEND PROPERTY COMPILE_OPTIONS
+        "/FI${CMAKE_CURRENT_SOURCE_DIR}/src/ocr_winrt_compat.h"
+    )
 endif()
 
 install(TARGETS SnapLite RUNTIME DESTINATION .)
