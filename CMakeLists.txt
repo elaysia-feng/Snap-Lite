@@ -64,7 +64,34 @@ if(NOT SNAP_LITE_OCR_PATCH_RESULT EQUAL 0)
     message(FATAL_ERROR "Failed to add OCR toolbar action")
 endif()
 
+execute_process(
+    COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/scripts/apply_unified_toolbar_theme.py"
+            "${SNAPLITE_GENERATED_SRC}/toolbar_icon_render_gdi_anime.h"
+    RESULT_VARIABLE SNAP_LITE_TOOLBAR_THEME_RESULT
+)
+if(NOT SNAP_LITE_TOOLBAR_THEME_RESULT EQUAL 0)
+    message(FATAL_ERROR "Failed to apply shared toolbar theme")
+endif()
+
+# All custom popup surfaces share one visual language. System-owned file
+# pickers remain native Windows dialogs, but Snap-Lite-owned controls use the
+# same cream/pink palette, corner radii, typography, and interaction colors.
+set(SNAPLITE_UI_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated_ui")
+execute_process(
+    COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/scripts/generate_unified_ui_sources.py"
+            "${CMAKE_CURRENT_SOURCE_DIR}"
+            "${SNAPLITE_UI_GENERATED_DIR}"
+    RESULT_VARIABLE SNAP_LITE_UI_GENERATE_RESULT
+)
+if(NOT SNAP_LITE_UI_GENERATE_RESULT EQUAL 0)
+    message(FATAL_ERROR "Failed to generate unified UI surfaces")
+endif()
+
 set(SNAPLITE_SNIP_SOURCE "${SNAPLITE_GENERATED_SRC}/snip_window.cpp")
+set(SNAPLITE_PIN_SOURCE "${SNAPLITE_UI_GENERATED_DIR}/pin_window.cpp")
+set(SNAPLITE_OCR_PANEL_SOURCE "${SNAPLITE_UI_GENERATED_DIR}/ocr_result_panel_v2.cpp")
 
 configure_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/resources/SnapLite.rc.in
@@ -79,8 +106,8 @@ add_executable(SnapLite WIN32
     src/capture.cpp
     src/capture_settings.cpp
     src/ocr_rapid.cpp
-    src/ocr_result_panel_v2.cpp
-    src/pin_window.cpp
+    ${SNAPLITE_OCR_PANEL_SOURCE}
+    ${SNAPLITE_PIN_SOURCE}
     ${SNAPLITE_SNIP_SOURCE}
     src/snip_text_overlay.cpp
     ${CMAKE_CURRENT_BINARY_DIR}/SnapLite.rc
@@ -88,6 +115,7 @@ add_executable(SnapLite WIN32
 
 target_include_directories(SnapLite PRIVATE
     ${SNAPLITE_GENERATED_SRC}
+    ${SNAPLITE_UI_GENERATED_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/resources
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
