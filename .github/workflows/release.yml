@@ -82,7 +82,7 @@ jobs:
       - name: Validate embedded app icon
         run: python scripts/check_pe_icon.py build/Release/SnapLite.exe
 
-      - name: Prepare package
+      - name: Prepare portable package
         shell: pwsh
         env:
           VERSION: ${{ steps.version.outputs.version }}
@@ -94,13 +94,44 @@ jobs:
           $zip = "dist/SnapLite-$env:VERSION-win-x64.zip"
           Compress-Archive -Path package/* -DestinationPath $zip -Force
 
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          choco install innosetup --no-progress -y
+
+      - name: Build Windows installer
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            throw "Inno Setup compiler not found: $iscc"
+          }
+          & $iscc "/DMyAppVersion=$env:VERSION" "installer\SnapLite.iss"
+          if ($LASTEXITCODE -ne 0) { throw 'Inno Setup compilation failed.' }
+
+          $installer = "dist/SnapLite-Setup-$env:VERSION.exe"
+          if (-not (Test-Path $installer)) {
+            throw "Installer was not generated: $installer"
+          }
+
+      - name: Write checksums
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $zip = "dist/SnapLite-$env:VERSION-win-x64.zip"
+          $installer = "dist/SnapLite-Setup-$env:VERSION.exe"
           $mainHash = (Get-FileHash package/SnapLite.exe -Algorithm SHA256).Hash.ToLower()
           $ocrHash = (Get-FileHash package/SnapLiteOCR.exe -Algorithm SHA256).Hash.ToLower()
           $zipHash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+          $installerHash = (Get-FileHash $installer -Algorithm SHA256).Hash.ToLower()
           @(
             "$mainHash  SnapLite.exe",
             "$ocrHash  SnapLiteOCR.exe",
-            "$zipHash  SnapLite-$env:VERSION-win-x64.zip"
+            "$zipHash  SnapLite-$env:VERSION-win-x64.zip",
+            "$installerHash  SnapLite-Setup-$env:VERSION.exe"
           ) | Out-File dist/SHA256SUMS.txt -Encoding ascii
 
       - name: Ensure immutable release tag
@@ -130,6 +161,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $assets = @(
+            "dist/SnapLite-Setup-$env:VERSION.exe",
             "dist/SnapLite-$env:VERSION-win-x64.zip",
             'dist/SHA256SUMS.txt'
           )
