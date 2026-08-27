@@ -90,7 +90,6 @@ jobs:
           New-Item -ItemType Directory -Force -Path package | Out-Null
           Copy-Item build/Release/SnapLite.exe package/SnapLite.exe
           Copy-Item dist/SnapLiteOCR.exe package/SnapLiteOCR.exe
-          Copy-Item build/Release/SnapLite.exe dist/SnapLite.exe
 
           $zip = "dist/SnapLite-$env:VERSION-win-x64.zip"
           Compress-Archive -Path package/* -DestinationPath $zip -Force
@@ -131,7 +130,6 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $assets = @(
-            'dist/SnapLite.exe',
             "dist/SnapLite-$env:VERSION-win-x64.zip",
             'dist/SHA256SUMS.txt'
           )
