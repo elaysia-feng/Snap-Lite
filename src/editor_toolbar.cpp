@@ -409,7 +409,7 @@ public:
         }
     }
 
-    LRESULT HandleToolbar(HWND hwnd, UINT message, WPARAM, LPARAM lParam) {
+    LRESULT HandleToolbar(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
         switch (message) {
         case WM_ERASEBKGND:
             return 1;
@@ -839,28 +839,27 @@ private:
                 Gdiplus::SolidBrush swatch(Gdiplus::Color(
                     255, GetRValue(item.color), GetGValue(item.color), GetBValue(item.color)));
                 g.FillEllipse(&swatch, cx - 6.0f, cy - 6.0f, 12.0f, 12.0f);
-                Gdiplus::Pen border(selected ? Gdiplus::Color(255, 151, 128, 99)
-                                             : Gdiplus::Color(255, 198, 190, 181),
+                Gdiplus::Pen border(selected ? Gdiplus::Color(255, 224, 119, 151)
+                                             : Gdiplus::Color(255, 218, 204, 210),
                                     selected ? 2.0f : 1.0f);
                 g.DrawEllipse(&border, cx - 7.0f, cy - 7.0f, 14.0f, 14.0f);
                 continue;
             }
 
-            if (item.action != ItemAction::None || hovered) {
+            if (selected || hovered) {
                 FillRoundRect(g,
                     Gdiplus::RectF(static_cast<float>(r.left), static_cast<float>(r.top),
                                    static_cast<float>(r.right-r.left), static_cast<float>(r.bottom-r.top)),
-                    6.0f, selected ? Gdiplus::Color(255, 239, 232, 222)
-                                    : hovered ? Gdiplus::Color(255, 247, 243, 238)
-                                              : Gdiplus::Color(255, 252, 250, 247));
+                    10.0f, selected ? Gdiplus::Color(255, 255, 235, 242)
+                                     : Gdiplus::Color(255, 255, 248, 250));
             }
-            SetTextColor(mem, selected ? RGB(105, 84, 62) : RGB(82, 78, 73));
+            SetTextColor(mem, selected ? RGB(91, 60, 72) : RGB(79, 70, 76));
             toolbaricons_gdi::DrawTextOrIcon(mem, item.label.c_str(), -1, &r,
                       DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
         }
 
         RECT hint{kPad, kPrimaryHeight + kSecondaryHeight, kToolbarWidth-kPad, kToolbarHeight};
-        SetTextColor(mem, RGB(137, 128, 118));
+        SetTextColor(mem, RGB(137, 119, 128));
         DrawTextW(mem, HintText().c_str(), -1, &hint,
                   DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 

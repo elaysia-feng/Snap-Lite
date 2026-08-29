@@ -28,15 +28,33 @@ def main() -> int:
     )
     text = replace_once(
         text,
+        "constexpr int kPrimaryHeight = 42;",
+        "constexpr int kPrimaryHeight = 52;",
+        "comfortable primary toolbar height",
+    )
+    text = replace_once(
+        text,
+        "constexpr int kSecondaryHeight = 42;",
+        "constexpr int kSecondaryHeight = 44;",
+        "comfortable secondary toolbar height",
+    )
+    text = replace_once(
+        text,
+        "constexpr int kHintHeight = 24;",
+        "constexpr int kHintHeight = 26;",
+        "comfortable toolbar hint height",
+    )
+    text = replace_once(
+        text,
         "constexpr int kToolWidth = 78;",
-        "constexpr int kToolWidth = 48;",
-        "compact primary tool width",
+        "constexpr int kToolWidth = 50;",
+        "portrait badge tool width",
     )
     text = replace_once(
         text,
         "constexpr std::array<int, 7> kActionWidths = {46, 46, 46, 50, 50, 62, 50};",
-        "constexpr std::array<int, 7> kActionWidths = {44, 44, 44, 44, 44, 48, 44};",
-        "compact action widths",
+        "constexpr std::array<int, 7> kActionWidths = {48, 48, 48, 48, 48, 52, 48};",
+        "portrait badge action widths",
     )
 
     # Keep the button size exactly as-is, but make the host width follow the
@@ -98,13 +116,13 @@ def main() -> int:
         "        const int height = std::max(1L, client.bottom - client.top);\n"
         "        const int primaryWidth = std::min(width, PrimaryContentWidth());\n\n"
         "        HRGN top = CreateRoundRectRgn(0, 0, primaryWidth + 1,\n"
-        "                                          std::min(height, kPrimaryHeight) + 1, 18, 18);\n"
+        "                                          std::min(height, kPrimaryHeight) + 1, 22, 22);\n"
         "        if (!top) return;\n"
         "        if (height <= kPrimaryHeight) {\n"
         "            if (SetWindowRgn(toolbar_, top, TRUE) == 0) DeleteObject(top);\n"
         "            return;\n"
         "        }\n\n"
-        "        HRGN lower = CreateRoundRectRgn(0, kPrimaryHeight - 1, width + 1, height + 1, 16, 16);\n"
+        "        HRGN lower = CreateRoundRectRgn(0, kPrimaryHeight - 1, width + 1, height + 1, 18, 18);\n"
         "        HRGN merged = CreateRectRgn(0, 0, 0, 0);\n"
         "        if (!lower || !merged) {\n"
         "            if (lower) DeleteObject(lower);\n"
@@ -182,6 +200,87 @@ def main() -> int:
     )
     text = replace_once(
         text,
+        "        g.DrawLine(&divider, 10.0f, static_cast<float>(kPrimaryHeight),\n"
+        "                   static_cast<float>(paintWidth - 10), static_cast<float>(kPrimaryHeight));\n"
+        "        g.DrawLine(&divider, 10.0f, static_cast<float>(kPrimaryHeight + kSecondaryHeight),\n"
+        "                   static_cast<float>(paintWidth - 10), static_cast<float>(kPrimaryHeight + kSecondaryHeight));",
+        "        toolbaricons_gdi::anime_skin::DrawAnimeDividers(\n"
+        "            g, paintWidth, paintHeight, PrimaryContentWidth(), kActionStart - 7,\n"
+        "            kPrimaryHeight, kSecondaryHeight);",
+        "designed anime dividers",
+    )
+    text = replace_once(
+        text,
+        "        g.DrawLine(&divider, static_cast<float>(kActionStart - 7), 10.0f,\n"
+        "                   static_cast<float>(kActionStart - 7), static_cast<float>(kPrimaryHeight - 10));\n",
+        "",
+        "remove legacy toolbar split",
+    )
+    text = replace_once(
+        text,
+        "        Gdiplus::Pen divider(Gdiplus::Color(255, 232, 226, 219), 1.0f);\n",
+        "",
+        "remove legacy divider pen",
+    )
+
+    text = replace_once(
+        text,
+        "        for (int i = 0; i < kToolCount; ++i) {\n"
+        "            RECT r = ToolRect(i);\n"
+        "            const bool active = category_ == static_cast<Category>(i);\n"
+        "            const bool hovered = hoverTool_ == i;\n"
+        "            if (active || hovered) {\n"
+        "                FillRoundRect(g,\n"
+        "                    Gdiplus::RectF(static_cast<float>(r.left), static_cast<float>(r.top),\n"
+        "                                   static_cast<float>(r.right-r.left), static_cast<float>(r.bottom-r.top)),\n"
+        "                    7.0f, active ? Gdiplus::Color(255, 255, 232, 240)\n"
+        "                                 : Gdiplus::Color(255, 255, 246, 249));\n"
+        "            }\n"
+        "            SetTextColor(mem, active ? RGB(99, 82, 62) : RGB(58, 56, 53));\n"
+        "            toolbaricons_gdi::DrawTextOrIcon(mem, kToolLabels[i], -1, &r, DT_CENTER | DT_VCENTER | DT_SINGLELINE);\n"
+        "        }",
+        "        for (int i = 0; i < kToolCount; ++i) {\n"
+        "            RECT r = ToolRect(i);\n"
+        "            const bool active = category_ == static_cast<Category>(i);\n"
+        "            const bool hovered = hoverTool_ == i;\n"
+        "            toolbaricons_gdi::anime_skin::DrawPrimaryState(\n"
+        "                g, r, kToolLabels[i], -1, active, hovered);\n"
+        "            SetTextColor(mem, active ? RGB(99, 82, 62) : RGB(58, 56, 53));\n"
+        "            toolbaricons_gdi::DrawTextOrIcon(mem, kToolLabels[i], -1, &r, DT_CENTER | DT_VCENTER | DT_SINGLELINE);\n"
+        "        }",
+        "designed anime category slots",
+    )
+
+    text = replace_once(
+        text,
+        "        for (int i = 0; i < static_cast<int>(kActionLabels.size()); ++i) {\n"
+        "            RECT r = ActionRect(i);\n"
+        "            const bool hovered = hoverAction_ == i;\n"
+        "            if (hovered) {\n"
+        "                FillRoundRect(g,\n"
+        "                    Gdiplus::RectF(static_cast<float>(r.left), static_cast<float>(r.top),\n"
+        "                                   static_cast<float>(r.right-r.left), static_cast<float>(r.bottom-r.top)),\n"
+        "                    7.0f, static_cast<PrimaryAction>(i) == PrimaryAction::Cancel\n"
+        "                              ? Gdiplus::Color(255, 255, 237, 239)\n"
+        "                              : Gdiplus::Color(255, 255, 246, 249));\n"
+        "            }\n"
+        "            SetTextColor(mem, static_cast<PrimaryAction>(i) == PrimaryAction::Cancel\n"
+        "                                  ? RGB(196, 76, 72) : RGB(70, 67, 63));\n"
+        "            toolbaricons_gdi::DrawTextOrIcon(mem, kActionLabels[i], -1, &r, DT_CENTER | DT_VCENTER | DT_SINGLELINE);\n"
+        "        }",
+        "        for (int i = 0; i < static_cast<int>(kActionLabels.size()); ++i) {\n"
+        "            RECT r = ActionRect(i);\n"
+        "            const bool hovered = hoverAction_ == i;\n"
+        "            toolbaricons_gdi::anime_skin::DrawPrimaryState(\n"
+        "                g, r, kActionLabels[i], -1, false, hovered);\n"
+        "            SetTextColor(mem, static_cast<PrimaryAction>(i) == PrimaryAction::Cancel\n"
+        "                                  ? RGB(196, 76, 72) : RGB(70, 67, 63));\n"
+        "            toolbaricons_gdi::DrawTextOrIcon(mem, kActionLabels[i], -1, &r, DT_CENTER | DT_VCENTER | DT_SINGLELINE);\n"
+        "        }",
+        "designed anime action slots",
+    )
+    text = replace_once(
+        text,
         "        RECT hint{kPad, kPrimaryHeight + kSecondaryHeight, kToolbarWidth-kPad, kToolbarHeight};",
         "        RECT hint{kPad, kPrimaryHeight + kSecondaryHeight, paintWidth-kPad, paintHeight};",
         "dynamic hint bounds",
@@ -203,15 +302,15 @@ def main() -> int:
         "        RoundRect(dc, 0, 0, client.right, client.bottom, 18, 18);",
         "        RECT client{};\n"
         "        GetClientRect(hwnd, &client);\n"
-        "        HPEN border = CreatePen(PS_SOLID, 1, RGB(238, 211, 216));\n"
+        "        HPEN border = CreatePen(PS_SOLID, 1, RGB(231, 216, 222));\n"
         "        const HGDIOBJ oldPen = SelectObject(dc, border);\n"
         "        const HGDIOBJ oldBrush = SelectObject(dc, GetStockObject(NULL_BRUSH));\n"
         "        if (client.bottom <= kPrimaryHeight) {\n"
-        "            RoundRect(dc, 0, 0, client.right, client.bottom, 18, 18);\n"
+        "            RoundRect(dc, 0, 0, client.right, client.bottom, 22, 22);\n"
         "        } else {\n"
         "            const int primaryWidth = std::min<int>(client.right, PrimaryContentWidth());\n"
-        "            RoundRect(dc, 0, 0, primaryWidth, kPrimaryHeight, 18, 18);\n"
-        "            RoundRect(dc, 0, kPrimaryHeight - 1, client.right, client.bottom, 16, 16);\n"
+        "            RoundRect(dc, 0, 0, primaryWidth, kPrimaryHeight, 22, 22);\n"
+        "            RoundRect(dc, 0, kPrimaryHeight - 1, client.right, client.bottom, 18, 18);\n"
         "        }",
         "content-shaped outer border",
     )
@@ -224,16 +323,10 @@ def main() -> int:
         "        HBRUSH background = CreateSolidBrush(snaplite::ui::kSurface);\n"
         "        FillRect(mem, &all, background);\n"
         "        DeleteObject(background);\n"
-        "        toolbaricons_gdi::DrawAnimeBackdrop(mem, all, kActionStart - 7);",
+        "        toolbaricons_gdi::DrawAnimeBackdrop(\n"
+        "            mem, all, kActionStart - 7, PrimaryContentWidth(), kPrimaryHeight);",
         "anime toolbar backdrop",
     )
-    text = replace_once(
-        text,
-        "        Gdiplus::Pen divider(Gdiplus::Color(255, 232, 226, 219), 1.0f);",
-        "        Gdiplus::Pen divider(Gdiplus::Color(255, 241, 220, 224), 1.0f);",
-        "pastel divider",
-    )
-
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(text, encoding="utf-8", newline="\n")
     print(f"Generated compact anime toolbar source: {output}")

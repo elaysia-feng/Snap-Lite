@@ -38,9 +38,9 @@ def patch_editor(path: Path) -> None:
     )
     text = replace_once(
         text,
-        "constexpr std::array<int, 7> kActionWidths = {44, 44, 44, 44, 44, 48, 44};",
-        "constexpr std::array<int, 8> kActionWidths = {44, 44, 44, 44, 48, 44, 48, 44};",
-        "OCR compact action width",
+        "constexpr std::array<int, 7> kActionWidths = {48, 48, 48, 48, 48, 52, 48};",
+        "constexpr std::array<int, 8> kActionWidths = {48, 48, 48, 48, 50, 48, 52, 48};",
+        "OCR portrait badge action width",
     )
     text = replace_once(
         text,

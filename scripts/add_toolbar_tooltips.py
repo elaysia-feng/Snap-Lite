@@ -28,6 +28,8 @@ def main() -> int:
         "    ~ToolbarHost() {\n"
         "        HideHoverPopup();\n"
         "        if (tooltip_ && IsWindow(tooltip_)) DestroyWindow(tooltip_);\n"
+        "        if (tooltipFont_) DeleteObject(tooltipFont_);\n"
+        "        if (tooltipBrush_) DeleteObject(tooltipBrush_);\n"
         "        if (font_) DeleteObject(font_);\n"
         "        if (smallFont_) DeleteObject(smallFont_);\n"
         "    }",
@@ -53,12 +55,15 @@ def main() -> int:
         "            WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,\n"
         "            L\"STATIC\",\n"
         "            L\"\",\n"
-        "            WS_POPUP | WS_BORDER | SS_CENTER | SS_CENTERIMAGE,\n"
+        "            WS_POPUP | SS_CENTER | SS_CENTERIMAGE,\n"
         "            0, 0, 0, 0,\n"
-        "            parent_, nullptr, instance_, nullptr);\n"
+        "            toolbar_, nullptr, instance_, nullptr);\n"
         "        if (!tooltip_) return;\n"
+        "        tooltipFont_ = snaplite::ui::MakeFont(\n"
+        "            GetDpiForWindow(parent_), 9, FW_MEDIUM);\n"
+        "        tooltipBrush_ = CreateSolidBrush(snaplite::ui::kCard);\n"
         "        SendMessageW(tooltip_, WM_SETFONT,\n"
-        "                     reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), FALSE);\n"
+        "                     reinterpret_cast<WPARAM>(tooltipFont_), FALSE);\n"
         "        SetWindowPos(tooltip_, HWND_TOPMOST, 0, 0, 0, 0,\n"
         "                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_HIDEWINDOW);\n"
         "    }\n\n"
@@ -87,7 +92,9 @@ def main() -> int:
         "        SIZE textSize{40, 18};\n"
         "        HDC dc = GetDC(tooltip_);\n"
         "        if (dc) {\n"
-        "            HFONT font = reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));\n"
+        "            HFONT font = tooltipFont_\n"
+        "                ? tooltipFont_\n"
+        "                : reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));\n"
         "            HGDIOBJ oldFont = font ? SelectObject(dc, font) : nullptr;\n"
         "            SIZE measured{};\n"
         "            if (GetTextExtentPoint32W(dc, tooltipText_.c_str(),\n"
@@ -97,8 +104,8 @@ def main() -> int:
         "            if (oldFont) SelectObject(dc, oldFont);\n"
         "            ReleaseDC(tooltip_, dc);\n"
         "        }\n\n"
-        "        const int width = std::max(44, static_cast<int>(textSize.cx) + 18);\n"
-        "        const int height = std::max(26, static_cast<int>(textSize.cy) + 10);\n"
+        "        const int width = std::max(48, static_cast<int>(textSize.cx) + 22);\n"
+        "        const int height = std::max(28, static_cast<int>(textSize.cy) + 12);\n"
         "        POINT screen = clientPoint;\n"
         "        ClientToScreen(toolbar_, &screen);\n"
         "        screen.x += 12;\n"
@@ -115,9 +122,28 @@ def main() -> int:
         "        }\n\n"
         "        SetWindowPos(tooltip_, HWND_TOPMOST, screen.x, screen.y, width, height,\n"
         "                     SWP_NOACTIVATE | SWP_SHOWWINDOW);\n"
+        "        snaplite::ui::SetRoundedWindowRegion(tooltip_, 12);\n"
         "        RedrawWindow(tooltip_, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);\n"
         "    }",
         "explicit hover popup",
+    )
+
+    text = replace_once(
+        text,
+        "        case WM_ERASEBKGND:\n"
+        "            return 1;\n"
+        "        case WM_SETCURSOR:",
+        "        case WM_ERASEBKGND:\n"
+        "            return 1;\n"
+        "        case WM_CTLCOLORSTATIC: {\n"
+        "            HDC tooltipDc = reinterpret_cast<HDC>(wParam);\n"
+        "            SetTextColor(tooltipDc, snaplite::ui::kText);\n"
+        "            SetBkMode(tooltipDc, TRANSPARENT);\n"
+        "            return reinterpret_cast<LRESULT>(\n"
+        "                tooltipBrush_ ? tooltipBrush_ : GetStockObject(WHITE_BRUSH));\n"
+        "        }\n"
+        "        case WM_SETCURSOR:",
+        "styled hover popup colors",
     )
 
     text = replace_once(
@@ -172,6 +198,8 @@ def main() -> int:
         "    HFONT smallFont_{};",
         "    HWND tooltip_{};\n"
         "    std::wstring tooltipText_;\n"
+        "    HFONT tooltipFont_{};\n"
+        "    HBRUSH tooltipBrush_{};\n"
         "    HFONT font_{};\n"
         "    HFONT smallFont_{};",
         "hover popup members",
