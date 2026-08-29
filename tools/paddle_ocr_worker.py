@@ -165,6 +165,9 @@ def main() -> int:
         if args.cache_dir:
             args.cache_dir.mkdir(parents=True, exist_ok=True)
             os.environ["PADDLE_PDX_CACHE_HOME"] = str(args.cache_dir.resolve())
+        # 优先使用国内官方 BOS 模型源，避免发布环境无法访问 Hugging Face。
+        # 保留环境变量覆盖能力，便于用户按网络环境切换模型源。
+        os.environ.setdefault("PADDLE_PDX_MODEL_SOURCE", "BOS")
 
         from paddleocr import PaddleOCR
 
