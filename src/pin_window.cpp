@@ -281,7 +281,8 @@ LRESULT CALLBACK PinMenuWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARA
 }
 
 HWND CreatePinMenu(HWND owner, BYTE opacity, POINT cursor) {
-    MONITORINFO monitorInfo{sizeof(monitorInfo)};
+    MONITORINFO monitorInfo{};
+    monitorInfo.cbSize = sizeof(monitorInfo);
     HMONITOR monitor = MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST);
     GetMonitorInfoW(monitor, &monitorInfo);
 
@@ -534,7 +535,7 @@ HBITMAP BitmapFromDibClipboard(UINT format) {
             DIB_RGB_COLORS,
             SRCCOPY);
         SelectObject(memoryDc, old);
-        ok = result != GDI_ERROR && result != 0;
+        ok = result != static_cast<int>(GDI_ERROR) && result != 0;
     }
 
     if (memoryDc) DeleteDC(memoryDc);
@@ -667,7 +668,8 @@ bool PinWindow::Create(HINSTANCE instance, HBITMAP bitmap) {
 
     POINT cursor{};
     GetCursorPos(&cursor);
-    MONITORINFO monitorInfo{sizeof(monitorInfo)};
+    MONITORINFO monitorInfo{};
+    monitorInfo.cbSize = sizeof(monitorInfo);
     const HMONITOR monitor = MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST);
     GetMonitorInfoW(monitor, &monitorInfo);
     const int workWidth = std::max(1L, monitorInfo.rcWork.right - monitorInfo.rcWork.left);
@@ -746,7 +748,8 @@ void PinWindow::ResizeForZoom() {
         static_cast<LONG>((current.left + current.right) / 2),
         static_cast<LONG>((current.top + current.bottom) / 2)};
 
-    MONITORINFO monitorInfo{sizeof(monitorInfo)};
+    MONITORINFO monitorInfo{};
+    monitorInfo.cbSize = sizeof(monitorInfo);
     const HMONITOR monitor = MonitorFromPoint(center, MONITOR_DEFAULTTONEAREST);
     GetMonitorInfoW(monitor, &monitorInfo);
     const int workWidth = std::max(1L, monitorInfo.rcWork.right - monitorInfo.rcWork.left);

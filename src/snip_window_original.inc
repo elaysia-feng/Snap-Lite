@@ -219,7 +219,7 @@ void DeleteBitmaps(std::vector<HBITMAP>& bitmaps) {
 }  // namespace
 
 SnipWindow::SnipWindow(HINSTANCE instance, HWND owner, CaptureCallback callback)
-    : instance_(instance), owner_(owner), callback_(std::move(callback)), screen_(GetVirtualScreen()) {}
+    : instance_(instance), owner_(owner), screen_(GetVirtualScreen()), callback_(std::move(callback)) {}
 
 SnipWindow::~SnipWindow() {
     ReleaseFrameBuffer();
