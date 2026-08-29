@@ -52,6 +52,12 @@ def main() -> int:
     )
     text = replace_once(
         text,
+        "constexpr int kGap = 3;",
+        "constexpr int kGap = 5;",
+        "secondary icon spacing",
+    )
+    text = replace_once(
+        text,
         "constexpr std::array<int, 7> kActionWidths = {46, 46, 46, 50, 50, 62, 50};",
         "constexpr std::array<int, 7> kActionWidths = {48, 48, 48, 48, 48, 52, 48};",
         "portrait badge action widths",

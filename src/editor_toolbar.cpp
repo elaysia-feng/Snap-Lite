@@ -782,6 +782,8 @@ private:
 
         Gdiplus::Graphics g(mem);
         g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+        g.SetCompositingQuality(Gdiplus::CompositingQualityHighQuality);
+        g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHighQuality);
         Gdiplus::Pen divider(Gdiplus::Color(255, 232, 226, 219), 1.0f);
         g.DrawLine(&divider, 10.0f, static_cast<float>(kPrimaryHeight),
                    static_cast<float>(kToolbarWidth - 10), static_cast<float>(kPrimaryHeight));
@@ -836,13 +838,30 @@ private:
             if (item.action == ItemAction::ColorPreset) {
                 const float cx = static_cast<float>(r.left + r.right) / 2.0f;
                 const float cy = static_cast<float>(r.top + r.bottom) / 2.0f;
+                if (selected || hovered) {
+                    FillRoundRect(
+                        g,
+                        Gdiplus::RectF(
+                            static_cast<float>(r.left + 1),
+                            static_cast<float>(r.top + 1),
+                            static_cast<float>(r.right - r.left - 2),
+                            static_cast<float>(r.bottom - r.top - 2)),
+                        10.0f,
+                        selected ? Gdiplus::Color(255, 255, 235, 242)
+                                 : Gdiplus::Color(255, 255, 248, 250));
+                }
+
+                Gdiplus::SolidBrush halo(Gdiplus::Color(255, 255, 255, 255));
+                g.FillEllipse(&halo, cx - 8.0f, cy - 8.0f, 16.0f, 16.0f);
                 Gdiplus::SolidBrush swatch(Gdiplus::Color(
                     255, GetRValue(item.color), GetGValue(item.color), GetBValue(item.color)));
-                g.FillEllipse(&swatch, cx - 6.0f, cy - 6.0f, 12.0f, 12.0f);
-                Gdiplus::Pen border(selected ? Gdiplus::Color(255, 224, 119, 151)
-                                             : Gdiplus::Color(255, 218, 204, 210),
-                                    selected ? 2.0f : 1.0f);
-                g.DrawEllipse(&border, cx - 7.0f, cy - 7.0f, 14.0f, 14.0f);
+                g.FillEllipse(&swatch, cx - 6.5f, cy - 6.5f, 13.0f, 13.0f);
+                Gdiplus::Pen border(
+                    selected ? Gdiplus::Color(255, 224, 119, 151)
+                             : hovered ? Gdiplus::Color(255, 239, 189, 202)
+                                       : Gdiplus::Color(255, 218, 204, 210),
+                    selected ? 1.8f : 1.0f);
+                g.DrawEllipse(&border, cx - 7.5f, cy - 7.5f, 15.0f, 15.0f);
                 continue;
             }
 
@@ -852,6 +871,15 @@ private:
                                    static_cast<float>(r.right-r.left), static_cast<float>(r.bottom-r.top)),
                     10.0f, selected ? Gdiplus::Color(255, 255, 235, 242)
                                      : Gdiplus::Color(255, 255, 248, 250));
+                if (selected) {
+                    Gdiplus::GraphicsPath selectedPath;
+                    AddRoundRect(selectedPath,
+                        Gdiplus::RectF(static_cast<float>(r.left), static_cast<float>(r.top),
+                                       static_cast<float>(r.right-r.left), static_cast<float>(r.bottom-r.top)),
+                        10.0f);
+                    Gdiplus::Pen selectedBorder(Gdiplus::Color(255, 239, 171, 191), 1.0f);
+                    g.DrawPath(&selectedBorder, &selectedPath);
+                }
             }
             SetTextColor(mem, selected ? RGB(91, 60, 72) : RGB(79, 70, 76));
             toolbaricons_gdi::DrawTextOrIcon(mem, item.label.c_str(), -1, &r,

@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <memory>
@@ -393,6 +394,293 @@ inline void DrawIconBadge(
     DrawFluentGlyph(dc, rect, glyph, -1, accent);
 }
 
+inline Gdiplus::Color SecondaryIconColor(HDC dc) {
+    const COLORREF color = GetTextColor(dc);
+    return ToColor(color == CLR_INVALID ? snaplite::ui::kText : color);
+}
+
+inline void PrepareSecondaryIconGraphics(Gdiplus::Graphics& graphics) {
+    graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    graphics.SetCompositingMode(Gdiplus::CompositingModeSourceOver);
+    graphics.SetCompositingQuality(Gdiplus::CompositingQualityHighQuality);
+    graphics.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHighQuality);
+}
+
+inline void DrawCrispArrowHead(
+    Gdiplus::Graphics& graphics,
+    const Gdiplus::PointF& tip,
+    const Gdiplus::PointF& from,
+    float size,
+    const Gdiplus::Color& color) {
+    const float dx = tip.X - from.X;
+    const float dy = tip.Y - from.Y;
+    const float length = std::sqrt(dx * dx + dy * dy);
+    if (length < 0.01f) return;
+
+    const float ux = dx / length;
+    const float uy = dy / length;
+    const float baseX = tip.X - ux * size;
+    const float baseY = tip.Y - uy * size;
+    const float halfWidth = size * 0.52f;
+    const Gdiplus::PointF points[3] = {
+        tip,
+        {baseX - uy * halfWidth, baseY + ux * halfWidth},
+        {baseX + uy * halfWidth, baseY - ux * halfWidth},
+    };
+    Gdiplus::SolidBrush brush(color);
+    graphics.FillPolygon(&brush, points, 3);
+}
+
+inline void DrawCrispSecondaryArrow(HDC dc, const RECT& rect, int kind) {
+    Gdiplus::Graphics graphics(dc);
+    PrepareSecondaryIconGraphics(graphics);
+
+    const Gdiplus::Color color = SecondaryIconColor(dc);
+    const float left = static_cast<float>(rect.left + 7);
+    const float right = static_cast<float>(rect.right - 7);
+    const float centerY = static_cast<float>(rect.top + rect.bottom) / 2.0f + 0.5f;
+    const Gdiplus::PointF from(left, centerY + 5.0f);
+    const Gdiplus::PointF to(right, centerY - 5.0f);
+    const float lineWidth = kind == 1 ? 1.25f : kind == 2 ? 3.7f : 2.0f;
+    const float headSize = kind == 1 ? 4.5f : kind == 2 ? 6.0f : 5.2f;
+
+    Gdiplus::Pen pen(color, lineWidth);
+    pen.SetLineJoin(Gdiplus::LineJoinRound);
+    pen.SetStartCap(Gdiplus::LineCapRound);
+    pen.SetEndCap(Gdiplus::LineCapRound);
+
+    if (kind == 4) {
+        const Gdiplus::PointF control1(left + 3.0f, static_cast<float>(rect.top + 5));
+        const Gdiplus::PointF control2(right - 6.0f, static_cast<float>(rect.bottom - 4));
+        Gdiplus::GraphicsPath path;
+        path.AddBezier(from, control1, control2, to);
+        graphics.DrawPath(&pen, &path);
+        DrawCrispArrowHead(graphics, to, control2, headSize, color);
+        return;
+    }
+
+    if (kind == 5 || kind == 6) {
+        Gdiplus::GraphicsPath path;
+        if (kind == 5) {
+            const Gdiplus::PointF points[] = {
+                from,
+                {left + 7.0f, from.Y},
+                {left + 7.0f, to.Y},
+                to,
+            };
+            path.AddLine(points[0], points[1]);
+            path.AddLine(points[1], points[2]);
+            path.AddLine(points[2], points[3]);
+        } else {
+            const Gdiplus::PointF points[] = {
+                from,
+                {left + 7.0f, from.Y},
+                {left + 7.0f, centerY - 1.0f},
+                {right - 7.0f, centerY - 1.0f},
+                {right - 7.0f, to.Y},
+                to,
+            };
+            for (size_t i = 1; i < sizeof(points) / sizeof(points[0]); ++i) {
+                path.AddLine(points[i - 1], points[i]);
+            }
+        }
+        graphics.DrawPath(&pen, &path);
+        DrawCrispArrowHead(graphics, to,
+                           kind == 5 ? Gdiplus::PointF(left + 7.0f, to.Y)
+                                     : Gdiplus::PointF(right - 7.0f, to.Y),
+                           headSize, color);
+        return;
+    }
+
+    graphics.DrawLine(&pen, from, to);
+    DrawCrispArrowHead(graphics, to, from, headSize, color);
+    if (kind == 3) DrawCrispArrowHead(graphics, from, to, headSize, color);
+}
+
+inline void DrawCrispSecondaryShape(HDC dc, const RECT& rect, int kind) {
+    Gdiplus::Graphics graphics(dc);
+    PrepareSecondaryIconGraphics(graphics);
+
+    const Gdiplus::Color color = SecondaryIconColor(dc);
+    const Gdiplus::RectF box(
+        static_cast<float>(rect.left + 7),
+        static_cast<float>(rect.top + 8),
+        static_cast<float>(rect.right - rect.left - 14),
+        static_cast<float>(rect.bottom - rect.top - 16));
+    Gdiplus::Pen pen(color, 1.55f);
+    pen.SetLineJoin(Gdiplus::LineJoinRound);
+    pen.SetStartCap(Gdiplus::LineCapRound);
+    pen.SetEndCap(Gdiplus::LineCapRound);
+
+    switch (kind) {
+    case 0:
+        graphics.DrawRectangle(&pen, box);
+        break;
+    case 1: {
+        Gdiplus::GraphicsPath path;
+        AddRoundRectPath(path, box, 4.5f);
+        graphics.DrawPath(&pen, &path);
+        break;
+    }
+    case 2:
+        graphics.DrawEllipse(&pen, box);
+        break;
+    case 3: {
+        const Gdiplus::RectF ellipse(
+            box.X,
+            box.Y + 2.0f,
+            box.Width,
+            std::max(1.0f, box.Height - 4.0f));
+        graphics.DrawEllipse(&pen, ellipse);
+        break;
+    }
+    case 4:
+        graphics.DrawLine(
+            &pen,
+            Gdiplus::PointF(box.X, box.GetBottom()),
+            Gdiplus::PointF(box.GetRight(), box.Y));
+        break;
+    case 5: {
+        const Gdiplus::PointF points[] = {
+            {box.X + box.Width / 2.0f, box.Y},
+            {box.GetRight(), box.GetBottom()},
+            {box.X, box.GetBottom()},
+        };
+        graphics.DrawPolygon(&pen, points, 3);
+        break;
+    }
+    case 6: {
+        const Gdiplus::PointF points[] = {
+            {box.X + box.Width / 2.0f, box.Y},
+            {box.GetRight(), box.Y + box.Height / 2.0f},
+            {box.X + box.Width / 2.0f, box.GetBottom()},
+            {box.X, box.Y + box.Height / 2.0f},
+        };
+        graphics.DrawPolygon(&pen, points, 4);
+        break;
+    }
+    default: {
+        const float cut = box.Height * 0.28f;
+        const Gdiplus::PointF points[] = {
+            {box.X + cut, box.Y},
+            {box.GetRight() - cut, box.Y},
+            {box.GetRight(), box.Y + box.Height / 2.0f},
+            {box.GetRight() - cut, box.GetBottom()},
+            {box.X + cut, box.GetBottom()},
+            {box.X, box.Y + box.Height / 2.0f},
+        };
+        graphics.DrawPolygon(&pen, points, 6);
+        break;
+    }
+    }
+}
+
+inline void DrawCrispSecondaryFill(HDC dc, const RECT& rect, int mode) {
+    Gdiplus::Graphics graphics(dc);
+    PrepareSecondaryIconGraphics(graphics);
+
+    const Gdiplus::Color color = SecondaryIconColor(dc);
+    const Gdiplus::RectF box(
+        static_cast<float>(rect.left + 10),
+        static_cast<float>(rect.top + 8),
+        static_cast<float>(rect.right - rect.left - 20),
+        static_cast<float>(rect.bottom - rect.top - 16));
+    Gdiplus::Pen pen(color, 1.45f);
+    pen.SetLineJoin(Gdiplus::LineJoinRound);
+    if (mode == 1) {
+        Gdiplus::SolidBrush fill(ToColor(
+            GetTextColor(dc) == CLR_INVALID ? snaplite::ui::kText : GetTextColor(dc), 115));
+        graphics.FillRectangle(&fill, box);
+    } else if (mode == 2) {
+        Gdiplus::SolidBrush fill(ToColor(
+            GetTextColor(dc) == CLR_INVALID ? snaplite::ui::kText : GetTextColor(dc), 115));
+        graphics.FillRectangle(&fill, Gdiplus::RectF(
+            box.X, box.Y + box.Height / 2.0f, box.Width, box.Height / 2.0f));
+    }
+    graphics.DrawRectangle(&pen, box);
+}
+
+inline void DrawCrispSecondaryStroke(HDC dc, const RECT& rect, float width) {
+    Gdiplus::Graphics graphics(dc);
+    PrepareSecondaryIconGraphics(graphics);
+    Gdiplus::Pen pen(SecondaryIconColor(dc), width);
+    pen.SetStartCap(Gdiplus::LineCapRound);
+    pen.SetEndCap(Gdiplus::LineCapRound);
+    graphics.DrawLine(
+        &pen,
+        Gdiplus::PointF(static_cast<float>(rect.left + 6),
+                        static_cast<float>(rect.top + rect.bottom) / 2.0f),
+        Gdiplus::PointF(static_cast<float>(rect.right - 6),
+                        static_cast<float>(rect.top + rect.bottom) / 2.0f));
+}
+
+inline void DrawCrispSecondaryMore(HDC dc, const RECT& rect) {
+    Gdiplus::Graphics graphics(dc);
+    PrepareSecondaryIconGraphics(graphics);
+    Gdiplus::SolidBrush brush(SecondaryIconColor(dc));
+    const float centerY = static_cast<float>(rect.top + rect.bottom) / 2.0f;
+    for (int i = -1; i <= 1; ++i) {
+        const float centerX = static_cast<float>(rect.left + rect.right) / 2.0f + i * 5.0f;
+        graphics.FillEllipse(&brush, centerX - 1.5f, centerY - 1.5f, 3.0f, 3.0f);
+    }
+}
+
+inline bool DrawCrispSecondaryIcon(HDC dc, LPCWSTR text, int count, const RECT& rect) {
+    if (!dc || !text) return false;
+
+    if (Exact(text, count, L"矩形")) { DrawCrispSecondaryShape(dc, rect, 0); return true; }
+    if (Exact(text, count, L"圆角")) { DrawCrispSecondaryShape(dc, rect, 1); return true; }
+    if (Exact(text, count, L"圆形")) { DrawCrispSecondaryShape(dc, rect, 2); return true; }
+    if (Exact(text, count, L"椭圆")) { DrawCrispSecondaryShape(dc, rect, 3); return true; }
+    if (Exact(text, count, L"直线")) { DrawCrispSecondaryShape(dc, rect, 4); return true; }
+    if (Exact(text, count, L"三角")) { DrawCrispSecondaryShape(dc, rect, 5); return true; }
+    if (Exact(text, count, L"菱形")) { DrawCrispSecondaryShape(dc, rect, 6); return true; }
+    if (Exact(text, count, L"六边")) { DrawCrispSecondaryShape(dc, rect, 7); return true; }
+    if (Exact(text, count, L"描边")) { DrawCrispSecondaryFill(dc, rect, 0); return true; }
+    if (Exact(text, count, L"填充")) { DrawCrispSecondaryFill(dc, rect, 1); return true; }
+    if (Exact(text, count, L"两者")) { DrawCrispSecondaryFill(dc, rect, 2); return true; }
+    if (Exact(text, count, L"直箭头")) { DrawCrispSecondaryArrow(dc, rect, 0); return true; }
+    if (Exact(text, count, L"细箭头")) { DrawCrispSecondaryArrow(dc, rect, 1); return true; }
+    if (Exact(text, count, L"粗箭头")) { DrawCrispSecondaryArrow(dc, rect, 2); return true; }
+    if (Exact(text, count, L"双向")) { DrawCrispSecondaryArrow(dc, rect, 3); return true; }
+    if (Exact(text, count, L"弯曲")) { DrawCrispSecondaryArrow(dc, rect, 4); return true; }
+    if (Exact(text, count, L"折线")) { DrawCrispSecondaryArrow(dc, rect, 5); return true; }
+    if (Exact(text, count, L"阶梯")) { DrawCrispSecondaryArrow(dc, rect, 6); return true; }
+    if (Exact(text, count, L"1") || Exact(text, count, L"细")) {
+        DrawCrispSecondaryStroke(dc, rect, 1.25f);
+        return true;
+    }
+    if (Exact(text, count, L"2")) {
+        DrawCrispSecondaryStroke(dc, rect, 2.0f);
+        return true;
+    }
+    if (Exact(text, count, L"普通")) {
+        DrawCrispSecondaryStroke(dc, rect, 3.0f);
+        return true;
+    }
+    if (Exact(text, count, L"4")) {
+        DrawCrispSecondaryStroke(dc, rect, 3.8f);
+        return true;
+    }
+    if (Exact(text, count, L"粗")) {
+        DrawCrispSecondaryStroke(dc, rect, 5.0f);
+        return true;
+    }
+    if (Exact(text, count, L"6")) {
+        DrawCrispSecondaryStroke(dc, rect, 5.0f);
+        return true;
+    }
+    if (Exact(text, count, L"很粗")) {
+        DrawCrispSecondaryStroke(dc, rect, 6.5f);
+        return true;
+    }
+    if (Exact(text, count, L"更多")) {
+        DrawCrispSecondaryMore(dc, rect);
+        return true;
+    }
+    return false;
+}
+
 inline void DrawPrimaryState(
     Gdiplus::Graphics& graphics,
     const RECT& rect,
@@ -500,6 +788,10 @@ inline int DrawTextOrIcon(HDC dc, LPCWSTR text, int count, LPRECT rect, UINT for
 
     const int functionIcon = anime_skin::FunctionIconIndex(text, count);
     if (functionIcon >= 0 && anime_skin::DrawFunctionSprite(dc, *rect, functionIcon))
+        return 1;
+
+    if ((format & DT_CENTER) && (format & DT_VCENTER) &&
+        anime_skin::DrawCrispSecondaryIcon(dc, text, count, *rect))
         return 1;
 
     const anime_skin::Girl girl = anime_skin::GirlForLabel(text, count);
