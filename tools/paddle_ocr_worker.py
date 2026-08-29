@@ -168,6 +168,8 @@ def main() -> int:
         # 优先使用国内官方 BOS 模型源，避免发布环境无法访问 Hugging Face。
         # 保留环境变量覆盖能力，便于用户按网络环境切换模型源。
         os.environ.setdefault("PADDLE_PDX_MODEL_SOURCE", "BOS")
+        # Windows CPU 上关闭 oneDNN，避免部分 PaddlePaddle 版本初始化 PIR 时崩溃。
+        os.environ.setdefault("PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT", "0")
 
         from paddleocr import PaddleOCR
 
@@ -178,6 +180,7 @@ def main() -> int:
             use_textline_orientation=False,
             engine="paddle",
             device="cpu",
+            enable_mkldnn=False,
         )
         text = _format_result(_first_result(ocr.predict(input=str(args.input))))
         args.output.write_text(text, encoding="utf-8", newline="\n")
