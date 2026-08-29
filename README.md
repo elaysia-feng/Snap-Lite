@@ -8,21 +8,21 @@
 
 优先从 GitHub Releases 获取预编译版本，不需要安装 CMake、Visual Studio 或其他运行时。
 
-当前正式版：`v1.3.22`
+当前正式版：`v1.3.23`
 
 Release Assets：
 
 ```text
 SnapLite.exe                   直接运行
-SnapLite-Setup-1.3.22.exe     安装包（含本地 OCR）
-SnapLite-1.3.22-win-x64.zip   便携压缩包
+SnapLite-Setup-1.3.23.exe     安装包（使用 Windows 系统 OCR）
+SnapLite-1.3.23-win-x64.zip   便携压缩包
 SHA256SUMS.txt                 文件校验
 ```
 
 当前 Release 面向 **Windows 11 x64**。
 
-其中 ZIP 和安装包包含本地 PaddleOCR worker 与模型；单独下载的 `SnapLite.exe`
-仍可直接运行，但 OCR 会自动使用 Windows OCR 回退实现。
+ZIP、安装包和单独下载的 `SnapLite.exe` 都使用 Windows 系统 OCR，发布包不再携带
+Python、第三方 OCR worker 或模型文件。
 
 ## 当前已实现
 
@@ -38,7 +38,7 @@ SHA256SUMS.txt                 文件校验
 - `C` 复制当前像素 HEX 颜色
 - 方向键 1px 微调鼠标位置，`Shift + 方向键` 10px
 - `Esc` / 右键取消
-- 蓝白二次元科技风截图 UI，与 Snap-Lite 少女图标统一配色
+- 暖白粉彩二次元截图 UI，轻音少女人物与功能融合图标统一配色
 
 ### 标注
 
@@ -60,10 +60,12 @@ SHA256SUMS.txt                 文件校验
 - 复制
 - 取消
 
+- 工具栏主按钮使用轻音少女五人（唯、澪、紬、律、梓）与功能动作融合的内置图标
+
 OCR：
 
-- 发布包优先使用随包提供的 PaddleOCR CPU worker，中文截图的文字检测和识别更完整
-- PaddleOCR worker 不存在或启动失败时，自动回退 Windows 本地 OCR，不影响便携运行
+- 使用 Windows 自带 OCR，不增加 Python、模型或第三方运行时
+- 优先使用系统中文 OCR 语言包，未安装时提示安装中文或英文 OCR 语言包
 - 支持彩色、灰度增强、二值化三种 Windows OCR 图像预处理候选
 - 识别结果在独立面板中保留换行，可复制选中内容或全部内容
 
@@ -171,8 +173,8 @@ Ctrl + V
 - [ ] 更完整的设置页：自动保存、文件名规则等
 - [ ] 更完善的 UI 元素识别（包含非 Win32 控件）
 
-云同步、账号系统等重功能默认不进入核心版本；PaddleOCR 作为按需启动的本地识别 worker，
-不会常驻占用主程序内存。
+云同步、账号系统等重功能默认不进入核心版本；OCR 直接使用 Windows 系统能力，
+不随安装包携带额外模型和运行时。
 
 ## 技术实现
 
@@ -183,7 +185,8 @@ GDI / GDI+
 Windows Shell API
 Windows Registry API
 Common Controls / Common Dialogs
-可选 PaddleOCR CPU worker（发布包）
+内置轻音少女功能融合图标资源
+Windows.Media.Ocr 系统 OCR
 ```
 
 核心链路：
@@ -230,11 +233,10 @@ Snap-Lite/
 ├── resources/
 │   ├── SnapLite.ico
 │   ├── SnapLite.rc.in
+│   ├── toolbar_function_mascots.png
 │   └── resource.h
 ├── CMakeLists.txt
 ├── README.md
-├── tools/
-│   └── paddle_ocr_worker.py
 └── src/
     ├── main.cpp
     ├── app.h / app.cpp

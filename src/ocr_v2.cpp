@@ -19,9 +19,7 @@
 #include <cstring>
 #include <cwctype>
 #include <filesystem>
-#include <fstream>
 #include <future>
-#include <iterator>
 #include <limits>
 #include <string>
 #include <system_error>
@@ -325,118 +323,6 @@ bool SaveBitmapAsPng(HBITMAP bitmap, const std::filesystem::path& path) {
     return image.Save(path.c_str(), &pngEncoder, nullptr) == Gdiplus::Ok;
 }
 
-std::filesystem::path MakeTempOcrResultPath() {
-    wchar_t tempDirectory[MAX_PATH + 1]{};
-    const DWORD length = GetTempPathW(MAX_PATH, tempDirectory);
-    if (length == 0 || length > MAX_PATH) return {};
-
-    std::wstring name = L"SnapLite-OCR2-";
-    name += std::to_wstring(GetCurrentProcessId());
-    name += L"-";
-    name += std::to_wstring(GetTickCount64());
-    name += L"-result.txt";
-    return std::filesystem::path(tempDirectory) / name;
-}
-
-std::filesystem::path PaddleWorkerPath() {
-    wchar_t modulePath[32768]{};
-    const DWORD length = GetModuleFileNameW(nullptr, modulePath, 32768);
-    if (length == 0 || length >= 32768) return {};
-    return std::filesystem::path(modulePath).parent_path() / L"paddle_ocr_worker.exe";
-}
-
-std::wstring QuoteWindowsArgument(const std::wstring& value) {
-    std::wstring quoted = L"\"";
-    for (const wchar_t character : value) {
-        if (character == L'\"') quoted += L"\\\"";
-        else quoted += character;
-    }
-    quoted += L"\"";
-    return quoted;
-}
-
-std::wstring Utf8ToWide(const std::string& value) {
-    if (value.empty()) return {};
-    int length = MultiByteToWideChar(
-        CP_UTF8, MB_ERR_INVALID_CHARS, value.data(), static_cast<int>(value.size()),
-        nullptr, 0);
-    if (length <= 0) {
-        length = MultiByteToWideChar(
-            CP_UTF8, 0, value.data(), static_cast<int>(value.size()), nullptr, 0);
-    }
-    if (length <= 0) return {};
-
-    std::wstring converted(static_cast<size_t>(length), L'\0');
-    MultiByteToWideChar(
-        CP_UTF8, 0, value.data(), static_cast<int>(value.size()),
-        converted.data(), length);
-    if (!converted.empty() && converted.front() == 0xFEFF) converted.erase(0, 1);
-    return converted;
-}
-
-void TrimLineEnd(std::wstring& text);
-
-OcrResult TryPaddleOcr(const std::filesystem::path& input) {
-    OcrResult output;
-    const auto worker = PaddleWorkerPath();
-    if (worker.empty() || GetFileAttributesW(worker.c_str()) == INVALID_FILE_ATTRIBUTES) {
-        return output;
-    }
-
-    const auto resultPath = MakeTempOcrResultPath();
-    if (resultPath.empty()) return output;
-
-    std::wstring command = QuoteWindowsArgument(worker.wstring());
-    command += L" --input ";
-    command += QuoteWindowsArgument(input.wstring());
-    command += L" --output ";
-    command += QuoteWindowsArgument(resultPath.wstring());
-    command += L" --lang ch --cache-dir ";
-    command += QuoteWindowsArgument((worker.parent_path() / L"paddle_models").wstring());
-    std::vector<wchar_t> mutableCommand(command.begin(), command.end());
-    mutableCommand.push_back(L'\0');
-
-    STARTUPINFOW startup{};
-    startup.cb = sizeof(startup);
-    startup.dwFlags = STARTF_USESHOWWINDOW;
-    startup.wShowWindow = SW_HIDE;
-    PROCESS_INFORMATION process{};
-    const BOOL launched = CreateProcessW(
-        worker.c_str(), mutableCommand.data(), nullptr, nullptr, FALSE,
-        CREATE_NO_WINDOW, nullptr, worker.parent_path().c_str(), &startup, &process);
-    if (!launched) return output;
-
-    constexpr DWORD kWorkerTimeoutMs = 90000;
-    const DWORD waitResult = WaitForSingleObject(process.hProcess, kWorkerTimeoutMs);
-    if (waitResult == WAIT_TIMEOUT) {
-        TerminateProcess(process.hProcess, 1);
-    }
-
-    DWORD exitCode = 1;
-    GetExitCodeProcess(process.hProcess, &exitCode);
-    CloseHandle(process.hThread);
-    CloseHandle(process.hProcess);
-
-    if (waitResult != WAIT_OBJECT_0 || exitCode != 0) {
-        std::error_code ignored;
-        std::filesystem::remove(resultPath, ignored);
-        return output;
-    }
-
-    std::ifstream file(resultPath, std::ios::binary);
-    if (file) {
-        const std::string bytes{
-            std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
-        output.text = Utf8ToWide(bytes);
-        TrimLineEnd(output.text);
-        output.success = !output.text.empty();
-    }
-
-    std::error_code ignored;
-    std::filesystem::remove(resultPath, ignored);
-    return output;
-}
-
 bool StartsWithIgnoreCase(const std::wstring& value, const wchar_t* prefix) {
     if (!prefix) return false;
     const std::wstring wanted(prefix);
@@ -631,17 +517,21 @@ OcrResult RecognizePreparedVariants(const std::vector<std::filesystem::path>& pa
             const std::wstring tag(tagValue.c_str(), tagValue.size());
             if (StartsWithIgnoreCase(tag, L"zh-Hans") || StartsWithIgnoreCase(tag, L"zh-CN")) {
                 addEngine(OcrEngine::TryCreateFromLanguage(language));
+                if (!engines.empty()) break;
             }
         }
 
-        addEngine(OcrEngine::TryCreateFromUserProfileLanguages());
+        if (engines.empty()) {
+            addEngine(OcrEngine::TryCreateFromUserProfileLanguages());
+        }
 
-        for (uint32_t i = 0; i < availableCount; ++i) {
+        for (uint32_t i = 0; i < availableCount && engines.empty(); ++i) {
             const Language language = available.GetAt(i);
             const auto tagValue = language.LanguageTag();
             const std::wstring tag(tagValue.c_str(), tagValue.size());
             if (StartsWithIgnoreCase(tag, L"en")) {
                 addEngine(OcrEngine::TryCreateFromLanguage(language));
+                if (!engines.empty()) break;
             }
         }
 
@@ -654,12 +544,25 @@ OcrResult RecognizePreparedVariants(const std::vector<std::filesystem::path>& pa
         double bestScore = -std::numeric_limits<double>::infinity();
 
         for (size_t engineIndex = 0; engineIndex < engines.size(); ++engineIndex) {
-            for (size_t variantIndex = 0; variantIndex < paths.size(); ++variantIndex) {
+            // Color and contrast cover the normal screenshot cases. Binary is kept as a
+            // rescue pass for low-contrast captures so the portable fallback does not
+            // spend three OCR passes on every ordinary selection.
+            const size_t primaryVariantCount = std::min<size_t>(paths.size(), 2);
+            for (size_t variantIndex = 0; variantIndex < primaryVariantCount; ++variantIndex) {
                 const std::wstring text = RecognizePng(paths[variantIndex], engines[engineIndex]);
                 double score = TextQualityScore(text);
                 score -= static_cast<double>(engineIndex) * 0.18;
-                if (variantIndex == 1) score += 0.12;
 
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestText = text;
+                }
+            }
+
+            if (paths.size() > primaryVariantCount && bestScore < 45.0) {
+                const size_t binaryIndex = paths.size() - 1;
+                const std::wstring text = RecognizePng(paths[binaryIndex], engines[engineIndex]);
+                const double score = TextQualityScore(text);
                 if (score > bestScore) {
                     bestScore = score;
                     bestText = text;
@@ -715,17 +618,7 @@ OcrResult ExtractTextFromBitmapRegion(HBITMAP bitmap, const RECT& region) {
         return output;
     }
 
-    // 发布包如果带有 PaddleOCR worker，优先使用它；没有 worker 或启动失败
-    // 时继续走 Windows OCR，保证便携版和未安装模型的环境仍然可用。
-    output = TryPaddleOcr(paths.front());
-    if (output.success) {
-        for (const auto& path : paths) {
-            std::error_code ignored;
-            std::filesystem::remove(path, ignored);
-        }
-        return output;
-    }
-
+    // 直接使用 Windows 自带 OCR，候选图像只在系统 OCR 内部择优。
     output = std::async(std::launch::async, [paths]() {
         return RecognizePreparedVariants(paths);
     }).get();

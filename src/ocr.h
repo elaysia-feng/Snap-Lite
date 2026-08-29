@@ -12,8 +12,8 @@ struct OcrResult {
     std::wstring error;
 };
 
-// Extract text from a selected region of the current capture. A packaged
-// PaddleOCR worker is preferred; Windows built-in OCR remains the fallback.
+// Extract text from a selected region of the current capture with Windows OCR
+// and local image preprocessing.
 // The region uses capture/client coordinates.
 OcrResult ExtractTextFromBitmapRegion(HBITMAP bitmap, const RECT& region);
 

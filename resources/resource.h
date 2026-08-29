@@ -1,3 +1,4 @@
 #pragma once
 
 #define IDI_SNAPLITE 101
+#define IDR_TOOLBAR_FUNCTION_MASCOTS 102

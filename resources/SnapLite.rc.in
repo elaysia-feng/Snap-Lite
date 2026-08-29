@@ -1,3 +1,4 @@
 #include "@CMAKE_CURRENT_SOURCE_DIR@/resources/resource.h"
 
 IDI_SNAPLITE ICON "@SNAPLITE_ICON@"
+IDR_TOOLBAR_FUNCTION_MASCOTS RCDATA "@CMAKE_CURRENT_SOURCE_DIR@/resources/toolbar_function_mascots.png"

@@ -1,8 +1,6 @@
 #pragma once
 
-// Primary-toolbar anime skin. Tool glyphs stay deterministic GDI primitives;
-// the five mascot portraits come from the approved compact toolbar concept and
-// are embedded as tiny indexed sprites so the release remains a single EXE.
+// 主工具栏皮肤：每个操作使用人物与功能融合的插画，让角色和工具成为统一视觉。
 #define DrawTextOrIcon DrawBaseTextOrIcon
 #include "toolbar_icon_render_gdi.h"
 #undef DrawTextOrIcon
@@ -10,12 +8,16 @@
 #include "toolbar_chibi_assets.h"
 #include "toolbar_chibi_azusa_v2.h"
 #include "ui_theme.h"
+#include "resource.h"
 
 #include <gdiplus.h>
+#include <objidl.h>
 
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <cstring>
+#include <memory>
 
 namespace snaplite::toolbaricons_gdi {
 namespace anime_skin {
@@ -41,6 +43,24 @@ inline bool PrimaryLabel(LPCWSTR text, int count) {
            Exact(text, count, L"重做") || Exact(text, count, L"复制") ||
            Exact(text, count, L"保存") || Exact(text, count, L"另存为") ||
            Exact(text, count, L"取消");
+}
+
+inline int FunctionIconIndex(LPCWSTR text, int count) {
+    if (Exact(text, count, L"选择"))   return 0;
+    if (Exact(text, count, L"形状"))   return 1;
+    if (Exact(text, count, L"箭头"))   return 2;
+    if (Exact(text, count, L"画笔"))   return 3;
+    if (Exact(text, count, L"马赛克")) return 4;
+    if (Exact(text, count, L"文字"))   return 5;
+    if (Exact(text, count, L"图钉"))   return 6;
+    if (Exact(text, count, L"撤销"))   return 7;
+    if (Exact(text, count, L"重做"))   return 8;
+    if (Exact(text, count, L"复制"))   return 9;
+    if (Exact(text, count, L"取字"))   return 10;
+    if (Exact(text, count, L"保存"))   return 11;
+    if (Exact(text, count, L"另存为")) return 12;
+    if (Exact(text, count, L"取消"))   return 13;
+    return -1;
 }
 
 inline Girl GirlForLabel(LPCWSTR text, int count) {
@@ -160,39 +180,25 @@ inline void FillSoftRoundRect(
 }
 
 inline void DrawTile(HDC dc, const RECT& rect, Girl girl) {
-    // 人物是按钮的主视觉：默认不画按钮边框，只用低对比度圆形底座和
-    // 角色专属色细环托住头像，避免工具栏重新变成一排拥挤的小方块。
+    // 人物是按钮的主视觉；用柔和的头像卡托住素材，不再叠加拥挤的圆形线框。
     if (!dc) return;
     const int width = std::max(1L, rect.right - rect.left);
     const int height = std::max(1L, rect.bottom - rect.top);
-    const int portraitSide = std::clamp(std::min(width - 16, height - 8), 24, 30);
-    const int portraitLeft = rect.left + 3;
+    const int portraitSide = std::clamp(std::min(width - 24, height - 12), 22, 27);
+    const int portraitLeft = rect.left + 2;
     const int portraitTop = rect.top + (height - portraitSide) / 2;
 
     Gdiplus::Graphics graphics(dc);
     graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
     const COLORREF accent = Accent(girl);
-    Gdiplus::SolidBrush shadow(Gdiplus::Color(22, 62, 48, 55));
-    graphics.FillEllipse(
-        &shadow,
-        static_cast<float>(portraitLeft + 1),
-        static_cast<float>(portraitTop + 2),
-        static_cast<float>(portraitSide),
-        static_cast<float>(portraitSide));
-    Gdiplus::SolidBrush stage(ToColor(accent, 20));
-    graphics.FillEllipse(
-        &stage,
-        static_cast<float>(portraitLeft),
-        static_cast<float>(portraitTop),
-        static_cast<float>(portraitSide),
-        static_cast<float>(portraitSide));
-    Gdiplus::Pen ring(ToColor(accent, 128), 1.25f);
-    graphics.DrawEllipse(
-        &ring,
-        static_cast<float>(portraitLeft) + 0.5f,
-        static_cast<float>(portraitTop) + 0.5f,
-        static_cast<float>(portraitSide - 1),
-        static_cast<float>(portraitSide - 1));
+    const Gdiplus::RectF plate(
+        static_cast<float>(portraitLeft), static_cast<float>(portraitTop),
+        static_cast<float>(portraitSide), static_cast<float>(portraitSide));
+    FillSoftRoundRect(graphics, plate, 8.0f, ToColor(accent, 18));
+    Gdiplus::Pen ring(ToColor(accent, 72), 1.0f);
+    Gdiplus::GraphicsPath path;
+    AddRoundRectPath(path, plate, 8.0f);
+    graphics.DrawPath(&ring, &path);
 }
 
 inline void DrawChibi(HDC dc, const RECT& r, Girl girl) {
@@ -221,6 +227,172 @@ inline void DrawChibi(HDC dc, const RECT& r, Girl girl) {
     graphics.DrawImage(&sprite, Gdiplus::Rect(x, y, side, side));
 }
 
+struct FunctionSheetState {
+    bool attempted = false;
+    IStream* stream = nullptr;
+    std::unique_ptr<Gdiplus::Bitmap> bitmap;
+
+    ~FunctionSheetState() {
+        bitmap.reset();
+        if (stream) stream->Release();
+    }
+};
+
+inline FunctionSheetState& FunctionSheet() {
+    // App 会在退出前关闭 GDI+，缓存保持到进程结束，避免 Bitmap 在关闭后析构。
+    static FunctionSheetState* state = new FunctionSheetState();
+    if (state->attempted) return *state;
+    state->attempted = true;
+
+    const HRSRC resource = FindResourceW(
+        nullptr,
+        MAKEINTRESOURCEW(IDR_TOOLBAR_FUNCTION_MASCOTS),
+        MAKEINTRESOURCEW(10));
+    if (!resource) return *state;
+
+    const HGLOBAL loaded = LoadResource(nullptr, resource);
+    const DWORD size = SizeofResource(nullptr, resource);
+    const void* source = loaded ? LockResource(loaded) : nullptr;
+    if (!source || size == 0) return *state;
+
+    const HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, size);
+    if (!memory) return *state;
+    void* destination = GlobalLock(memory);
+    if (!destination) {
+        GlobalFree(memory);
+        return *state;
+    }
+    std::memcpy(destination, source, size);
+    GlobalUnlock(memory);
+
+    IStream* stream = nullptr;
+    if (FAILED(CreateStreamOnHGlobal(memory, TRUE, &stream))) {
+        GlobalFree(memory);
+        return *state;
+    }
+
+    auto bitmap = std::make_unique<Gdiplus::Bitmap>(stream, FALSE);
+    if (!bitmap || bitmap->GetLastStatus() != Gdiplus::Ok) {
+        if (bitmap) bitmap.reset();
+        stream->Release();
+        return *state;
+    }
+
+    state->stream = stream;
+    state->bitmap = std::move(bitmap);
+    return *state;
+}
+
+inline bool DrawFunctionSprite(HDC dc, const RECT& rect, int index) {
+    if (!dc || index < 0 || index >= 16) return false;
+
+    FunctionSheetState& sheet = FunctionSheet();
+    if (!sheet.bitmap) return false;
+
+    const int sheetWidth = static_cast<int>(sheet.bitmap->GetWidth());
+    const int sheetHeight = static_cast<int>(sheet.bitmap->GetHeight());
+    const int cellWidth = sheetWidth / 4;
+    const int cellHeight = sheetHeight / 4;
+    if (cellWidth <= 0 || cellHeight <= 0) return false;
+
+    const int width = std::max(1L, rect.right - rect.left);
+    const int height = std::max(1L, rect.bottom - rect.top);
+    const int side = std::max(1, std::min(width, height) - 2);
+    const int x = rect.left + (width - side) / 2;
+    const int y = rect.top + (height - side) / 2;
+    const int column = index % 4;
+    const int row = index / 4;
+
+    Gdiplus::Graphics graphics(dc);
+    graphics.SetCompositingMode(Gdiplus::CompositingModeSourceOver);
+    graphics.SetCompositingQuality(Gdiplus::CompositingQualityHighQuality);
+    graphics.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
+    graphics.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHighQuality);
+    graphics.DrawImage(
+        sheet.bitmap.get(),
+        Gdiplus::Rect(x, y, side, side),
+        column * cellWidth,
+        row * cellHeight,
+        cellWidth,
+        cellHeight,
+        Gdiplus::UnitPixel);
+    return true;
+}
+
+inline LPCWSTR FluentGlyphForLabel(LPCWSTR text, int count) {
+    if (Exact(text, count, L"选择"))   return L"\uE7C9"; // 触控指针
+    if (Exact(text, count, L"形状"))   return L"\uE7C3"; // 页面
+    if (Exact(text, count, L"箭头"))   return L"\uE72A"; // 前进
+    if (Exact(text, count, L"画笔"))   return L"\uE76D"; // 墨迹工具
+    if (Exact(text, count, L"马赛克")) return L"\uE794"; // 效果
+    if (Exact(text, count, L"文字"))   return L"\uE8D2"; // 字体
+    if (Exact(text, count, L"图钉"))   return L"\uE718"; // 固定
+    if (Exact(text, count, L"撤销"))   return L"\uE7A7"; // 撤销
+    if (Exact(text, count, L"重做"))   return L"\uE7A6"; // 重做
+    if (Exact(text, count, L"复制"))   return L"\uE8C8"; // 复制
+    if (Exact(text, count, L"取字"))   return L"\uE8C1"; // 字符
+    if (Exact(text, count, L"保存"))   return L"\uE74E"; // 保存
+    if (Exact(text, count, L"另存为")) return L"\uE792"; // 另存为
+    if (Exact(text, count, L"取消"))   return L"\uE711"; // 取消
+    return nullptr;
+}
+
+inline HFONT FluentIconFont(HDC dc) {
+    static HFONT font = nullptr;
+    static int fontDpi = 0;
+    const int dpi = dc ? std::max(96, GetDeviceCaps(dc, LOGPIXELSY)) : 96;
+    if (!font || fontDpi != dpi) {
+        if (font) DeleteObject(font);
+        font = CreateFontW(
+            -MulDiv(16, dpi, 96), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+            DEFAULT_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe Fluent Icons");
+        fontDpi = dpi;
+    }
+    return font;
+}
+
+inline void DrawFluentGlyph(
+    HDC dc, const RECT& rect, LPCWSTR text, int count, COLORREF color) {
+    if (!dc || !text) return;
+    const HFONT font = FluentIconFont(dc);
+    if (!font) return;
+
+    RECT glyphRect = rect;
+    InflateRect(&glyphRect, -1, -1);
+    const HGDIOBJ oldFont = SelectObject(dc, font);
+    const COLORREF oldColor = GetTextColor(dc);
+    const int oldMode = SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, color);
+    DrawTextW(
+        dc, text, count, &glyphRect,
+        DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    SetBkMode(dc, oldMode);
+    SetTextColor(dc, oldColor);
+    if (oldFont) SelectObject(dc, oldFont);
+}
+
+inline void DrawIconBadge(
+    HDC dc, const RECT& rect, LPCWSTR text, int count, Girl girl) {
+    if (!dc || !text) return;
+    const LPCWSTR glyph = FluentGlyphForLabel(text, count);
+    if (!glyph) return;
+
+    Gdiplus::Graphics graphics(dc);
+    graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    const COLORREF accent = Accent(girl);
+    const Gdiplus::RectF badge(
+        static_cast<float>(rect.left), static_cast<float>(rect.top),
+        static_cast<float>(rect.right - rect.left),
+        static_cast<float>(rect.bottom - rect.top));
+    FillSoftRoundRect(graphics, badge, 7.0f, ToColor(accent, 24));
+    Gdiplus::GraphicsPath path;
+    AddRoundRectPath(path, badge, 7.0f);
+    Gdiplus::Pen border(ToColor(accent, 118), 1.0f);
+    graphics.DrawPath(&border, &path);
+    DrawFluentGlyph(dc, rect, glyph, -1, accent);
+}
+
 inline void DrawPrimaryState(
     Gdiplus::Graphics& graphics,
     const RECT& rect,
@@ -243,14 +415,12 @@ inline void DrawPrimaryState(
         16.0f,
         active ? ToColor(accent, 30) : ToColor(accent, 13));
 
-    Gdiplus::Pen focus(ToColor(accent, active ? 225 : 110), active ? 2.2f : 1.2f);
-    const float y = static_cast<float>(rect.bottom - 2);
-    graphics.DrawLine(
-        &focus,
-        static_cast<float>(rect.left + (active ? 10 : 14)),
-        y,
-        static_cast<float>(rect.right - (active ? 10 : 14)),
-        y);
+    if (active) {
+        Gdiplus::GraphicsPath path;
+        AddRoundRectPath(path, pill, 16.0f);
+        Gdiplus::Pen focus(ToColor(accent, 98), 1.2f);
+        graphics.DrawPath(&focus, &path);
+    }
 }
 
 inline void DrawAnimeDividers(
@@ -328,67 +498,32 @@ inline int DrawTextOrIcon(HDC dc, LPCWSTR text, int count, LPRECT rect, UINT for
     if (!anime_skin::PrimaryLabel(text, count))
         return DrawBaseTextOrIcon(dc, text, count, rect, format);
 
+    const int functionIcon = anime_skin::FunctionIconIndex(text, count);
+    if (functionIcon >= 0 && anime_skin::DrawFunctionSprite(dc, *rect, functionIcon))
+        return 1;
+
     const anime_skin::Girl girl = anime_skin::GirlForLabel(text, count);
     anime_skin::DrawTile(dc, *rect, girl);
 
     const int width = rect->right - rect->left;
     const int height = rect->bottom - rect->top;
     const int centerY = (rect->top + rect->bottom) / 2;
-    const int mascotSide = std::clamp(std::min(width - 16, height - 8), 24, 30);
+    const int mascotSide = std::clamp(std::min(width - 24, height - 12), 22, 27);
     RECT mascot{
-        rect->left + 3,
+        rect->left + 2,
         centerY - mascotSide / 2,
-        rect->left + 3 + mascotSide,
+        rect->left + 2 + mascotSide,
         centerY + mascotSide / 2};
-    const int badgeSide = std::clamp(height / 2, 18, 20);
+    const int badgeSide = std::clamp(height / 2 - 2, 18, 20);
     RECT badge{
         rect->right - badgeSide - 3,
         centerY - badgeSide / 2,
         rect->right - 3,
         centerY + badgeSide / 2};
-    RECT symbol{
-        badge.left + 3,
-        badge.top + 3,
-        badge.right - 3,
-        badge.bottom - 3};
 
     anime_skin::DrawChibi(dc, mascot, girl);
-
-    Gdiplus::Graphics graphics(dc);
-    graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
-    Gdiplus::SolidBrush badgeShadow(Gdiplus::Color(26, 58, 48, 54));
-    graphics.FillEllipse(
-        &badgeShadow,
-        static_cast<float>(badge.left),
-        static_cast<float>(badge.top + 1),
-        static_cast<float>(badge.right - badge.left),
-        static_cast<float>(badge.bottom - badge.top));
-    Gdiplus::SolidBrush badgeFill(Gdiplus::Color(250, 255, 253, 252));
-    graphics.FillEllipse(
-        &badgeFill,
-        static_cast<float>(badge.left),
-        static_cast<float>(badge.top),
-        static_cast<float>(badge.right - badge.left),
-        static_cast<float>(badge.bottom - badge.top));
-    const COLORREF badgeBorder = Exact(text, count, L"取消")
-        ? snaplite::ui::kDanger
-        : anime_skin::Accent(girl);
-    Gdiplus::Pen badgeRing(anime_skin::ToColor(badgeBorder, 150), 1.0f);
-    graphics.DrawEllipse(
-        &badgeRing,
-        static_cast<float>(badge.left) + 0.5f,
-        static_cast<float>(badge.top) + 0.5f,
-        static_cast<float>(badge.right - badge.left - 1),
-        static_cast<float>(badge.bottom - badge.top - 1));
-
-    const COLORREF oldColor = GetTextColor(dc);
-    SetTextColor(
-        dc,
-        Exact(text, count, L"取消") ? snaplite::ui::kDanger : snaplite::ui::kText);
-    const int result = DrawBaseTextOrIcon(
-        dc, text, count, &symbol, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-    SetTextColor(dc, oldColor);
-    return result;
+    anime_skin::DrawIconBadge(dc, badge, text, count, girl);
+    return 1;
 }
 
 } // namespace snaplite::toolbaricons_gdi
