@@ -425,8 +425,8 @@ OcrResult TryPaddleOcr(const std::filesystem::path& input) {
 
     std::ifstream file(resultPath, std::ios::binary);
     if (file) {
-        const std::string bytes(
-            std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+        const std::string bytes{
+            std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
         output.text = Utf8ToWide(bytes);
         TrimLineEnd(output.text);
         output.success = !output.text.empty();
