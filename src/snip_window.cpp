@@ -71,7 +71,8 @@ Gdiplus::Color AnnotationInk(COLORREF color, BYTE alpha = 255) {
 }
 
 void PrepareAnnotationGraphics(Gdiplus::Graphics& graphics) {
-    graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias8x8);
+    // 使用所有 Windows SDK 都支持的高质量抗锯齿模式，避免旧版 GDI+ 头文件缺少 8x8 枚举。
+    graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
     graphics.SetCompositingMode(Gdiplus::CompositingModeSourceOver);
     graphics.SetCompositingQuality(Gdiplus::CompositingQualityHighQuality);
     graphics.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
