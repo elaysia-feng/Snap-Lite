@@ -76,7 +76,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           python -m pip install --upgrade pip
           python -m pip install paddlepaddle==3.2.0 -i https://www.paddlepaddle.org.cn/packages/stable/cpu/
-          python -m pip install paddleocr==3.3.2 pyinstaller
+          python -m pip install paddleocr==3.3.2 pyinstaller appdirs
 
       - name: Prepare PaddleOCR package directories
         shell: pwsh
@@ -126,6 +126,15 @@ jobs:
             --collect-all paddlex `
             --collect-all paddle `
             --collect-all pyclipper `
+            --hidden-import appdirs `
+            --copy-metadata paddleocr `
+            --copy-metadata paddlex `
+            --copy-metadata imagesize `
+            --copy-metadata opencv-contrib-python `
+            --copy-metadata pyclipper `
+            --copy-metadata pypdfium2 `
+            --copy-metadata python-bidi `
+            --copy-metadata shapely `
             tools/paddle_ocr_worker.py
           if ($LASTEXITCODE -ne 0) { throw 'PaddleOCR worker packaging failed.' }
 
