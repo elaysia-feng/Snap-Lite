@@ -41,6 +41,9 @@ def _result_mapping(result: Any) -> dict[str, Any]:
     if isinstance(candidate, str):
         candidate = json.loads(candidate)
     candidate = _plain(candidate)
+    # PaddleOCR 3.x 的 json 结果有时会把识别字段包在顶层 res 中。
+    if isinstance(candidate, dict) and isinstance(candidate.get("res"), dict):
+        candidate = candidate["res"]
     if not isinstance(candidate, dict):
         raise ValueError("PaddleOCR 返回了无法解析的结果")
     return candidate

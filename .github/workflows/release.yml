@@ -70,7 +70,7 @@ jobs:
       - name: Validate embedded app icon
         run: python scripts/check_pe_icon.py build/Release/SnapLite.exe
 
-      - name: Build local PaddleOCR worker
+      - name: Install PaddleOCR build dependencies
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -78,11 +78,18 @@ jobs:
           python -m pip install paddlepaddle==3.2.0 -i https://www.paddlepaddle.org.cn/packages/stable/cpu/
           python -m pip install paddleocr==3.3.2 pyinstaller
 
+      - name: Prepare PaddleOCR package directories
+        shell: pwsh
+        run: |
           New-Item -ItemType Directory -Force -Path package | Out-Null
           New-Item -ItemType Directory -Force -Path package/paddle_models | Out-Null
           New-Item -ItemType Directory -Force -Path worker-build | Out-Null
           New-Item -ItemType Directory -Force -Path worker-dist | Out-Null
 
+      - name: Create PaddleOCR warmup image
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
           Add-Type -AssemblyName System.Drawing
           $warmupPath = Join-Path $PWD 'package/paddle_ocr_warmup.png'
           $bitmap = New-Object System.Drawing.Bitmap(640, 160)
@@ -95,12 +102,20 @@ jobs:
           $graphics.Dispose()
           $bitmap.Dispose()
 
+      - name: Warm PaddleOCR models
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
           python tools/paddle_ocr_worker.py `
-            --input $warmupPath `
+            --input package/paddle_ocr_warmup.png `
             --output package/paddle_ocr_warmup.txt `
             --cache-dir package/paddle_models
           if ($LASTEXITCODE -ne 0) { throw 'PaddleOCR model warmup failed.' }
 
+      - name: Package PaddleOCR worker
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
           python -m PyInstaller `
             --noconfirm --clean --onefile `
             --name paddle_ocr_worker `
@@ -114,6 +129,10 @@ jobs:
             tools/paddle_ocr_worker.py
           if ($LASTEXITCODE -ne 0) { throw 'PaddleOCR worker packaging failed.' }
 
+      - name: Copy PaddleOCR worker
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
           Copy-Item worker-dist/paddle_ocr_worker.exe package/paddle_ocr_worker.exe
           Remove-Item package/paddle_ocr_warmup.png, package/paddle_ocr_warmup.txt -Force
 
