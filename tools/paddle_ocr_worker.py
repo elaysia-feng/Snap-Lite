@@ -178,7 +178,6 @@ def main() -> int:
             use_doc_orientation_classify=False,
             use_doc_unwarping=False,
             use_textline_orientation=False,
-            engine="paddle",
             device="cpu",
             enable_mkldnn=False,
         )
