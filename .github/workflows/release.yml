@@ -70,6 +70,53 @@ jobs:
       - name: Validate embedded app icon
         run: python scripts/check_pe_icon.py build/Release/SnapLite.exe
 
+      - name: Build local PaddleOCR worker
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python -m pip install --upgrade pip
+          python -m pip install paddlepaddle==3.2.0 -i https://www.paddlepaddle.org.cn/packages/stable/cpu/
+          python -m pip install paddleocr==3.3.2 pyinstaller
+
+          New-Item -ItemType Directory -Force -Path package | Out-Null
+          New-Item -ItemType Directory -Force -Path package/paddle_models | Out-Null
+          New-Item -ItemType Directory -Force -Path worker-build | Out-Null
+          New-Item -ItemType Directory -Force -Path worker-dist | Out-Null
+
+          Add-Type -AssemblyName System.Drawing
+          $warmupPath = Join-Path $PWD 'package/paddle_ocr_warmup.png'
+          $bitmap = New-Object System.Drawing.Bitmap(640, 160)
+          $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+          $graphics.Clear([System.Drawing.Color]::White)
+          $font = New-Object System.Drawing.Font('Microsoft YaHei', 28)
+          $graphics.DrawString('Snap-Lite OCR', $font, [System.Drawing.Brushes]::Black, 16, 54)
+          $bitmap.Save($warmupPath, [System.Drawing.Imaging.ImageFormat]::Png)
+          $font.Dispose()
+          $graphics.Dispose()
+          $bitmap.Dispose()
+
+          python tools/paddle_ocr_worker.py `
+            --input $warmupPath `
+            --output package/paddle_ocr_warmup.txt `
+            --cache-dir package/paddle_models
+          if ($LASTEXITCODE -ne 0) { throw 'PaddleOCR model warmup failed.' }
+
+          python -m PyInstaller `
+            --noconfirm --clean --onefile `
+            --name paddle_ocr_worker `
+            --distpath worker-dist `
+            --workpath worker-build `
+            --specpath worker-build `
+            --collect-all paddleocr `
+            --collect-all paddlex `
+            --collect-all paddle `
+            --collect-all pyclipper `
+            tools/paddle_ocr_worker.py
+          if ($LASTEXITCODE -ne 0) { throw 'PaddleOCR worker packaging failed.' }
+
+          Copy-Item worker-dist/paddle_ocr_worker.exe package/paddle_ocr_worker.exe
+          Remove-Item package/paddle_ocr_warmup.png, package/paddle_ocr_warmup.txt -Force
+
       - name: Prepare portable package
         shell: pwsh
         env:
@@ -81,7 +128,7 @@ jobs:
           Copy-Item build/Release/SnapLite.exe dist/SnapLite.exe
 
           $zip = "dist/SnapLite-$env:VERSION-win-x64.zip"
-          Compress-Archive -Path package/SnapLite.exe -DestinationPath $zip -Force
+          Compress-Archive -Path package/* -DestinationPath $zip -Force
 
       - name: Install Inno Setup
         shell: pwsh

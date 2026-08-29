@@ -38,7 +38,7 @@ VersionInfoDescription=Snap-Lite Windows Installer
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加选项："; Flags: unchecked
 
 [Files]
-Source: "..\package\SnapLite.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\package\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\Snap-Lite"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"

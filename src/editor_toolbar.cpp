@@ -801,8 +801,8 @@ private:
                 FillRoundRect(g,
                     Gdiplus::RectF(static_cast<float>(r.left), static_cast<float>(r.top),
                                    static_cast<float>(r.right-r.left), static_cast<float>(r.bottom-r.top)),
-                    7.0f, active ? Gdiplus::Color(255, 240, 233, 224)
-                                 : Gdiplus::Color(255, 247, 243, 238));
+                    7.0f, active ? Gdiplus::Color(255, 255, 232, 240)
+                                 : Gdiplus::Color(255, 255, 246, 249));
             }
             SetTextColor(mem, active ? RGB(99, 82, 62) : RGB(58, 56, 53));
             toolbaricons_gdi::DrawTextOrIcon(mem, kToolLabels[i], -1, &r, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
@@ -816,8 +816,8 @@ private:
                     Gdiplus::RectF(static_cast<float>(r.left), static_cast<float>(r.top),
                                    static_cast<float>(r.right-r.left), static_cast<float>(r.bottom-r.top)),
                     7.0f, static_cast<PrimaryAction>(i) == PrimaryAction::Cancel
-                              ? Gdiplus::Color(255, 251, 237, 235)
-                              : Gdiplus::Color(255, 247, 243, 238));
+                              ? Gdiplus::Color(255, 255, 237, 239)
+                              : Gdiplus::Color(255, 255, 246, 249));
             }
             SetTextColor(mem, static_cast<PrimaryAction>(i) == PrimaryAction::Cancel
                                   ? RGB(196, 76, 72) : RGB(70, 67, 63));

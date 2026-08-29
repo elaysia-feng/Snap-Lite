@@ -9,6 +9,7 @@
 
 #include "toolbar_chibi_assets.h"
 #include "toolbar_chibi_azusa_v2.h"
+#include "ui_theme.h"
 
 #include <gdiplus.h>
 
@@ -123,24 +124,8 @@ inline const std::array<std::uint32_t, 32 * 32>& SpritePixels(Girl girl) {
     return yui;
 }
 
-inline void DrawTile(HDC dc, const RECT& r, Girl girl) {
-    RECT tile{r.left + 1, r.top + 1, r.right - 1, r.bottom - 1};
-    const COLORREF accent = Accent(girl);
-
-    HBRUSH brush = CreateSolidBrush(RGB(255, 250, 248));
-    HPEN pen = CreatePen(
-        PS_SOLID,
-        1,
-        RGB((GetRValue(accent) + 238) / 2,
-            (GetGValue(accent) + 226) / 2,
-            (GetBValue(accent) + 228) / 2));
-    HGDIOBJ oldBrush = SelectObject(dc, brush);
-    HGDIOBJ oldPen = SelectObject(dc, pen);
-    RoundRect(dc, tile.left, tile.top, tile.right, tile.bottom, 9, 9);
-    SelectObject(dc, oldPen);
-    SelectObject(dc, oldBrush);
-    DeleteObject(pen);
-    DeleteObject(brush);
+inline void DrawTile(HDC, const RECT&, Girl) {
+    // 人物和图标现在放在统一托盘上，不再给每个按钮重复套一层小卡片。
 }
 
 inline void DrawChibi(HDC dc, const RECT& r, Girl girl) {
@@ -171,8 +156,29 @@ inline void DrawChibi(HDC dc, const RECT& r, Girl girl) {
 
 } // namespace anime_skin
 
-inline void DrawAnimeBackdrop(HDC, const RECT&) {
-    // Final approved version deliberately has no decorative empty tail.
+inline void DrawAnimeBackdrop(HDC dc, const RECT& all, int primarySplitX) {
+    if (!dc) return;
+
+    const int right = std::max(12L, all.right - 7);
+    const RECT primary{7, 4, right, 38};
+    snaplite::ui::FillRoundRect(
+        dc, primary, 14, snaplite::ui::kCard, snaplite::ui::kBorder);
+
+    if (all.bottom > 42) {
+        const RECT secondary{7, 46, right, std::max(47L, all.bottom - 5)};
+        snaplite::ui::FillRoundRect(
+            dc, secondary, 12, snaplite::ui::kCream, snaplite::ui::kBorder);
+    }
+
+    if (primarySplitX > primary.left && primarySplitX < primary.right) {
+        HPEN pen = CreatePen(PS_SOLID, 1, snaplite::ui::kBorder);
+        if (!pen) return;
+        const HGDIOBJ oldPen = SelectObject(dc, pen);
+        MoveToEx(dc, primarySplitX, 12, nullptr);
+        LineTo(dc, primarySplitX, 30);
+        SelectObject(dc, oldPen);
+        DeleteObject(pen);
+    }
 }
 
 inline int DrawTextOrIcon(HDC dc, LPCWSTR text, int count, LPRECT rect, UINT format) {
@@ -203,7 +209,7 @@ inline int DrawTextOrIcon(HDC dc, LPCWSTR text, int count, LPRECT rect, UINT for
     const COLORREF oldColor = GetTextColor(dc);
     SetTextColor(
         dc,
-        Exact(text, count, L"取消") ? RGB(201, 75, 83) : RGB(74, 63, 64));
+        Exact(text, count, L"取消") ? snaplite::ui::kDanger : snaplite::ui::kText);
     const int result = DrawBaseTextOrIcon(
         dc, text, count, &symbol, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     SetTextColor(dc, oldColor);

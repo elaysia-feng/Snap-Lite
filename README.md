@@ -8,17 +8,20 @@
 
 优先从 GitHub Releases 获取预编译版本，不需要安装 CMake、Visual Studio 或其他运行时。
 
-当前正式版：`v1.3.20`
+当前正式版：`v1.3.21`
 
 Release Assets：
 
 ```text
 SnapLite.exe                   直接运行
-SnapLite-1.2.0-win-x64.zip    便携压缩包
+SnapLite-1.3.21-win-x64.zip   便携压缩包
 SHA256SUMS.txt                 文件校验
 ```
 
 当前 Release 面向 **Windows 11 x64**。
+
+其中 ZIP 和安装包包含本地 PaddleOCR worker 与模型；单独下载的 `SnapLite.exe`
+仍可直接运行，但 OCR 会自动使用 Windows OCR 回退实现。
 
 ## 当前已实现
 
@@ -58,8 +61,9 @@ SHA256SUMS.txt                 文件校验
 
 OCR：
 
-- 使用 Windows 本地 OCR，优先中文并兼容英文识别语言包
-- 支持彩色、灰度增强、二值化三种图像预处理候选
+- 发布包优先使用随包提供的 PaddleOCR CPU worker，中文截图的文字检测和识别更完整
+- PaddleOCR worker 不存在或启动失败时，自动回退 Windows 本地 OCR，不影响便携运行
+- 支持彩色、灰度增强、二值化三种 Windows OCR 图像预处理候选
 - 识别结果在独立面板中保留换行，可复制选中内容或全部内容
 
 工具按钮支持 hover 说明，鼠标移到按钮上会直接显示该按钮的用途和快捷键。
@@ -166,17 +170,19 @@ Ctrl + V
 - [ ] 更完整的设置页：自动保存、文件名规则等
 - [ ] 更完善的 UI 元素识别（包含非 Win32 控件）
 
-OCR、云同步、账号系统等重功能默认不进入核心版本。
+云同步、账号系统等重功能默认不进入核心版本；PaddleOCR 作为按需启动的本地识别 worker，
+不会常驻占用主程序内存。
 
 ## 技术实现
 
 ```text
-C++17
+C++20
 Win32 API
 GDI / GDI+
 Windows Shell API
 Windows Registry API
 Common Controls / Common Dialogs
+可选 PaddleOCR CPU worker（发布包）
 ```
 
 核心链路：
@@ -226,6 +232,8 @@ Snap-Lite/
 │   └── resource.h
 ├── CMakeLists.txt
 ├── README.md
+├── tools/
+│   └── paddle_ocr_worker.py
 └── src/
     ├── main.cpp
     ├── app.h / app.cpp

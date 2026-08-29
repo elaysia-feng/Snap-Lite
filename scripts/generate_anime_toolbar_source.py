@@ -221,10 +221,10 @@ def main() -> int:
         "        HBRUSH background = CreateSolidBrush(RGB(252, 250, 247));\n"
         "        FillRect(mem, &all, background);\n"
         "        DeleteObject(background);",
-        "        HBRUSH background = CreateSolidBrush(RGB(255, 249, 248));\n"
+        "        HBRUSH background = CreateSolidBrush(snaplite::ui::kSurface);\n"
         "        FillRect(mem, &all, background);\n"
         "        DeleteObject(background);\n"
-        "        toolbaricons_gdi::DrawAnimeBackdrop(mem, all);",
+        "        toolbaricons_gdi::DrawAnimeBackdrop(mem, all, kActionStart - 7);",
         "anime toolbar backdrop",
     )
     text = replace_once(

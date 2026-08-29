@@ -19,24 +19,13 @@ def main() -> int:
     path = Path(sys.argv[1])
     text = path.read_text(encoding="utf-8")
 
-    text = replace_once(
-        text,
-        '#include "toolbar_chibi_azusa_v2.h"\n',
-        '#include "toolbar_chibi_azusa_v2.h"\n#include "ui_theme.h"\n',
-        "toolbar shared theme include",
-    )
-    text = replace_once(
-        text,
-        '    HBRUSH brush = CreateSolidBrush(RGB(255, 250, 248));',
-        '    HBRUSH brush = CreateSolidBrush(snaplite::ui::kCream);',
-        "toolbar cream surface",
-    )
-    text = replace_once(
-        text,
-        '        Exact(text, count, L"取消") ? RGB(201, 75, 83) : RGB(74, 63, 64));',
-        '        Exact(text, count, L"取消") ? snaplite::ui::kDanger : snaplite::ui::kText);',
-        "toolbar text palette",
-    )
+    if '#include "ui_theme.h"' not in text:
+        text = replace_once(
+            text,
+            '#include "toolbar_chibi_azusa_v2.h"\n',
+            '#include "toolbar_chibi_azusa_v2.h"\n#include "ui_theme.h"\n',
+            "toolbar shared theme include",
+        )
 
     path.write_text(text, encoding="utf-8", newline="\n")
     print(f"Applied shared Snap-Lite UI palette: {path}")
