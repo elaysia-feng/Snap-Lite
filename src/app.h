@@ -34,6 +34,8 @@ private:
     NOTIFYICONDATAW tray_{};
     ULONG_PTR gdiplusToken_{};
     HANDLE singleInstance_{};
+    bool pinHotkeyRegistered_{};
+    bool pinFallbackHotkeyRegistered_{};
 };
 
 }  // namespace snaplite

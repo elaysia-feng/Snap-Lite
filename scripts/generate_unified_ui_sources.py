@@ -12,6 +12,12 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
     return text.replace(old, new, 1)
 
 
+def replace_or_keep(text: str, old: str, new: str, label: str) -> str:
+    if new in text:
+        return text
+    return replace_once(text, old, new, label)
+
+
 def patch_pin(source: Path, target: Path) -> None:
     text = source.read_text(encoding="utf-8")
 
@@ -208,6 +214,23 @@ constexpr COLORREF kMutedText = ui::kMutedText;
 constexpr COLORREF kSecondaryBg = ui::kCream;
 constexpr COLORREF kSecondaryPressed = ui::kPressed;'''
     text = replace_once(text, old_colors, new_colors, "OCR shared palette")
+    text = replace_or_keep(
+        text,
+        "    const RECT dotRect{18, 18, 28, 28};\n"
+        "    HBRUSH accentBrush = CreateSolidBrush(kAccent);\n"
+        "    FillRect(dc, &dotRect, accentBrush);\n"
+        "    DeleteObject(accentBrush);",
+        "    const RECT dotRect{18, 18, 28, 28};\n"
+        "    ui::FillRoundRect(dc, dotRect, 4, kAccent, kAccent);",
+        "OCR rounded accent marker",
+    )
+    text = replace_or_keep(
+        text,
+        "    HMONITOR monitor = MonitorFromWindow(owner, MONITOR_DEFAULTTONEAREST);",
+        "    // 截图窗口覆盖整个虚拟桌面，窗口原点不能可靠代表当前选区所在的屏幕。\n"
+        "    HMONITOR monitor = MonitorFromPoint(rightTop, MONITOR_DEFAULTTONEAREST);",
+        "OCR selection monitor",
+    )
 
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(text, encoding="utf-8", newline="\n")

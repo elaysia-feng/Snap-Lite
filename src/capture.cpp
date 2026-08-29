@@ -6,8 +6,10 @@
 #include <shlobj.h>
 
 #include <cstdlib>
+#include <cstdint>
 #include <cstring>
 #include <cwchar>
+#include <limits>
 
 #pragma comment(lib, "gdiplus.lib")
 
@@ -41,14 +43,18 @@ int GetEncoderClsid(const wchar_t* mimeType, CLSID* clsid) {
 }
 
 HGLOBAL CreateDibClipboardData(HBITMAP bitmap) {
+    constexpr SIZE_T kMaxClipboardBitmapBytes = 512ull * 1024ull * 1024ull;
     BITMAP info{};
     if (!bitmap || GetObjectW(bitmap, sizeof(info), &info) == 0) {
         return nullptr;
     }
 
     const int width = info.bmWidth;
+    if (width <= 0 || info.bmHeight == LONG_MIN) {
+        return nullptr;
+    }
     const int height = std::abs(info.bmHeight);
-    if (width <= 0 || height <= 0) {
+    if (height <= 0) {
         return nullptr;
     }
 
@@ -59,9 +65,15 @@ HGLOBAL CreateDibClipboardData(HBITMAP bitmap) {
     bmi.bmiHeader.biPlanes = 1;
     bmi.bmiHeader.biBitCount = 32;
     bmi.bmiHeader.biCompression = BI_RGB;
-    bmi.bmiHeader.biSizeImage = static_cast<DWORD>(width * 4ULL * height);
 
-    const SIZE_T pixelBytes = static_cast<SIZE_T>(width) * 4ULL * height;
+    const std::uint64_t pixelBytes64 = static_cast<std::uint64_t>(width) * 4ull *
+                                       static_cast<std::uint64_t>(height);
+    if (pixelBytes64 > kMaxClipboardBitmapBytes ||
+        pixelBytes64 > std::numeric_limits<SIZE_T>::max() - sizeof(BITMAPINFOHEADER)) {
+        return nullptr;
+    }
+    const SIZE_T pixelBytes = static_cast<SIZE_T>(pixelBytes64);
+    bmi.bmiHeader.biSizeImage = static_cast<DWORD>(pixelBytes64);
     const SIZE_T totalBytes = sizeof(BITMAPINFOHEADER) + pixelBytes;
     HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, totalBytes);
     if (!memory) {
@@ -141,7 +153,7 @@ HGLOBAL CreateFileDropClipboardData(const std::filesystem::path& path) {
     }
 
     std::error_code error;
-    if (!std::filesystem::exists(path, error) || error) {
+    if (!std::filesystem::is_regular_file(path, error) || error) {
         return nullptr;
     }
 

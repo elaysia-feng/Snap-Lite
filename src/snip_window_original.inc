@@ -435,16 +435,17 @@ void SnipWindow::SetCursorForPoint(POINT point) {
 }
 
 void SnipWindow::EnsureFonts() {
+    const UINT dpi = hwnd_ ? GetDpiForWindow(hwnd_) : GetDpiForSystem();
     if (!uiFont_) {
         uiFont_ = CreateFontW(
-            -13, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+            -MulDiv(13, static_cast<int>(dpi), 72), 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
             OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
             DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
     }
     if (!monoFont_) {
         // Tabular figures: the size badge must not reflow while dragging.
         monoFont_ = CreateFontW(
-            -12, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+            -MulDiv(12, static_cast<int>(dpi), 72), 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
             OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
             FIXED_PITCH | FF_MODERN, L"Consolas");
     }

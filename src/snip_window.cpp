@@ -2,6 +2,7 @@
 // The capture/selection engine remains isolated in snip_window_original.inc.
 
 #include "snip_window.h"
+#include "ui_theme.h"
 
 #include <windowsx.h>
 #include <gdiplus.h>
@@ -285,9 +286,13 @@ private:
 
     static ARGB ThemeArgb(BYTE alpha, BYTE red, BYTE green, BYTE blue) {
         if (red == 27 && green == 30 && blue == 35) return Pack(alpha, 38, 38, 42);
-        if (red == 255 && green == 197 && blue == 61) return Pack(alpha, 111, 146, 214);
+        if (red == 255 && green == 197 && blue == 61) {
+            return Pack(alpha, GetRValue(snaplite::ui::kAccent), GetGValue(snaplite::ui::kAccent), GetBValue(snaplite::ui::kAccent));
+        }
         if (red == 236 && green == 239 && blue == 244) return Pack(alpha, 245, 245, 247);
-        if (red == 255 && green == 107 && blue == 91) return Pack(alpha, 218, 92, 92);
+        if (red == 255 && green == 107 && blue == 91) {
+            return Pack(alpha, GetRValue(snaplite::ui::kDanger), GetGValue(snaplite::ui::kDanger), GetBValue(snaplite::ui::kDanger));
+        }
         return Pack(alpha, red, green, blue);
     }
 };

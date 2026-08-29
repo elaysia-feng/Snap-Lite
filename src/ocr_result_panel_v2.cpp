@@ -219,9 +219,7 @@ void PaintPanel(HWND hwnd, PanelState* state) {
     DeleteObject(outline);
 
     const RECT dotRect{18, 18, 28, 28};
-    HBRUSH accentBrush = CreateSolidBrush(kAccent);
-    FillRect(dc, &dotRect, accentBrush);
-    DeleteObject(accentBrush);
+    ui::FillRoundRect(dc, dotRect, 4, kAccent, kAccent);
 
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, kText);
@@ -432,7 +430,8 @@ RECT PanelBounds(HWND owner, const RECT& selectionClientRect) {
     ClientToScreen(owner, &rightTop);
     ClientToScreen(owner, &leftTop);
 
-    HMONITOR monitor = MonitorFromWindow(owner, MONITOR_DEFAULTTONEAREST);
+    // 截图窗口覆盖整个虚拟桌面，窗口原点不能可靠代表当前选区所在的屏幕。
+    HMONITOR monitor = MonitorFromPoint(rightTop, MONITOR_DEFAULTTONEAREST);
     MONITORINFO info{};
     info.cbSize = sizeof(info);
     GetMonitorInfoW(monitor, &info);

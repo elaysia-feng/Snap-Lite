@@ -28,6 +28,19 @@ std::filesystem::path ReadConfiguredDirectory() {
     return std::filesystem::path(buffer);
 }
 
+bool EnsureDirectory(const std::filesystem::path& directory) {
+    if (directory.empty()) {
+        return false;
+    }
+
+    std::error_code error;
+    std::filesystem::create_directories(directory, error);
+    if (error) {
+        return false;
+    }
+    return std::filesystem::is_directory(directory, error) && !error;
+}
+
 }  // namespace
 
 std::filesystem::path ConfiguredScreenshotDirectory() {
@@ -36,9 +49,7 @@ std::filesystem::path ConfiguredScreenshotDirectory() {
         directory = ScreenshotDirectory();
     }
 
-    std::error_code error;
-    std::filesystem::create_directories(directory, error);
-    if (error) {
+    if (!EnsureDirectory(directory)) {
         return ScreenshotDirectory();
     }
     return directory;
@@ -49,9 +60,7 @@ bool SetScreenshotDirectory(const std::filesystem::path& directory) {
         return false;
     }
 
-    std::error_code error;
-    std::filesystem::create_directories(directory, error);
-    if (error) {
+    if (!EnsureDirectory(directory)) {
         return false;
     }
 

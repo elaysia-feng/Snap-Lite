@@ -31,6 +31,7 @@ constexpr UINT WM_PIN_MENU_CLOSED = WM_APP + 105;
 constexpr int kMenuWidth = 244;
 constexpr int kMenuHeight = 196;
 constexpr BYTE kMinOpacity = 26;
+constexpr SIZE_T kMaxClipboardPayloadBytes = 512ull * 1024ull * 1024ull;
 
 DWORD gPendingClipboardSequence = 0;
 // Intentionally monotonic: a dismissed pin stays dismissed for the lifetime
@@ -190,7 +191,9 @@ LRESULT CALLBACK PinMenuWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARA
     switch (message) {
     case WM_CREATE: {
         HRGN region = CreateRoundRectRgn(0, 0, kMenuWidth + 1, kMenuHeight + 1, 18, 18);
-        SetWindowRgn(hwnd, region, TRUE);
+        if (region && SetWindowRgn(hwnd, region, TRUE) == 0) {
+            DeleteObject(region);
+        }
         return 0;
     }
     case WM_PAINT:
@@ -347,12 +350,20 @@ HBITMAP BitmapFromPngClipboard() {
     }
 
     const SIZE_T size = GlobalSize(source);
-    if (size == 0) {
+    if (size < 8 || size > kMaxClipboardPayloadBytes) {
         return nullptr;
     }
 
-    const void* sourceBytes = GlobalLock(source);
+    const auto* sourceBytes = static_cast<const BYTE*>(GlobalLock(source));
     if (!sourceBytes) {
+        return nullptr;
+    }
+
+    static constexpr BYTE kPngSignature[] = {
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+    };
+    if (std::memcmp(sourceBytes, kPngSignature, sizeof(kPngSignature)) != 0) {
+        GlobalUnlock(source);
         return nullptr;
     }
 
@@ -397,6 +408,9 @@ HBITMAP BitmapFromDibClipboard(UINT format) {
     }
 
     const SIZE_T totalBytes = GlobalSize(memory);
+    if (totalBytes == 0 || totalBytes > kMaxClipboardPayloadBytes) {
+        return nullptr;
+    }
     const auto* base = static_cast<const BYTE*>(GlobalLock(memory));
     if (!base || totalBytes < sizeof(BITMAPINFOHEADER)) {
         if (base) GlobalUnlock(memory);
@@ -441,13 +455,26 @@ HBITMAP BitmapFromDibClipboard(UINT format) {
     }
 
     SIZE_T pixelOffset = header->biSize;
+    const auto appendBytes = [&](SIZE_T bytes) {
+        if (bytes > totalBytes - pixelOffset) {
+            return false;
+        }
+        pixelOffset += bytes;
+        return true;
+    };
     if (header->biSize == sizeof(BITMAPINFOHEADER)) {
         if (header->biCompression == BI_BITFIELDS) {
-            pixelOffset += 3 * sizeof(DWORD);
+            if (!appendBytes(3 * sizeof(DWORD))) {
+                GlobalUnlock(memory);
+                return nullptr;
+            }
         }
 #ifdef BI_ALPHABITFIELDS
         else if (header->biCompression == BI_ALPHABITFIELDS) {
-            pixelOffset += 4 * sizeof(DWORD);
+            if (!appendBytes(4 * sizeof(DWORD))) {
+                GlobalUnlock(memory);
+                return nullptr;
+            }
         }
 #endif
     }
@@ -456,7 +483,11 @@ HBITMAP BitmapFromDibClipboard(UINT format) {
         const DWORD colorCount = header->biClrUsed != 0
             ? header->biClrUsed
             : (1u << header->biBitCount);
-        pixelOffset += static_cast<SIZE_T>(colorCount) * sizeof(RGBQUAD);
+        const SIZE_T colorBytes = static_cast<SIZE_T>(colorCount) * sizeof(RGBQUAD);
+        if (!appendBytes(colorBytes)) {
+            GlobalUnlock(memory);
+            return nullptr;
+        }
     }
 
     if (pixelOffset >= totalBytes) {
@@ -894,7 +925,11 @@ LRESULT PinWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
         return 0;
 
     case WM_PIN_MENU_CLOSED:
-        contextMenu_ = nullptr;
+        // 菜单关闭消息是异步投递的，只清理仍指向当前菜单的句柄，避免快速
+        // 重开菜单时误清理新句柄并跳过对应的清理流程。
+        if (reinterpret_cast<HWND>(wParam) == contextMenu_) {
+            contextMenu_ = nullptr;
+        }
         return 0;
 
     case WM_NCDESTROY: {

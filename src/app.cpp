@@ -258,17 +258,17 @@ bool App::Initialize() {
 
     const bool snipHotkeyRegistered =
         RegisterHotKey(hwnd_, HOTKEY_SNIP, MOD_NOREPEAT, VK_F1) != FALSE;
-    const bool pinHotkeyRegistered =
+    pinHotkeyRegistered_ =
         RegisterHotKey(hwnd_, HOTKEY_PIN, MOD_NOREPEAT, VK_F3) != FALSE;
     const bool fullscreenHotkeyRegistered =
         RegisterHotKey(hwnd_, HOTKEY_FULLSCREEN, MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT, 'F') != FALSE;
-    const bool pinFallbackRegistered = pinHotkeyRegistered ||
+    pinFallbackHotkeyRegistered_ = !pinHotkeyRegistered_ &&
         RegisterHotKey(hwnd_, HOTKEY_PIN_FALLBACK, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, 'P') != FALSE;
 
     AddTrayIcon();
 
-    if (!pinHotkeyRegistered) {
-        if (pinFallbackRegistered) {
+    if (!pinHotkeyRegistered_) {
+        if (pinFallbackHotkeyRegistered_) {
             ShowNotice(L"F3 热键被其他程序占用，贴图备用快捷键已切换为 Ctrl+Alt+P");
         } else {
             ShowNotice(L"F3 热键注册失败，可右键托盘图标选择“贴图”");
@@ -292,6 +292,8 @@ void App::Shutdown() {
         UnregisterHotKey(hwnd_, HOTKEY_FULLSCREEN);
         UnregisterHotKey(hwnd_, HOTKEY_PIN_FALLBACK);
     }
+    pinHotkeyRegistered_ = false;
+    pinFallbackHotkeyRegistered_ = false;
 
     if (tray_.hWnd) {
         Shell_NotifyIconW(NIM_DELETE, &tray_);
@@ -318,7 +320,9 @@ void App::AddTrayIcon() {
     tray_.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
     tray_.uCallbackMessage = WM_TRAYICON;
     tray_.hIcon = LoadAppIcon(instance_);
-    wcscpy_s(tray_.szTip, L"Snap-Lite · F1 截图 · F3 贴图");
+    const wchar_t* pinShortcut = pinFallbackHotkeyRegistered_ ? L"Ctrl+Alt+P"
+        : pinHotkeyRegistered_ ? L"F3" : L"托盘菜单";
+    swprintf_s(tray_.szTip, L"Snap-Lite · F1 截图 · %s 贴图", pinShortcut);
     Shell_NotifyIconW(NIM_ADD, &tray_);
 }
 
@@ -342,7 +346,13 @@ void App::ShowTrayMenu() {
     }
 
     AppendMenuW(menu, MF_STRING, CMD_SNIP, L"截图\tF1");
-    AppendMenuW(menu, MF_STRING, CMD_PIN, L"贴图\tF3");
+    std::wstring pinLabel = L"贴图\t";
+    if (pinFallbackHotkeyRegistered_) {
+        pinLabel += L"Ctrl+Alt+P";
+    } else if (pinHotkeyRegistered_) {
+        pinLabel += L"F3";
+    }
+    AppendMenuW(menu, MF_STRING, CMD_PIN, pinLabel.c_str());
     AppendMenuW(menu, MF_STRING, CMD_FULLSCREEN, L"全屏截图\tCtrl+Shift+F");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, CMD_OPEN_FOLDER, L"打开截图目录");
