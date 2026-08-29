@@ -55,10 +55,10 @@ HWND ThemedCreateWindowExW(
 
 HPEN ThemedCreatePen(snaplite::SnipWindow& owner, int style, int width, COLORREF color) {
     if (color == gAnnotationColor) {
-        if (width == 3 && (gActiveToolIndex == 0 || gActiveToolIndex == 1)) {
+        if (width == 3 && gActiveToolIndex == 0) {
             owner.shapeDrawing_ = true;
         }
-        if ((width == 3 && (gActiveToolIndex == 0 || gActiveToolIndex == 1)) ||
+        if ((width == 3 && gActiveToolIndex == 0) ||
             (width == 4 && gActiveToolIndex == 2)) {
             width = std::clamp(gStrokeWidth, 1, 12);
         }
@@ -66,201 +66,282 @@ HPEN ThemedCreatePen(snaplite::SnipWindow& owner, int style, int width, COLORREF
     return ::CreatePen(style, width, color);
 }
 
-void DrawArrowHeadRaw(HDC dc, POINT tip, POINT tail, COLORREF color, int size, bool filled) {
-    const double angle = std::atan2(
-        static_cast<double>(tip.y - tail.y),
-        static_cast<double>(tip.x - tail.x));
+Gdiplus::Color AnnotationInk(COLORREF color, BYTE alpha = 255) {
+    return Gdiplus::Color(alpha, GetRValue(color), GetGValue(color), GetBValue(color));
+}
+
+void PrepareAnnotationGraphics(Gdiplus::Graphics& graphics) {
+    graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias8x8);
+    graphics.SetCompositingMode(Gdiplus::CompositingModeSourceOver);
+    graphics.SetCompositingQuality(Gdiplus::CompositingQualityHighQuality);
+    graphics.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
+}
+
+void AddAnnotationRoundRect(
+    Gdiplus::GraphicsPath& path,
+    const Gdiplus::RectF& rect,
+    float radius) {
+    path.Reset();
+    const float limitedRadius = std::min(
+        radius, std::min(rect.Width, rect.Height) / 2.0f);
+    if (limitedRadius <= 0.0f) {
+        path.AddRectangle(rect);
+        path.CloseFigure();
+        return;
+    }
+
+    const float diameter = limitedRadius * 2.0f;
+    path.AddArc(rect.X, rect.Y, diameter, diameter, 180.0f, 90.0f);
+    path.AddArc(rect.GetRight() - diameter, rect.Y, diameter, diameter, 270.0f, 90.0f);
+    path.AddArc(
+        rect.GetRight() - diameter,
+        rect.GetBottom() - diameter,
+        diameter,
+        diameter,
+        0.0f,
+        90.0f);
+    path.AddArc(rect.X, rect.GetBottom() - diameter, diameter, diameter, 90.0f, 90.0f);
+    path.CloseFigure();
+}
+
+void DrawArrowHeadSmooth(
+    Gdiplus::Graphics& graphics,
+    Gdiplus::PointF tip,
+    Gdiplus::PointF tail,
+    COLORREF color,
+    float size,
+    float strokeWidth,
+    bool filled) {
+    const double dx = static_cast<double>(tip.X - tail.X);
+    const double dy = static_cast<double>(tip.Y - tail.Y);
+    const double length = std::hypot(dx, dy);
+    if (length < 0.01) return;
+
+    const double angle = std::atan2(dy, dx);
     constexpr double spread = 0.55;
-    POINT head[3] = {
+    const Gdiplus::PointF head[3] = {
         tip,
-        {static_cast<LONG>(tip.x - size * std::cos(angle - spread)),
-         static_cast<LONG>(tip.y - size * std::sin(angle - spread))},
-        {static_cast<LONG>(tip.x - size * std::cos(angle + spread)),
-         static_cast<LONG>(tip.y - size * std::sin(angle + spread))},
+        {static_cast<float>(tip.X - size * std::cos(angle - spread)),
+         static_cast<float>(tip.Y - size * std::sin(angle - spread))},
+        {static_cast<float>(tip.X - size * std::cos(angle + spread)),
+         static_cast<float>(tip.Y - size * std::sin(angle + spread))},
     };
+    const Gdiplus::Color ink = AnnotationInk(color);
 
     if (filled) {
-        HBRUSH brush = ::CreateSolidBrush(color);
-        const HGDIOBJ oldBrush = ::SelectObject(dc, brush);
-        ::Polygon(dc, head, 3);
-        ::SelectObject(dc, oldBrush);
-        ::DeleteObject(brush);
-    } else {
-        ::MoveToEx(dc, head[1].x, head[1].y, nullptr);
-        ::LineTo(dc, tip.x, tip.y);
-        ::LineTo(dc, head[2].x, head[2].y);
+        Gdiplus::SolidBrush brush(ink);
+        graphics.FillPolygon(&brush, head, 3);
+        return;
     }
+
+    Gdiplus::Pen pen(ink, std::max(1.0f, strokeWidth));
+    pen.SetStartCap(Gdiplus::LineCapRound);
+    pen.SetEndCap(Gdiplus::LineCapRound);
+    pen.SetLineJoin(Gdiplus::LineJoinRound);
+    Gdiplus::GraphicsPath path;
+    path.AddLine(head[1], head[0]);
+    path.AddLine(head[0], head[2]);
+    graphics.DrawPath(&pen, &path);
 }
 
 void DrawAdvancedArrow(HDC dc, POINT from, POINT to) {
-    const int kind = std::clamp(gArrowKind, 0, 6);
-    int width = std::clamp(gStrokeWidth, 1, 12);
-    if (kind == 1) width = 1;
-    if (kind == 2) width = std::max(width, 6);
+    if (!dc) return;
 
-    HPEN pen = ::CreatePen(PS_SOLID, width, gAnnotationColor);
-    const HGDIOBJ oldPen = ::SelectObject(dc, pen);
+    const int kind = std::clamp(gArrowKind, 0, 6);
+    float width = static_cast<float>(std::clamp(gStrokeWidth, 1, 12));
+    if (kind == 1) width = 1;
+    if (kind == 2) width = std::max(width, 6.0f);
+
+    Gdiplus::Graphics graphics(dc);
+    PrepareAnnotationGraphics(graphics);
+    // 半像素对齐可避免细斜线被吸附到不一致的整数边界，同时保留抗锯齿边缘。
+    graphics.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
+
+    const Gdiplus::PointF start(
+        static_cast<float>(from.x), static_cast<float>(from.y));
+    const Gdiplus::PointF end(
+        static_cast<float>(to.x), static_cast<float>(to.y));
+    Gdiplus::GraphicsPath shaft;
+    Gdiplus::PointF tailForEnd = start;
     const bool filledHead = kind != 1;
-    const int headSize = kind == 2 ? 22 : std::max(13, 12 + width);
-    POINT tailForEnd = from;
+    const float headSize = kind == 2 ? 22.0f : std::max(13.0f, 12.0f + width);
 
     switch (kind) {
     case 4: {
-        const LONG dx = to.x - from.x;
-        const LONG dy = to.y - from.y;
+        const double dx = static_cast<double>(to.x - from.x);
+        const double dy = static_cast<double>(to.y - from.y);
         const double len = std::max(
-            1.0,
-            std::hypot(static_cast<double>(dx), static_cast<double>(dy)));
+            1.0, std::hypot(dx, dy));
         const double nx = -dy / len;
         const double ny = dx / len;
         const double bend = std::min(70.0, len * 0.22);
-        POINT bezier[4] = {
-            from,
-            {static_cast<LONG>(from.x + dx / 3.0 + nx * bend),
-             static_cast<LONG>(from.y + dy / 3.0 + ny * bend)},
-            {static_cast<LONG>(from.x + dx * 2.0 / 3.0 + nx * bend),
-             static_cast<LONG>(from.y + dy * 2.0 / 3.0 + ny * bend)},
-            to,
-        };
-        ::PolyBezier(dc, bezier, 4);
-        tailForEnd = bezier[2];
+        const Gdiplus::PointF control1(
+            static_cast<float>(from.x + dx / 3.0 + nx * bend),
+            static_cast<float>(from.y + dy / 3.0 + ny * bend));
+        const Gdiplus::PointF control2(
+            static_cast<float>(from.x + dx * 2.0 / 3.0 + nx * bend),
+            static_cast<float>(from.y + dy * 2.0 / 3.0 + ny * bend));
+        shaft.AddBezier(start, control1, control2, end);
+        tailForEnd = control2;
         break;
     }
     case 5: {
-        POINT points[4] = {
-            from,
-            {(from.x + to.x) / 2, from.y},
-            {(from.x + to.x) / 2, to.y},
-            to,
+        const float middleX = (static_cast<float>(from.x) + static_cast<float>(to.x)) / 2.0f;
+        const Gdiplus::PointF points[4] = {
+            start,
+            {middleX, start.Y},
+            {middleX, end.Y},
+            end,
         };
-        ::Polyline(dc, points, 4);
+        for (size_t i = 1; i < sizeof(points) / sizeof(points[0]); ++i) {
+            shaft.AddLine(points[i - 1], points[i]);
+        }
         tailForEnd = points[2];
         break;
     }
     case 6: {
-        const LONG dx = to.x - from.x;
-        POINT points[4] = {
-            from,
-            {from.x + dx / 3, from.y},
-            {from.x + dx / 3, to.y},
-            to,
+        const float stepX = static_cast<float>(from.x) +
+            static_cast<float>(to.x - from.x) / 3.0f;
+        const Gdiplus::PointF points[4] = {
+            start,
+            {stepX, start.Y},
+            {stepX, end.Y},
+            end,
         };
-        ::Polyline(dc, points, 4);
+        for (size_t i = 1; i < sizeof(points) / sizeof(points[0]); ++i) {
+            shaft.AddLine(points[i - 1], points[i]);
+        }
         tailForEnd = points[2];
         break;
     }
     default:
-        ::MoveToEx(dc, from.x, from.y, nullptr);
-        ::LineTo(dc, to.x, to.y);
+        shaft.AddLine(start, end);
         break;
     }
 
-    DrawArrowHeadRaw(dc, to, tailForEnd, gAnnotationColor, headSize, filledHead);
-    if (kind == 3) {
-        DrawArrowHeadRaw(dc, from, to, gAnnotationColor, headSize, true);
-    }
+    const Gdiplus::Color ink = AnnotationInk(gAnnotationColor);
+    Gdiplus::Pen pen(ink, width);
+    pen.SetStartCap(Gdiplus::LineCapRound);
+    pen.SetEndCap(Gdiplus::LineCapRound);
+    pen.SetLineJoin(Gdiplus::LineJoinRound);
+    graphics.DrawPath(&pen, &shaft);
 
-    ::SelectObject(dc, oldPen);
-    ::DeleteObject(pen);
+    DrawArrowHeadSmooth(graphics, end, tailForEnd, gAnnotationColor, headSize, width, filledHead);
+    if (kind == 3) {
+        DrawArrowHeadSmooth(graphics, start, end, gAnnotationColor, headSize, width, true);
+    }
 }
 
 BOOL ThemedRectangle(snaplite::SnipWindow& owner, HDC dc, int left, int top, int right, int bottom) {
-    if (!owner.shapeDrawing_ || gActiveToolIndex != 0) {
+    if (!owner.shapeDrawing_) {
         return ::Rectangle(dc, left, top, right, bottom);
     }
 
     owner.shapeDrawing_ = false;
+    if (!dc) return FALSE;
+
     const int kind = std::clamp(gShapeKind, 0, 7);
     const int fillMode = std::clamp(gShapeFillMode, 0, 2);
 
-    HPEN pen = fillMode == 1
-        ? static_cast<HPEN>(::GetStockObject(NULL_PEN))
-        : ::CreatePen(PS_SOLID, std::clamp(gStrokeWidth, 1, 12), gAnnotationColor);
-    HBRUSH brush = fillMode == 0
-        ? static_cast<HBRUSH>(::GetStockObject(NULL_BRUSH))
-        : ::CreateSolidBrush(gAnnotationColor);
+    Gdiplus::Graphics graphics(dc);
+    PrepareAnnotationGraphics(graphics);
+    const Gdiplus::Color ink = AnnotationInk(gAnnotationColor);
+    Gdiplus::Pen pen(ink, static_cast<float>(std::clamp(gStrokeWidth, 1, 12)));
+    pen.SetStartCap(Gdiplus::LineCapRound);
+    pen.SetEndCap(Gdiplus::LineCapRound);
+    pen.SetLineJoin(Gdiplus::LineJoinRound);
+    Gdiplus::SolidBrush brush(ink);
 
-    const HGDIOBJ oldPen = ::SelectObject(dc, pen);
-    const HGDIOBJ oldBrush = ::SelectObject(dc, brush);
-    const int width = std::abs(right - left);
-    const int height = std::abs(bottom - top);
-    const int cx = (left + right) / 2;
-    const int cy = (top + bottom) / 2;
+    const int normalizedLeft = std::min(left, right);
+    const int normalizedTop = std::min(top, bottom);
+    const int normalizedRight = std::max(left, right);
+    const int normalizedBottom = std::max(top, bottom);
+    const float width = static_cast<float>(normalizedRight - normalizedLeft);
+    const float height = static_cast<float>(normalizedBottom - normalizedTop);
+    const float cx = (static_cast<float>(normalizedLeft) + normalizedRight) / 2.0f;
+    const float cy = (static_cast<float>(normalizedTop) + normalizedBottom) / 2.0f;
+    const Gdiplus::RectF bounds(
+        static_cast<float>(normalizedLeft),
+        static_cast<float>(normalizedTop),
+        width,
+        height);
+
+    const auto drawPath = [&](Gdiplus::GraphicsPath& path) {
+        if (fillMode != 0) graphics.FillPath(&brush, &path);
+        if (fillMode != 1) graphics.DrawPath(&pen, &path);
+    };
 
     switch (kind) {
     case 0:
-        ::Rectangle(dc, left, top, right, bottom);
+        if (fillMode != 0) graphics.FillRectangle(&brush, bounds);
+        if (fillMode != 1) graphics.DrawRectangle(&pen, bounds);
         break;
-    case 1:
-        ::RoundRect(dc, left, top, right, bottom, 18, 18);
+    case 1: {
+        Gdiplus::GraphicsPath path;
+        AddAnnotationRoundRect(path, bounds, 9.0f);
+        drawPath(path);
         break;
+    }
     case 2: {
-        const int side = std::min(width, height);
-        ::Ellipse(dc, cx - side / 2, cy - side / 2, cx + side / 2, cy + side / 2);
+        const float side = std::min(width, height);
+        const Gdiplus::RectF circle(cx - side / 2.0f, cy - side / 2.0f, side, side);
+        if (fillMode != 0) graphics.FillEllipse(&brush, circle);
+        if (fillMode != 1) graphics.DrawEllipse(&pen, circle);
         break;
     }
     case 3:
-        ::Ellipse(dc, left, top, right, bottom);
+        if (fillMode != 0) graphics.FillEllipse(&brush, bounds);
+        if (fillMode != 1) graphics.DrawEllipse(&pen, bounds);
         break;
-    case 4:
-        ::MoveToEx(dc, left, top, nullptr);
-        ::LineTo(dc, right, bottom);
+    case 4: {
+        Gdiplus::GraphicsPath path;
+        path.AddLine(
+            Gdiplus::PointF(static_cast<float>(normalizedLeft), static_cast<float>(normalizedTop)),
+            Gdiplus::PointF(static_cast<float>(normalizedRight), static_cast<float>(normalizedBottom)));
+        if (fillMode != 1) graphics.DrawPath(&pen, &path);
         break;
+    }
     case 5: {
-        POINT points[3] = {{cx, top}, {right, bottom}, {left, bottom}};
-        ::Polygon(dc, points, 3);
+        const Gdiplus::PointF points[3] = {
+            {cx, static_cast<float>(normalizedTop)},
+            {static_cast<float>(normalizedRight), static_cast<float>(normalizedBottom)},
+            {static_cast<float>(normalizedLeft), static_cast<float>(normalizedBottom)},
+        };
+        Gdiplus::GraphicsPath path;
+        path.AddPolygon(points, 3);
+        drawPath(path);
         break;
     }
     case 6: {
-        POINT points[4] = {{cx, top}, {right, cy}, {cx, bottom}, {left, cy}};
-        ::Polygon(dc, points, 4);
+        const Gdiplus::PointF points[4] = {
+            {cx, static_cast<float>(normalizedTop)},
+            {static_cast<float>(normalizedRight), cy},
+            {cx, static_cast<float>(normalizedBottom)},
+            {static_cast<float>(normalizedLeft), cy},
+        };
+        Gdiplus::GraphicsPath path;
+        path.AddPolygon(points, 4);
+        drawPath(path);
         break;
     }
     case 7: {
-        const int quarter = std::max(1, width / 4);
-        POINT points[6] = {
-            {left + quarter, top}, {right - quarter, top}, {right, cy},
-            {right - quarter, bottom}, {left + quarter, bottom}, {left, cy},
+        const float quarter = std::max(1.0f, width / 4.0f);
+        const Gdiplus::PointF points[6] = {
+            {static_cast<float>(normalizedLeft) + quarter, static_cast<float>(normalizedTop)},
+            {static_cast<float>(normalizedRight) - quarter, static_cast<float>(normalizedTop)},
+            {static_cast<float>(normalizedRight), cy},
+            {static_cast<float>(normalizedRight) - quarter, static_cast<float>(normalizedBottom)},
+            {static_cast<float>(normalizedLeft) + quarter, static_cast<float>(normalizedBottom)},
+            {static_cast<float>(normalizedLeft), cy},
         };
-        ::Polygon(dc, points, 6);
+        Gdiplus::GraphicsPath path;
+        path.AddPolygon(points, 6);
+        drawPath(path);
         break;
     }
     }
 
-    ::SelectObject(dc, oldBrush);
-    ::SelectObject(dc, oldPen);
-    if (fillMode != 1) ::DeleteObject(pen);
-    if (fillMode != 0) ::DeleteObject(brush);
     return TRUE;
-}
-
-BOOL ThemedMoveToEx(snaplite::SnipWindow& owner, HDC dc, int x, int y, LPPOINT oldPoint) {
-    if (owner.shapeDrawing_ && gActiveToolIndex == 1) {
-        owner.arrowFrom_ = {x, y};
-        if (oldPoint) {
-            oldPoint->x = x;
-            oldPoint->y = y;
-        }
-        return TRUE;
-    }
-    return ::MoveToEx(dc, x, y, oldPoint);
-}
-
-BOOL ThemedLineTo(snaplite::SnipWindow& owner, HDC dc, int x, int y) {
-    if (owner.shapeDrawing_ && gActiveToolIndex == 1) {
-        owner.arrowTo_ = {x, y};
-        return TRUE;
-    }
-    return ::LineTo(dc, x, y);
-}
-
-BOOL ThemedPolygon(snaplite::SnipWindow& owner, HDC dc, const POINT* points, int count) {
-    if (owner.shapeDrawing_ && gActiveToolIndex == 1) {
-        owner.shapeDrawing_ = false;
-        DrawAdvancedArrow(dc, owner.arrowFrom_, owner.arrowTo_);
-        return TRUE;
-    }
-    return ::Polygon(dc, points, count);
 }
 
 }  // namespace snaplite::detail
@@ -328,15 +409,6 @@ private:
 #ifdef Rectangle
 #undef Rectangle
 #endif
-#ifdef MoveToEx
-#undef MoveToEx
-#endif
-#ifdef LineTo
-#undef LineTo
-#endif
-#ifdef Polygon
-#undef Polygon
-#endif
 #ifdef Color
 #undef Color
 #endif
@@ -345,15 +417,9 @@ private:
 #define CreateWindowExW snaplite::detail::ThemedCreateWindowExW
 #define CreatePen(...) snaplite::detail::ThemedCreatePen(*this, __VA_ARGS__)
 #define Rectangle(...) snaplite::detail::ThemedRectangle(*this, __VA_ARGS__)
-#define MoveToEx(...) snaplite::detail::ThemedMoveToEx(*this, __VA_ARGS__)
-#define LineTo(...) snaplite::detail::ThemedLineTo(*this, __VA_ARGS__)
-#define Polygon(...) snaplite::detail::ThemedPolygon(*this, __VA_ARGS__)
 #define Color SnapLiteThemeColor
 #include "snip_window_original.inc"
 #undef Color
-#undef Polygon
-#undef LineTo
-#undef MoveToEx
 #undef Rectangle
 #undef CreatePen
 #undef CreateWindowExW

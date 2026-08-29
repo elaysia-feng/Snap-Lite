@@ -1145,35 +1145,19 @@ void SnipWindow::Redo() {
 }
 
 void SnipWindow::DrawShape(HDC dc, Tool tool, POINT from, POINT to) {
+    if (tool == Tool::Arrow) {
+        detail::DrawAdvancedArrow(dc, from, to);
+        return;
+    }
+    if (tool != Tool::Rectangle) return;
+
+    shapeDrawing_ = true;
     HPEN pen = CreatePen(PS_SOLID, 3, RGB(235, 70, 70));
     const HGDIOBJ oldPen = SelectObject(dc, pen);
     const HGDIOBJ oldBrush = SelectObject(dc, GetStockObject(NULL_BRUSH));
 
-    if (tool == Tool::Rectangle) {
-        const RECT rect = NormalizeRect(from, to);
-        Rectangle(dc, rect.left, rect.top, rect.right, rect.bottom);
-    } else if (tool == Tool::Arrow) {
-        MoveToEx(dc, from.x, from.y, nullptr);
-        LineTo(dc, to.x, to.y);
-
-        const double angle = std::atan2(
-            static_cast<double>(to.y - from.y),
-            static_cast<double>(to.x - from.x));
-        constexpr double spread = 0.55;
-        constexpr double length = 17.0;
-        POINT arrow[3] = {
-            to,
-            {static_cast<LONG>(to.x - length * std::cos(angle - spread)),
-             static_cast<LONG>(to.y - length * std::sin(angle - spread))},
-            {static_cast<LONG>(to.x - length * std::cos(angle + spread)),
-             static_cast<LONG>(to.y - length * std::sin(angle + spread))},
-        };
-        HBRUSH brush = CreateSolidBrush(RGB(235, 70, 70));
-        SelectObject(dc, brush);
-        Polygon(dc, arrow, 3);
-        SelectObject(dc, oldBrush);
-        DeleteObject(brush);
-    }
+    const RECT rect = NormalizeRect(from, to);
+    Rectangle(dc, rect.left, rect.top, rect.right, rect.bottom);
 
     SelectObject(dc, oldPen);
     SelectObject(dc, oldBrush);
@@ -1182,14 +1166,29 @@ void SnipWindow::DrawShape(HDC dc, Tool tool, POINT from, POINT to) {
 
 void SnipWindow::DrawPenSegment(POINT from, POINT to) {
     HDC dc = CreateCompatibleDC(nullptr);
+    if (!dc) return;
     const HGDIOBJ oldBitmap = SelectObject(dc, capture_);
-    HPEN pen = CreatePen(PS_SOLID, 4, RGB(235, 70, 70));
-    const HGDIOBJ oldPen = SelectObject(dc, pen);
-    MoveToEx(dc, from.x, from.y, nullptr);
-    LineTo(dc, to.x, to.y);
-    SelectObject(dc, oldPen);
+    if (!oldBitmap || oldBitmap == HGDI_ERROR) {
+        DeleteDC(dc);
+        return;
+    }
+
+    {
+        Gdiplus::Graphics graphics(dc);
+        detail::PrepareAnnotationGraphics(graphics);
+        Gdiplus::Pen pen(
+            detail::AnnotationInk(detail::gAnnotationColor),
+            static_cast<float>(std::clamp(detail::gStrokeWidth, 1, 12)));
+        pen.SetStartCap(Gdiplus::LineCapRound);
+        pen.SetEndCap(Gdiplus::LineCapRound);
+        pen.SetLineJoin(Gdiplus::LineJoinRound);
+        graphics.DrawLine(
+            &pen,
+            Gdiplus::PointF(static_cast<float>(from.x), static_cast<float>(from.y)),
+            Gdiplus::PointF(static_cast<float>(to.x), static_cast<float>(to.y)));
+    }
+
     SelectObject(dc, oldBitmap);
-    DeleteObject(pen);
     DeleteDC(dc);
 }
 

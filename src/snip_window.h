@@ -19,9 +19,7 @@ namespace detail {
 // implementations live in snip_window.cpp.
 HPEN ThemedCreatePen(SnipWindow& owner, int style, int width, COLORREF color);
 BOOL ThemedRectangle(SnipWindow& owner, HDC dc, int left, int top, int right, int bottom);
-BOOL ThemedMoveToEx(SnipWindow& owner, HDC dc, int x, int y, LPPOINT oldPoint);
-BOOL ThemedLineTo(SnipWindow& owner, HDC dc, int x, int y);
-BOOL ThemedPolygon(SnipWindow& owner, HDC dc, const POINT* points, int count);
+void DrawAdvancedArrow(HDC dc, POINT from, POINT to);
 
 }  // namespace detail
 
@@ -197,14 +195,10 @@ private:
     void Finish(FinishAction action);
     void CopyCurrentColor();
 
-    // Friends: the themed GDI shims in snaplite::detail need access to the
-    // per-instance shape drawing state (shapeDrawing_, arrowFrom_, arrowTo_)
-    // because the macro hijack forwards a SnipWindow reference to them.
+    // The themed rectangle shim needs access to the per-instance shape state
+    // because the legacy source is included through a small macro adapter.
     friend HPEN detail::ThemedCreatePen(SnipWindow& owner, int style, int width, COLORREF color);
     friend BOOL detail::ThemedRectangle(SnipWindow& owner, HDC dc, int left, int top, int right, int bottom);
-    friend BOOL detail::ThemedMoveToEx(SnipWindow& owner, HDC dc, int x, int y, LPPOINT oldPoint);
-    friend BOOL detail::ThemedLineTo(SnipWindow& owner, HDC dc, int x, int y);
-    friend BOOL detail::ThemedPolygon(SnipWindow& owner, HDC dc, const POINT* points, int count);
 
     HINSTANCE instance_{};
     HWND owner_{};
@@ -235,12 +229,8 @@ private:
     BitmapHistory undo_;
     BitmapHistory redo_;
 
-    // Per-instance shape drawing state used by the themed GDI shims. These
-    // were previously module-level globals in snaplite::detail, which made
-    // them unsafe across multiple SnipWindow instances or toolbar leftovers.
+    // Per-instance shape drawing state used by the themed rectangle shim.
     bool shapeDrawing_{false};
-    POINT arrowFrom_{};
-    POINT arrowTo_{};
 
     int hoverToolbar_{-1};
 

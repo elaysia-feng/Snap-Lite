@@ -8,14 +8,14 @@
 
 优先从 GitHub Releases 获取预编译版本，不需要安装 CMake、Visual Studio 或其他运行时。
 
-当前正式版：`v1.3.24`
+当前正式版：`v1.3.3`
 
 Release Assets：
 
 ```text
 SnapLite.exe                   直接运行
-SnapLite-Setup-1.3.24.exe     安装包（使用 Windows 系统 OCR）
-SnapLite-1.3.24-win-x64.zip   便携压缩包
+SnapLite-Setup-1.3.3.exe      安装包（使用 Windows 系统 OCR）
+SnapLite-1.3.3-win-x64.zip     便携压缩包
 SHA256SUMS.txt                 文件校验
 ```
 
