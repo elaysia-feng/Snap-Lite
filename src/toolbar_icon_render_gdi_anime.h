@@ -446,8 +446,9 @@ inline void DrawCrispSecondaryArrow(HDC dc, const RECT& rect, int kind) {
 
     Gdiplus::Pen pen(color, lineWidth);
     pen.SetLineJoin(Gdiplus::LineJoinRound);
-    pen.SetStartCap(Gdiplus::LineCapRound);
-    pen.SetEndCap(Gdiplus::LineCapRound);
+    // 箭头头部会覆盖终点，平端帽可避免圆形端帽从尖端露出颗粒。
+    pen.SetStartCap(kind == 3 ? Gdiplus::LineCapFlat : Gdiplus::LineCapRound);
+    pen.SetEndCap(Gdiplus::LineCapFlat);
 
     if (kind == 4) {
         const Gdiplus::PointF control1(left + 3.0f, static_cast<float>(rect.top + 5));
@@ -783,15 +784,17 @@ inline int DrawTextOrIcon(HDC dc, LPCWSTR text, int count, LPRECT rect, UINT for
     if (!dc || !text || !rect)
         return DrawBaseTextOrIcon(dc, text, count, rect, format);
 
+    // 次级工具栏的几何图标必须先走 GDI+ 浮点绘制；否则会被旧的 GDI
+    // 整数像素 fallback 接管，在 1px 细线和斜线边缘产生颗粒感。
+    if ((format & DT_CENTER) && (format & DT_VCENTER) &&
+        anime_skin::DrawCrispSecondaryIcon(dc, text, count, *rect))
+        return 1;
+
     if (!anime_skin::PrimaryLabel(text, count))
         return DrawBaseTextOrIcon(dc, text, count, rect, format);
 
     const int functionIcon = anime_skin::FunctionIconIndex(text, count);
     if (functionIcon >= 0 && anime_skin::DrawFunctionSprite(dc, *rect, functionIcon))
-        return 1;
-
-    if ((format & DT_CENTER) && (format & DT_VCENTER) &&
-        anime_skin::DrawCrispSecondaryIcon(dc, text, count, *rect))
         return 1;
 
     const anime_skin::Girl girl = anime_skin::GirlForLabel(text, count);

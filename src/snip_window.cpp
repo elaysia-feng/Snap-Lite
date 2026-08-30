@@ -222,8 +222,9 @@ void DrawAdvancedArrow(HDC dc, POINT from, POINT to) {
 
     const Gdiplus::Color ink = AnnotationInk(gAnnotationColor);
     Gdiplus::Pen pen(ink, width);
-    pen.SetStartCap(Gdiplus::LineCapRound);
-    pen.SetEndCap(Gdiplus::LineCapRound);
+    // 箭杆会延伸到箭头尖端；圆形端帽会越过尖端形成多余的小点。
+    pen.SetStartCap(kind == 3 ? Gdiplus::LineCapFlat : Gdiplus::LineCapRound);
+    pen.SetEndCap(Gdiplus::LineCapFlat);
     pen.SetLineJoin(Gdiplus::LineJoinRound);
     graphics.DrawPath(&pen, &shaft);
 
