@@ -768,8 +768,8 @@ private:
             }
         }
         switch (category_) {
-        case Category::Shape: return L"形状：拖边线移动、拖控制点缩放；方向键微调，Shift 加速，Delete 删除";
-        case Category::Arrow: return L"箭头：拖箭身移动、拖两端调整；方向键微调，Delete 删除，Esc 取消拖动";
+        case Category::Shape: return L"选中后可改样式 · Ctrl+D 复制 · Tab 切换 · Ctrl+Home/End 置顶/置底 · Shift 拖动锁定方向";
+        case Category::Arrow: return L"拖两端调整 · Ctrl+D 复制 · Tab 切换 · Ctrl+Home/End 置顶/置底 · Shift 拖动锁定方向";
         case Category::Pen: return L"画笔：选择粗细和颜色后自由绘制";
         case Category::Mosaic: return L"马赛克：按住鼠标左键涂抹需要隐藏的区域";
         case Category::Text: return L"文字：单击创建；选中文字可改颜色/字号；双击继续编辑";
@@ -965,12 +965,12 @@ private:
 
     void ApplyColor(COLORREF color) {
         if (selectedText_) {
+            const auto before = SnapshotTextStates();
             selectedText_->color = color;
             if (selectedText_->edit) {
                 RedrawWindow(selectedText_->hwnd, nullptr, nullptr,
                              RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_ALLCHILDREN);
             } else {
-                const auto before = SnapshotTextStates();
                 InvalidateRect(selectedText_->hwnd, nullptr, FALSE);
                 RecordTextAction(before, SnapshotTextStates());
             }
@@ -981,6 +981,7 @@ private:
 
     void ApplyTextSize(int points) {
         if (selectedText_) {
+            const auto before = SnapshotTextStates();
             selectedText_->sizePt = std::clamp(points, 10, 72);
             RecreateTextFont(selectedText_);
             ResizeTextItem(selectedText_);
@@ -990,7 +991,6 @@ private:
                 RedrawWindow(selectedText_->hwnd, nullptr, nullptr,
                              RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_ALLCHILDREN);
             } else {
-                const auto before = SnapshotTextStates();
                 RecordTextAction(before, SnapshotTextStates());
             }
         }
@@ -1004,6 +1004,7 @@ private:
         const size_t n = std::min(rects.size(), items.size());
         if (index < 0 || static_cast<size_t>(index) >= n || !snip_) return;
         const auto& item = items[index];
+        const auto revision = snip_->UiEditRevision();
         switch (item.action) {
         case ItemAction::ShapeKind: snip_->UiSetShapeKind(item.value); break;
         case ItemAction::ShapeFill: snip_->UiSetShapeFillMode(item.value); break;
@@ -1013,6 +1014,12 @@ private:
         case ItemAction::ColorPreset: ApplyColor(item.color); break;
         case ItemAction::ColorCustom: OpenColorPicker(); break;
         case ItemAction::None: default: break;
+        }
+        if (revision != snip_->UiEditRevision()) {
+            HistoryAction action;
+            action.kind = HistoryAction::Kind::Raster;
+            undoActions_.push_back(std::move(action));
+            redoActions_.clear();
         }
         InvalidateRect(toolbar_, nullptr, FALSE);
     }
@@ -1285,6 +1292,7 @@ private:
     }
 
     void SelectText(TextItem* item) {
+        if (item) snip_->UiDeselectAnnotation();
         if (selectedText_ == item) return;
         if (selectedText_ && selectedText_->hwnd) {
             selectedText_->selected = false;

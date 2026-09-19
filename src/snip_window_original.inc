@@ -1410,7 +1410,7 @@ LRESULT SnipWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
         int arrowPart = 0;
         const int arrow = (tool_ == Tool::Arrow || tool_ == Tool::Rectangle || tool_ == Tool::None) ? HitArrow(point, &arrowPart) : -1;
         if (arrow >= 0) {
-            selectedArrow_ = arrow;
+            SelectAnnotation(arrow);
             arrowDragPart_ = arrowPart;
             arrowDragOrigin_ = arrows_[arrow];
             arrowDragStart_ = point;
@@ -1522,6 +1522,7 @@ LRESULT SnipWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
                 InvalidateRect(hwnd_, nullptr, FALSE);
                 return 0;
             }
+            if (UiHandleAnnotationKey(VK_ESCAPE)) return 0;
             if (tool_ != Tool::None) {
                 tool_ = Tool::None;
                 InvalidateRect(hwnd_, nullptr, FALSE);

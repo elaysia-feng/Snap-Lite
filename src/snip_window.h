@@ -132,6 +132,7 @@ public:
     bool UiHitArrow(POINT point) const;
     unsigned long long UiEditRevision() const;
     bool UiHandleAnnotationKey(WPARAM key);
+    void UiDeselectAnnotation();
 
 private:
     enum class Tool {
@@ -208,6 +209,8 @@ private:
     void UpdateArrowDrag(POINT point);
     void FinishArrowDrag(bool cancel);
     void EraseArrows(POINT from, POINT to);
+    void SelectAnnotation(int index);
+    void UpdateSelectedAnnotationStyle();
     void DrawPenSegment(POINT from, POINT to);
     void ApplyMosaic(POINT point);
 

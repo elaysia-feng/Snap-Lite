@@ -535,6 +535,10 @@ void SnipWindow::UpdateArrowDrag(POINT point) {
     LONG dx = point.x - arrowDragStart_.x;
     LONG dy = point.y - arrowDragStart_.y;
     if (arrowDragPart_ == 1) {
+        if (GetKeyState(VK_SHIFT) & 0x8000) {
+            if (std::abs(dx) >= std::abs(dy)) dy = 0;
+            else dx = 0;
+        }
         dx = std::clamp(dx, r.left - std::min(next.from.x, next.to.x), r.right - 1 - std::max(next.from.x, next.to.x));
         dy = std::clamp(dy, r.top - std::min(next.from.y, next.to.y), r.bottom - 1 - std::max(next.from.y, next.to.y));
         next.from.x += dx; next.from.y += dy;
@@ -620,6 +624,9 @@ void SnipWindow::UiSetTool(int toolIndex) {
     case 4: tool_ = Tool::Text; break;
     default: tool_ = Tool::None; break;
     }
+    if (selectedArrow_ >= 0 && tool_ != Tool::None && arrows_[selectedArrow_].tool != tool_) {
+        selectedArrow_ = -1;
+    }
     detail::gActiveToolIndex = toolIndex >= 0 && toolIndex <= 4 ? toolIndex : -1;
     InvalidateRect(hwnd_, nullptr, FALSE);
 }
@@ -628,20 +635,24 @@ int SnipWindow::UiShapeKind() const { return detail::gShapeKind; }
 void SnipWindow::UiSetShapeKind(int kind) {
     detail::gShapeKind = std::clamp(kind, 0, 7);
     UiSetTool(0);
+    UpdateSelectedAnnotationStyle();
 }
 int SnipWindow::UiShapeFillMode() const { return detail::gShapeFillMode; }
 void SnipWindow::UiSetShapeFillMode(int mode) {
     detail::gShapeFillMode = std::clamp(mode, 0, 2);
+    UpdateSelectedAnnotationStyle();
     InvalidateRect(hwnd_, nullptr, FALSE);
 }
 int SnipWindow::UiArrowKind() const { return detail::gArrowKind; }
 void SnipWindow::UiSetArrowKind(int kind) {
     detail::gArrowKind = std::clamp(kind, 0, 6);
     UiSetTool(1);
+    UpdateSelectedAnnotationStyle();
 }
 int SnipWindow::UiStrokeWidth() const { return detail::gStrokeWidth; }
 void SnipWindow::UiSetStrokeWidth(int width) {
     detail::gStrokeWidth = std::clamp(width, 1, 12);
+    UpdateSelectedAnnotationStyle();
     InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
@@ -649,6 +660,7 @@ COLORREF SnipWindow::UiColor() const { return annotationColor_; }
 void SnipWindow::UiSetColor(COLORREF color) {
     annotationColor_ = color;
     detail::gAnnotationColor = color;
+    UpdateSelectedAnnotationStyle();
     InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
@@ -672,10 +684,54 @@ bool SnipWindow::UiHitSelectionBorder(POINT point) const {
 }
 bool SnipWindow::UiHitArrow(POINT point) const { return HitArrow(point) >= 0; }
 unsigned long long SnipWindow::UiEditRevision() const { return editRevision_; }
+void SnipWindow::UiDeselectAnnotation() {
+    selectedArrow_ = -1;
+    InvalidateRect(hwnd_, nullptr, FALSE);
+}
 bool SnipWindow::UiHandleAnnotationKey(WPARAM key) {
-    if (UiInteractionActive() || selectedArrow_ < 0 || selectedArrow_ >= static_cast<int>(arrows_.size()) ||
+    if (UiInteractionActive() ||
         (tool_ != Tool::None && tool_ != Tool::Arrow && tool_ != Tool::Rectangle) ||
-        (GetKeyState(VK_CONTROL) & 0x8000) || (GetKeyState(VK_MENU) & 0x8000)) return false;
+        (GetKeyState(VK_MENU) & 0x8000)) return false;
+    const bool control = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+    if (key == VK_TAB && !control && !arrows_.empty()) {
+        const int count = static_cast<int>(arrows_.size());
+        const bool reverse = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+        SelectAnnotation(selectedArrow_ < 0 ? (reverse ? count - 1 : 0) :
+            (selectedArrow_ + (reverse ? count - 1 : 1)) % count);
+        return true;
+    }
+    if (selectedArrow_ < 0 || selectedArrow_ >= static_cast<int>(arrows_.size())) return false;
+    if (key == VK_ESCAPE && !control) {
+        selectedArrow_ = -1;
+        InvalidateRect(hwnd_, nullptr, FALSE);
+        return true;
+    }
+    if (control && key == 'D') {
+        ArrowAnnotation copy = arrows_[selectedArrow_];
+        const RECT r = NormalizedSelection();
+        const LONG dx = std::clamp(16L, r.left - std::min(copy.from.x, copy.to.x), r.right - 1 - std::max(copy.from.x, copy.to.x));
+        const LONG dy = std::clamp(16L, r.top - std::min(copy.from.y, copy.to.y), r.bottom - 1 - std::max(copy.from.y, copy.to.y));
+        copy.from.x += dx; copy.from.y += dy;
+        copy.to.x += dx; copy.to.y += dy;
+        BeginEdit();
+        arrows_.push_back(copy);
+        SelectAnnotation(static_cast<int>(arrows_.size()) - 1);
+        return true;
+    }
+    if (control && (key == VK_HOME || key == VK_END || key == VK_PRIOR || key == VK_NEXT)) {
+        const int last = static_cast<int>(arrows_.size()) - 1;
+        const int target = key == VK_HOME ? last : key == VK_END ? 0 :
+            std::clamp(selectedArrow_ + (key == VK_PRIOR ? 1 : -1), 0, last);
+        if (target != selectedArrow_) {
+            BeginEdit();
+            const auto item = arrows_[selectedArrow_];
+            arrows_.erase(arrows_.begin() + selectedArrow_);
+            arrows_.insert(arrows_.begin() + target, item);
+            SelectAnnotation(target);
+        }
+        return true;
+    }
+    if (control) return false;
     if (key == VK_DELETE) {
         BeginEdit();
         arrows_.erase(arrows_.begin() + selectedArrow_);
@@ -700,6 +756,37 @@ bool SnipWindow::UiHandleAnnotationKey(WPARAM key) {
         InvalidateRect(hwnd_, nullptr, FALSE);
     }
     return true;
+}
+
+void SnipWindow::SelectAnnotation(int index) {
+    selectedArrow_ = index;
+    const auto& item = arrows_[index];
+    annotationColor_ = item.color;
+    detail::gAnnotationColor = item.color;
+    detail::gStrokeWidth = item.width;
+    if (item.tool == Tool::Arrow) detail::gArrowKind = item.kind;
+    else {
+        detail::gShapeKind = item.kind;
+        detail::gShapeFillMode = item.fillMode;
+    }
+    // 选择工具继续保留选择模式；绘图模式则显示当前对象对应的样式面板。
+    if (tool_ != Tool::None) tool_ = item.tool;
+    InvalidateRect(hwnd_, nullptr, FALSE);
+}
+
+void SnipWindow::UpdateSelectedAnnotationStyle() {
+    if (UiInteractionActive() || selectedArrow_ < 0) return;
+    auto& item = arrows_[selectedArrow_];
+    const int kind = item.tool == Tool::Arrow ? detail::gArrowKind : detail::gShapeKind;
+    const int fill = item.tool == Tool::Arrow ? 0 : detail::gShapeFillMode;
+    if (item.color == annotationColor_ && item.width == detail::gStrokeWidth &&
+        item.kind == kind && item.fillMode == fill) return;
+    BeginEdit();
+    item.color = annotationColor_;
+    item.width = detail::gStrokeWidth;
+    item.kind = kind;
+    item.fillMode = fill;
+    InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
 HBITMAP SnipWindow::UiCaptureBitmap() const {
