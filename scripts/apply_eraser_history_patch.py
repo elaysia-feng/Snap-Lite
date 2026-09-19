@@ -162,6 +162,7 @@ def main() -> None:
         "            if (tool_ == Tool::Pen) {\n"
         "                DrawPenSegment(drawCurrent_, point);\n"
         "            } else if (tool_ == Tool::Eraser) {\n"
+        "                EraseArrows(drawCurrent_, point);\n"
         "                RestoreOriginalBrush(this, capture_, NormalizedSelection(),\n"
         "                                     drawCurrent_, point,\n"
         "                                     std::clamp(detail::gStrokeWidth * 4, 8, 48));\n"
@@ -179,6 +180,7 @@ def main() -> None:
         "            if (tool_ == Tool::Mosaic) {\n"
         "                ApplyMosaic(drawStart_);\n"
         "            } else if (tool_ == Tool::Eraser) {\n"
+        "                EraseArrows(drawStart_, drawStart_);\n"
         "                RestoreOriginalBrush(this, capture_, NormalizedSelection(),\n"
         "                                     drawStart_, drawStart_,\n"
         "                                     std::clamp(detail::gStrokeWidth * 4, 8, 48));\n"
@@ -296,12 +298,6 @@ def main() -> None:
         "            if (tool == 4 && PtInRect(&selection, p)) {",
         "            if (tool == 5 && PtInRect(&selection, p)) {",
         "text tool shifted index",
-    )
-    replace_once(
-        "src/editor_toolbar.cpp",
-        "            if (tool >= 0 && tool <= 3 && PtInRect(&selection, p)) {",
-        "            if (tool >= 0 && tool <= 4 && PtInRect(&selection, p)) {",
-        "raster history eraser range",
     )
     replace_once(
         "src/editor_toolbar.cpp",

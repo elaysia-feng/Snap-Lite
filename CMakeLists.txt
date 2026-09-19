@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(SnapLite VERSION 1.4.0 LANGUAGES CXX RC)
+project(SnapLite VERSION 1.5.0 LANGUAGES CXX RC)
 
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
@@ -156,3 +156,27 @@ if(MSVC)
 endif()
 
 install(TARGETS SnapLite RUNTIME DESTINATION .)
+
+# 可单独运行真实窗口交互回归；测试替身仅隔离未调用的系统 OCR 入口。
+option(SNAPLITE_BUILD_INTERACTION_TESTS "Build native screenshot interaction tests" OFF)
+if(SNAPLITE_BUILD_INTERACTION_TESTS)
+    enable_testing()
+    add_executable(SnapLiteInteractionTests
+        tests/snip_interaction_test.cpp
+        ${SNAPLITE_SNIP_SOURCE}
+        ${SNAPLITE_EDITOR_SOURCE}
+        src/capture.cpp
+        src/capture_settings.cpp
+        src/snip_text_overlay.cpp
+    )
+    target_include_directories(SnapLiteInteractionTests PRIVATE
+        $<TARGET_PROPERTY:SnapLite,INCLUDE_DIRECTORIES>)
+    target_compile_definitions(SnapLiteInteractionTests PRIVATE
+        $<TARGET_PROPERTY:SnapLite,COMPILE_DEFINITIONS>)
+    target_compile_options(SnapLiteInteractionTests PRIVATE
+        $<TARGET_PROPERTY:SnapLite,COMPILE_OPTIONS>)
+    target_compile_features(SnapLiteInteractionTests PRIVATE cxx_std_20)
+    target_link_libraries(SnapLiteInteractionTests PRIVATE
+        user32 gdi32 gdiplus shell32 ole32 uuid advapi32 comdlg32 comctl32 dwmapi imm32)
+    add_test(NAME snip_interaction COMMAND SnapLiteInteractionTests "${CMAKE_CURRENT_BINARY_DIR}")
+endif()

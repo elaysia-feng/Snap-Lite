@@ -40,7 +40,6 @@ Gdiplus::Color Ink(BYTE alpha = 255) { return {alpha, 236, 239, 244}; }
 Gdiplus::Color Danger() { return {255, 255, 107, 91}; }
 
 constexpr int kHandleRadius = 4;
-constexpr int kHandleHitRadius = 9;
 constexpr int kToolbarButton = 36;
 constexpr int kToolbarHeight = 40;
 constexpr int kToolbarButtons = 11;
@@ -223,6 +222,7 @@ SnipWindow::SnipWindow(HINSTANCE instance, HWND owner, CaptureCallback callback)
 
 SnipWindow::~SnipWindow() {
     ReleaseFrameBuffer();
+    if (arrowComposite_) DeleteObject(arrowComposite_);
     if (uiFont_) {
         DeleteObject(uiFont_);
         uiFont_ = nullptr;
@@ -371,28 +371,24 @@ SnipWindow::DragMode SnipWindow::HitSelection(POINT point) const {
     }
 
     const RECT r = NormalizedSelection();
-    const LONG cx = (r.left + r.right) / 2;
-    const LONG cy = (r.top + r.bottom) / 2;
-    const POINT handles[8] = {
-        {r.left, r.top}, {cx, r.top}, {r.right, r.top}, {r.right, cy},
-        {r.right, r.bottom}, {cx, r.bottom}, {r.left, r.bottom}, {r.left, cy},
-    };
-    const DragMode modes[8] = {
-        DragMode::ResizeTopLeft,
-        DragMode::ResizeTop,
-        DragMode::ResizeTopRight,
-        DragMode::ResizeRight,
-        DragMode::ResizeBottomRight,
-        DragMode::ResizeBottom,
-        DragMode::ResizeBottomLeft,
-        DragMode::ResizeLeft,
-    };
-
-    for (int i = 0; i < 8; ++i) {
-        if (Near(point, handles[i], kHandleHitRadius)) {
-            return modes[i];
-        }
-    }
+    // 整条边可命中；窄选区按最近边判定，避免两侧热区重叠抢占。
+    const int radius = MulDiv(10, static_cast<int>(GetDpiForWindow(hwnd_)), 96);
+    if (point.x < r.left - radius || point.x > r.right + radius ||
+        point.y < r.top - radius || point.y > r.bottom + radius) return DragMode::None;
+    const bool left = std::abs(point.x - r.left) <= radius &&
+        std::abs(point.x - r.left) <= std::abs(point.x - r.right);
+    const bool right = !left && std::abs(point.x - r.right) <= radius;
+    const bool top = std::abs(point.y - r.top) <= radius &&
+        std::abs(point.y - r.top) <= std::abs(point.y - r.bottom);
+    const bool bottom = !top && std::abs(point.y - r.bottom) <= radius;
+    if (top && left) return DragMode::ResizeTopLeft;
+    if (top && right) return DragMode::ResizeTopRight;
+    if (bottom && left) return DragMode::ResizeBottomLeft;
+    if (bottom && right) return DragMode::ResizeBottomRight;
+    if (top) return DragMode::ResizeTop;
+    if (bottom) return DragMode::ResizeBottom;
+    if (left) return DragMode::ResizeLeft;
+    if (right) return DragMode::ResizeRight;
     return PtInRect(&r, point) ? DragMode::Move : DragMode::None;
 }
 
@@ -403,12 +399,17 @@ int SnipWindow::HitToolbar(POINT) const {
 }
 
 void SnipWindow::SetCursorForPoint(POINT point) {
+    int arrowPart = 0;
+    if (arrowDragPart_ || ((tool_ == Tool::Arrow || tool_ == Tool::Rectangle || tool_ == Tool::None) && HitArrow(point, &arrowPart) >= 0)) {
+        SetCursor(LoadCursorW(nullptr, (arrowDragPart_ ? arrowDragPart_ : arrowPart) == 1 ? IDC_SIZEALL : IDC_CROSS));
+        return;
+    }
     if (HitToolbar(point) >= 0) {
         SetCursor(LoadCursorW(nullptr, IDC_HAND));
         return;
     }
 
-    switch (HitSelection(point)) {
+    switch (dragging_ ? dragMode_ : HitSelection(point)) {
     case DragMode::ResizeTopLeft:
     case DragMode::ResizeBottomRight:
         SetCursor(LoadCursorW(nullptr, IDC_SIZENWSE));
@@ -858,6 +859,19 @@ void SnipWindow::PaintToolbar(HDC dc) {
 }
 
 void SnipWindow::PaintPreview(HDC dc) {
+    if (selectedArrow_ >= 0 && selectedArrow_ < static_cast<int>(arrows_.size()) &&
+        (tool_ == Tool::Arrow || tool_ == Tool::Rectangle || tool_ == Tool::None)) {
+        const auto& arrow = arrows_[selectedArrow_];
+        Gdiplus::Graphics g(dc);
+        g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+        Gdiplus::SolidBrush fill(Ink());
+        Gdiplus::Pen ring(Accent(), 2.0f);
+        for (POINT endpoint : {arrow.from, arrow.to}) {
+            Gdiplus::RectF box(static_cast<float>(endpoint.x - 4), static_cast<float>(endpoint.y - 4), 8.0f, 8.0f);
+            g.FillEllipse(&fill, box);
+            g.DrawEllipse(&ring, box);
+        }
+    }
     if (!drawing_ || (tool_ != Tool::Rectangle && tool_ != Tool::Arrow)) {
         return;
     }
@@ -885,6 +899,7 @@ void SnipWindow::Paint() {
     DeleteDC(captureDc);
 
     if (selected_) {
+        PaintArrows(frameDc);
         PaintSelection(frameDc);
         PaintPreview(frameDc);
         // Legacy toolbar disabled; editor_toolbar.cpp owns the only visible toolbar.
@@ -948,6 +963,10 @@ void SnipWindow::Paint() {
 void SnipWindow::ClearHistory() {
     DeleteBitmaps(undo_);
     DeleteBitmaps(redo_);
+    arrows_.clear();
+    arrowUndo_.clear();
+    arrowRedo_.clear();
+    selectedArrow_ = -1;
     edited_ = false;
 }
 
@@ -984,34 +1003,39 @@ void SnipWindow::UpdateSelectionDrag(POINT point) {
         return;
     }
 
+    // 保留按下位置与边线的偏移，并固定对边；越界或越过对边时不翻转、不丢失选区。
+    const LONG left = std::clamp(dragOrigin_.left + point.x - dragStart_.x, 0L, dragOrigin_.right - kMinSelection);
+    const LONG right = std::clamp(dragOrigin_.right + point.x - dragStart_.x, dragOrigin_.left + kMinSelection, static_cast<LONG>(screen_.width));
+    const LONG top = std::clamp(dragOrigin_.top + point.y - dragStart_.y, 0L, dragOrigin_.bottom - kMinSelection);
+    const LONG bottom = std::clamp(dragOrigin_.bottom + point.y - dragStart_.y, dragOrigin_.top + kMinSelection, static_cast<LONG>(screen_.height));
     switch (dragMode_) {
     case DragMode::ResizeTopLeft:
-        next.left = point.x;
-        next.top = point.y;
+        next.left = left;
+        next.top = top;
         break;
     case DragMode::ResizeTop:
-        next.top = point.y;
+        next.top = top;
         break;
     case DragMode::ResizeTopRight:
-        next.right = point.x;
-        next.top = point.y;
+        next.right = right;
+        next.top = top;
         break;
     case DragMode::ResizeRight:
-        next.right = point.x;
+        next.right = right;
         break;
     case DragMode::ResizeBottomRight:
-        next.right = point.x;
-        next.bottom = point.y;
+        next.right = right;
+        next.bottom = bottom;
         break;
     case DragMode::ResizeBottom:
-        next.bottom = point.y;
+        next.bottom = bottom;
         break;
     case DragMode::ResizeBottomLeft:
-        next.left = point.x;
-        next.bottom = point.y;
+        next.left = left;
+        next.bottom = bottom;
         break;
     case DragMode::ResizeLeft:
-        next.left = point.x;
+        next.left = left;
         break;
     default:
         break;
@@ -1028,7 +1052,7 @@ void SnipWindow::FinishSelectionDrag(POINT point) {
 
     UpdateSelectionDrag(point);
     dragging_ = false;
-    ReleaseCapture();
+    if (GetCapture() == hwnd_) ReleaseCapture();
 
     RECT r = NormalizedSelection();
     if (dragMode_ == DragMode::NewSelection &&
@@ -1100,45 +1124,65 @@ cleanup:
 }
 
 void SnipWindow::BeginEdit() {
+    ++editRevision_;
     HBITMAP snapshot = SnapshotSelection();
     if (snapshot) {
         // BitmapHistory::Trim enforces size > 6 OR bytes > 32MB on every
         // push_back, so no manual trimming is needed here.
         undo_.push_back(snapshot);
+        arrowUndo_.push_back(arrows_);
+        while (arrowUndo_.size() > undo_.size()) arrowUndo_.erase(arrowUndo_.begin());
     }
     DeleteBitmaps(redo_);
+    arrowRedo_.clear();
     edited_ = true;
 }
 
 void SnipWindow::Undo() {
+    if (drawing_ || arrowDragPart_) return;
     if (undo_.empty()) {
         return;
     }
 
     if (HBITMAP current = SnapshotSelection()) {
         redo_.push_back(current);
+        arrowRedo_.push_back(arrows_);
+        while (arrowRedo_.size() > redo_.size()) arrowRedo_.erase(arrowRedo_.begin());
     }
 
     HBITMAP previous = undo_.back();
     undo_.pop_back();
     RestoreSelection(previous);
+    if (!arrowUndo_.empty()) {
+        arrows_ = std::move(arrowUndo_.back());
+        arrowUndo_.pop_back();
+    }
+    selectedArrow_ = -1;
     DeleteObject(previous);
     edited_ = !undo_.empty() || !redo_.empty();
     InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
 void SnipWindow::Redo() {
+    if (drawing_ || arrowDragPart_) return;
     if (redo_.empty()) {
         return;
     }
 
     if (HBITMAP current = SnapshotSelection()) {
         undo_.push_back(current);
+        arrowUndo_.push_back(arrows_);
+        while (arrowUndo_.size() > undo_.size()) arrowUndo_.erase(arrowUndo_.begin());
     }
 
     HBITMAP next = redo_.back();
     redo_.pop_back();
     RestoreSelection(next);
+    if (!arrowRedo_.empty()) {
+        arrows_ = std::move(arrowRedo_.back());
+        arrowRedo_.pop_back();
+    }
+    selectedArrow_ = -1;
     DeleteObject(next);
     edited_ = true;
     InvalidateRect(hwnd_, nullptr, FALSE);
@@ -1271,6 +1315,15 @@ void SnipWindow::Finish(FinishAction action) {
         return;
     }
 
+    HDC resultDc = CreateCompatibleDC(nullptr);
+    if (!resultDc) { DeleteObject(result); return; }
+    const HGDIOBJ oldResult = SelectObject(resultDc, result);
+    const RECT bounds = NormalizedSelection();
+    SetViewportOrgEx(resultDc, -bounds.left, -bounds.top, nullptr);
+    PaintArrows(resultDc);
+    SelectObject(resultDc, oldResult);
+    DeleteDC(resultDc);
+
     auto callback = callback_;
     DestroyWindow(hwnd_);
     if (callback) {
@@ -1314,6 +1367,10 @@ LRESULT SnipWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
 
     case WM_MOUSEMOVE: {
         POINT point{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+        if (arrowDragPart_) {
+            UpdateArrowDrag(point);
+            return 0;
+        }
         if (drawing_) {
             point = ClampPoint(point, NormalizedSelection());
             if (tool_ == Tool::Pen) {
@@ -1350,7 +1407,22 @@ LRESULT SnipWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
         }
 
         const RECT r = NormalizedSelection();
-        if (tool_ != Tool::None && PtInRect(&r, point)) {
+        int arrowPart = 0;
+        const int arrow = (tool_ == Tool::Arrow || tool_ == Tool::Rectangle || tool_ == Tool::None) ? HitArrow(point, &arrowPart) : -1;
+        if (arrow >= 0) {
+            selectedArrow_ = arrow;
+            arrowDragPart_ = arrowPart;
+            arrowDragOrigin_ = arrows_[arrow];
+            arrowDragStart_ = point;
+            arrowDragChanged_ = false;
+            SetCapture(hwnd_);
+            InvalidateRect(hwnd_, nullptr, FALSE);
+            return 0;
+        }
+        selectedArrow_ = -1;
+        const DragMode hit = HitSelection(point);
+        const bool onBorder = hit != DragMode::None && hit != DragMode::Move;
+        if (!onBorder && tool_ != Tool::None && PtInRect(&r, point)) {
             drawing_ = true;
             drawStart_ = ClampPoint(point, r);
             drawCurrent_ = drawStart_;
@@ -1380,17 +1452,24 @@ LRESULT SnipWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
 
     case WM_LBUTTONUP: {
         POINT point{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+        if (arrowDragPart_) {
+            UpdateArrowDrag(point);
+            FinishArrowDrag(false);
+            return 0;
+        }
         if (drawing_) {
             point = ClampPoint(point, NormalizedSelection());
             drawCurrent_ = point;
+            drawing_ = false;
             ReleaseCapture();
 
-            if (tool_ == Tool::Rectangle || tool_ == Tool::Arrow) {
-                HDC dc = CreateCompatibleDC(nullptr);
-                const HGDIOBJ oldBitmap = SelectObject(dc, capture_);
-                DrawShape(dc, tool_, drawStart_, drawCurrent_);
-                SelectObject(dc, oldBitmap);
-                DeleteDC(dc);
+            if (tool_ == Tool::Arrow) {
+                arrows_.push_back({drawStart_, drawCurrent_, annotationColor_, detail::gArrowKind, detail::gStrokeWidth});
+                selectedArrow_ = static_cast<int>(arrows_.size()) - 1;
+            } else if (tool_ == Tool::Rectangle) {
+                arrows_.push_back({drawStart_, drawCurrent_, annotationColor_, detail::gShapeKind,
+                                  detail::gStrokeWidth, Tool::Rectangle, detail::gShapeFillMode});
+                selectedArrow_ = static_cast<int>(arrows_.size()) - 1;
             }
             drawing_ = false;
             edited_ = true;
@@ -1406,13 +1485,14 @@ LRESULT SnipWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
     case WM_LBUTTONDBLCLK: {
         POINT point{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
         const RECT r = NormalizedSelection();
-        if (selected_ && PtInRect(&r, point)) {
+        if (selected_ && tool_ == Tool::None && HitArrow(point) < 0 && PtInRect(&r, point)) {
             Finish(FinishAction::Copy);
         }
         return 0;
     }
 
     case WM_RBUTTONDOWN:
+        if (arrowDragPart_) { FinishArrowDrag(true); return 0; }
         if (tool_ != Tool::None) {
             tool_ = Tool::None;
             InvalidateRect(hwnd_, nullptr, FALSE);
@@ -1422,7 +1502,9 @@ LRESULT SnipWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
         return 0;
 
     case WM_KEYDOWN:
+        if (UiInteractionActive() && wParam != VK_ESCAPE) return 0;
         if (wParam == VK_ESCAPE) {
+            if (arrowDragPart_) { FinishArrowDrag(true); return 0; }
             if (tool_ != Tool::None) {
                 tool_ = Tool::None;
                 InvalidateRect(hwnd_, nullptr, FALSE);
@@ -1479,6 +1561,15 @@ LRESULT SnipWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
             return 0;
         }
         break;
+
+    case WM_CAPTURECHANGED:
+        if (arrowDragPart_) FinishArrowDrag(false);
+        if (dragging_) FinishSelectionDrag(dragCurrent_);
+        if (drawing_) {
+            drawing_ = false;
+            InvalidateRect(hwnd_, nullptr, FALSE);
+        }
+        return 0;
 
     case WM_NCDESTROY:
         hwnd_ = nullptr;

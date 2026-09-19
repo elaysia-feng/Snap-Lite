@@ -243,7 +243,7 @@ public:
     }
 
     bool SelectionDragActive() const {
-        return parent_ && GetCapture() == parent_ && snip_ && snip_->UiActiveTool() < 0;
+        return snip_ && snip_->UiSelectionDragActive();
     }
 
     void ApplyRoundedRegion() {
@@ -324,6 +324,7 @@ public:
         if (!snip_ || !snip_->UiHasSelection()) return false;
 
         if (message == WM_KEYDOWN) {
+            if (snip_->UiInteractionActive()) return false;
             // ESC layered: cancel current edit first; otherwise fall through so
             // the parent snip window can destroy itself.
             if (wParam == VK_ESCAPE) {
@@ -358,11 +359,11 @@ public:
         }
 
         if (message == WM_LBUTTONDBLCLK) {
-            // Text annotations handle their own DBLCLK via TextWindowProc.
-            // Clicks that reach the parent are in empty space — finish snip.
+            // 箭头和边框也由父窗口接收输入，只有选择工具下的空白处双击才完成截图。
             POINT p{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
             RECT selection = snip_->UiSelectionRect();
-            if (PtInRect(&selection, p)) {
+            if (snip_->UiActiveTool() < 0 && !snip_->UiHitArrow(p) &&
+                !snip_->UiHitSelectionBorder(p) && PtInRect(&selection, p)) {
                 FinishWithText(SnipWindow::FinishAction::Copy);
                 return true;
             }
@@ -375,7 +376,12 @@ public:
             RECT selection = snip_->UiSelectionRect();
             const int tool = snip_->UiActiveTool();
 
+            rasterPending_ = true;
+            rasterRevision_ = snip_->UiEditRevision();
+            if (snip_->UiHitSelectionBorder(p)) return false;
+
             if (tool == 4 && PtInRect(&selection, p)) {
+                rasterPending_ = false;
                 BeginCreateText(p);
                 return true;
             }
@@ -384,21 +390,22 @@ public:
                 DeselectText();
             }
 
-            if (tool >= 0 && tool <= 3 && PtInRect(&selection, p)) {
-                rasterPending_ = true;
-            }
         }
 
         return false;
     }
 
     void HandleParentAfter(UINT message) {
-        if (message == WM_LBUTTONUP && rasterPending_) {
+        if (rasterPending_ && !snip_->UiInteractionActive() &&
+            (message == WM_LBUTTONUP || message == WM_CAPTURECHANGED || message == WM_KEYDOWN)) {
             rasterPending_ = false;
-            HistoryAction action;
-            action.kind = HistoryAction::Kind::Raster;
-            undoActions_.push_back(std::move(action));
-            redoActions_.clear();
+            // 只记录引擎真正提交的编辑，选择箭头或调整选区不能占用撤销步骤。
+            if (rasterRevision_ != snip_->UiEditRevision()) {
+                HistoryAction action;
+                action.kind = HistoryAction::Kind::Raster;
+                undoActions_.push_back(std::move(action));
+                redoActions_.clear();
+            }
         }
 
         if (message == WM_PAINT || message == WM_LBUTTONDOWN || message == WM_MOUSEMOVE ||
@@ -751,8 +758,8 @@ private:
             }
         }
         switch (category_) {
-        case Category::Shape: return L"形状：选择形状、填充方式、线宽和颜色后拖动绘制";
-        case Category::Arrow: return L"箭头：支持直箭头、双向、弯曲、折线和阶梯箭头";
+        case Category::Shape: return L"形状：拖边线移动，填充形状也可拖内部；选中后拖控制点调整大小";
+        case Category::Arrow: return L"箭头：拖箭身移动，拖两端调整；Esc 取消本次拖动";
         case Category::Pen: return L"画笔：选择粗细和颜色后自由绘制";
         case Category::Mosaic: return L"马赛克：按住鼠标左键涂抹需要隐藏的区域";
         case Category::Text: return L"文字：单击创建；选中文字可改颜色/字号；双击继续编辑";
@@ -1411,6 +1418,7 @@ private:
     int hoverAction_{-1};
     int hoverSecondary_{-1};
     bool rasterPending_{false};
+    unsigned long long rasterRevision_{0};
     TextItem* selectedText_{};
     // Pending click on a text annotation. Resolved to a real drag in the
     // host's WM_MOUSEMOVE once movement exceeds kDragThreshold pixels.
@@ -1517,7 +1525,7 @@ LRESULT CALLBACK ParentSubclassProc(HWND hwnd, UINT message, WPARAM wParam, LPAR
 
     if (host->HandleParentBefore(message, wParam, lParam)) return 0;
     const LRESULT result = DefSubclassProc(hwnd, message, wParam, lParam);
-    host->HandleParentAfter(message);
+    if (IsWindow(hwnd)) host->HandleParentAfter(message);
     return result;
 }
 

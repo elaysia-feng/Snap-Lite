@@ -126,6 +126,11 @@ public:
     void UiCancel();
     HWND UiHwnd() const;
     HBITMAP UiCaptureBitmap() const;
+    bool UiInteractionActive() const;
+    bool UiSelectionDragActive() const;
+    bool UiHitSelectionBorder(POINT point) const;
+    bool UiHitArrow(POINT point) const;
+    unsigned long long UiEditRevision() const;
 
 private:
     enum class Tool {
@@ -188,6 +193,20 @@ private:
     HBITMAP SnapshotSelection() const;
     void RestoreSelection(HBITMAP snapshot);
     void DrawShape(HDC dc, Tool tool, POINT from, POINT to);
+    struct ArrowAnnotation {
+        POINT from{};
+        POINT to{};
+        COLORREF color{};
+        int kind{};
+        int width{};
+        Tool tool{Tool::Arrow};
+        int fillMode{};
+    };
+    void PaintArrows(HDC dc) const;
+    int HitArrow(POINT point, int* part = nullptr) const;
+    void UpdateArrowDrag(POINT point);
+    void FinishArrowDrag(bool cancel);
+    void EraseArrows(POINT from, POINT to);
     void DrawPenSegment(POINT from, POINT to);
     void ApplyMosaic(POINT point);
 
@@ -204,6 +223,7 @@ private:
     HWND owner_{};
     HWND hwnd_{};
     HBITMAP capture_{};
+    mutable HBITMAP arrowComposite_{};
     HDC frameDc_{};
     HBITMAP frameBitmap_{};
     HGDIOBJ frameOldBitmap_{};
@@ -228,6 +248,16 @@ private:
     POINT drawCurrent_{};
     BitmapHistory undo_;
     BitmapHistory redo_;
+    // 沿用箭头编辑状态保存全部几何标注，共享层级与历史，移动时不擦伤其他标注。
+    std::vector<ArrowAnnotation> arrows_;
+    std::vector<std::vector<ArrowAnnotation>> arrowUndo_;
+    std::vector<std::vector<ArrowAnnotation>> arrowRedo_;
+    int selectedArrow_{-1};
+    int arrowDragPart_{0}; // 1：整体，2：起点，3：终点。
+    POINT arrowDragStart_{};
+    ArrowAnnotation arrowDragOrigin_{};
+    bool arrowDragChanged_{false};
+    unsigned long long editRevision_{0};
 
     // Per-instance shape drawing state used by the themed rectangle shim.
     bool shapeDrawing_{false};

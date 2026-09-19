@@ -15,6 +15,10 @@ void SnipWindow::UiBakeTextOverlays(const std::vector<TextOverlay>& overlays) {
     }
 
     const HGDIOBJ oldBitmap = SelectObject(dc, capture_);
+    // 完成截图时先合成箭头，再写入文字，与文字子窗口位于标注上方的预览一致。
+    PaintArrows(dc);
+    arrows_.clear();
+    selectedArrow_ = -1;
     SetBkMode(dc, TRANSPARENT);
 
     const UINT dpi = hwnd_ ? GetDpiForWindow(hwnd_) : GetDpiForSystem();

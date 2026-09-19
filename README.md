@@ -8,14 +8,14 @@
 
 优先从 GitHub Releases 获取预编译版本，不需要安装 CMake、Visual Studio 或其他运行时。
 
-当前正式版：`v1.4.0`
+当前正式版：`v1.5.0`
 
 Release Assets：
 
 ```text
 SnapLite.exe                   直接运行
-SnapLite-Setup-1.4.0.exe      安装包（使用 Windows 系统 OCR）
-SnapLite-1.4.0-win-x64.zip     便携压缩包
+SnapLite-Setup-1.5.0.exe      安装包（使用 Windows 系统 OCR）
+SnapLite-1.5.0-win-x64.zip     便携压缩包
 SHA256SUMS.txt                 文件校验
 ```
 
@@ -32,6 +32,7 @@ Python、第三方 OCR worker 或模型文件。
 - 鼠标悬停自动识别窗口 / Win32 控件区域
 - 单击快速选择识别区域
 - 鼠标拖动自由选区
+- 标注前可拖动整条选区边线或四角调整大小，支持高 DPI 命中范围，拖动时固定对边
 - 多显示器虚拟桌面截图
 - Windows 11 Per-Monitor V2 高 DPI
 - 放大镜像素预览
@@ -46,6 +47,9 @@ Python、第三方 OCR worker 或模型文件。
 
 - 矩形
 - 箭头
+- 形状、箭头或选择工具下，可拖动所有几何标注：箭头、矩形、圆角矩形、圆圈、椭圆、直线、三角形、菱形和六边形；支持撤销和重做
+- 空心形状拖边线，填充形状可拖内部；选中后拖控制点调整大小，箭头可调整起点 / 终点
+- 橡皮触碰可编辑几何标注时移除整个标注
 - 画笔
 - 马赛克
 - 文字
@@ -70,6 +74,10 @@ OCR：
 - 识别结果在独立面板中保留换行，可复制选中内容或全部内容
 
 工具按钮支持 hover 说明，鼠标移到按钮上会直接显示该按钮的用途和快捷键。
+
+原生交互回归可在 CMake 配置时启用 `-DSNAPLITE_BUILD_INTERACTION_TESTS=ON`，
+构建 `SnapLiteInteractionTests` 后运行 `ctest --test-dir <构建目录> --output-on-failure`。
+测试会短暂显示真实截图窗口和工具栏，并在构建目录保存窗口截图与导出图；需在交互式 Windows 桌面运行。
 
 文字输入阶段使用透明背景，最终写入截图时只保留文字本身；文字颜色和字号均跟随工具条当前设置。
 

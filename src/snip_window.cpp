@@ -145,8 +145,8 @@ void DrawArrowHeadSmooth(
     graphics.DrawPath(&pen, &path);
 }
 
-void DrawAdvancedArrow(HDC dc, POINT from, POINT to) {
-    if (!dc) return;
+bool AdvancedArrow(HDC dc, POINT from, POINT to, const POINT* hit = nullptr, int tolerance = 10) {
+    if (!dc) return false;
 
     const int kind = std::clamp(gArrowKind, 0, 6);
     float width = static_cast<float>(std::clamp(gStrokeWidth, 1, 12));
@@ -221,6 +221,13 @@ void DrawAdvancedArrow(HDC dc, POINT from, POINT to) {
     }
 
     const Gdiplus::Color ink = AnnotationInk(gAnnotationColor);
+    if (hit) {
+        Gdiplus::Pen hitPen(ink, std::max(width, static_cast<float>(tolerance * 2)));
+        hitPen.SetLineJoin(Gdiplus::LineJoinRound);
+        // 命中使用实际曲线和折线路径，箭头尖端另加宽容范围。
+        return shaft.IsOutlineVisible(static_cast<INT>(hit->x), static_cast<INT>(hit->y), &hitPen) ||
+            std::hypot(static_cast<double>(hit->x - to.x), static_cast<double>(hit->y - to.y)) <= headSize + tolerance / 2;
+    }
     Gdiplus::Pen pen(ink, width);
     // 箭杆会延伸到箭头尖端；圆形端帽会越过尖端形成多余的小点。
     pen.SetStartCap(kind == 3 ? Gdiplus::LineCapFlat : Gdiplus::LineCapRound);
@@ -232,15 +239,15 @@ void DrawAdvancedArrow(HDC dc, POINT from, POINT to) {
     if (kind == 3) {
         DrawArrowHeadSmooth(graphics, start, end, gAnnotationColor, headSize, width, true);
     }
+    return true;
 }
 
-BOOL ThemedRectangle(snaplite::SnipWindow& owner, HDC dc, int left, int top, int right, int bottom) {
-    if (!owner.shapeDrawing_) {
-        return ::Rectangle(dc, left, top, right, bottom);
-    }
+void DrawAdvancedArrow(HDC dc, POINT from, POINT to) {
+    AdvancedArrow(dc, from, to);
+}
 
-    owner.shapeDrawing_ = false;
-    if (!dc) return FALSE;
+bool AdvancedShape(HDC dc, int left, int top, int right, int bottom, const POINT* hit = nullptr, int tolerance = 10) {
+    if (!dc) return false;
 
     const int kind = std::clamp(gShapeKind, 0, 7);
     const int fillMode = std::clamp(gShapeFillMode, 0, 2);
@@ -268,16 +275,25 @@ BOOL ThemedRectangle(snaplite::SnipWindow& owner, HDC dc, int left, int top, int
         width,
         height);
 
+    bool matched = false;
     const auto drawPath = [&](Gdiplus::GraphicsPath& path) {
+        if (hit) {
+            Gdiplus::Pen hitPen(ink, static_cast<float>(std::max(gStrokeWidth, tolerance * 2)));
+            matched = (fillMode != 0 && path.IsVisible(static_cast<INT>(hit->x), static_cast<INT>(hit->y))) ||
+                path.IsOutlineVisible(static_cast<INT>(hit->x), static_cast<INT>(hit->y), &hitPen);
+            return;
+        }
         if (fillMode != 0) graphics.FillPath(&brush, &path);
         if (fillMode != 1) graphics.DrawPath(&pen, &path);
     };
 
     switch (kind) {
-    case 0:
-        if (fillMode != 0) graphics.FillRectangle(&brush, bounds);
-        if (fillMode != 1) graphics.DrawRectangle(&pen, bounds);
+    case 0: {
+        Gdiplus::GraphicsPath path;
+        path.AddRectangle(bounds);
+        drawPath(path);
         break;
+    }
     case 1: {
         Gdiplus::GraphicsPath path;
         AddAnnotationRoundRect(path, bounds, 9.0f);
@@ -287,20 +303,24 @@ BOOL ThemedRectangle(snaplite::SnipWindow& owner, HDC dc, int left, int top, int
     case 2: {
         const float side = std::min(width, height);
         const Gdiplus::RectF circle(cx - side / 2.0f, cy - side / 2.0f, side, side);
-        if (fillMode != 0) graphics.FillEllipse(&brush, circle);
-        if (fillMode != 1) graphics.DrawEllipse(&pen, circle);
+        Gdiplus::GraphicsPath path;
+        path.AddEllipse(circle);
+        drawPath(path);
         break;
     }
-    case 3:
-        if (fillMode != 0) graphics.FillEllipse(&brush, bounds);
-        if (fillMode != 1) graphics.DrawEllipse(&pen, bounds);
+    case 3: {
+        Gdiplus::GraphicsPath path;
+        path.AddEllipse(bounds);
+        drawPath(path);
         break;
+    }
     case 4: {
         Gdiplus::GraphicsPath path;
         path.AddLine(
             Gdiplus::PointF(static_cast<float>(normalizedLeft), static_cast<float>(normalizedTop)),
             Gdiplus::PointF(static_cast<float>(normalizedRight), static_cast<float>(normalizedBottom)));
-        if (fillMode != 1) graphics.DrawPath(&pen, &path);
+        if (hit) drawPath(path);
+        else graphics.DrawPath(&pen, &path);
         break;
     }
     case 5: {
@@ -343,7 +363,13 @@ BOOL ThemedRectangle(snaplite::SnipWindow& owner, HDC dc, int left, int top, int
     }
     }
 
-    return TRUE;
+    return hit ? matched : true;
+}
+
+BOOL ThemedRectangle(snaplite::SnipWindow& owner, HDC dc, int left, int top, int right, int bottom) {
+    if (!owner.shapeDrawing_) return ::Rectangle(dc, left, top, right, bottom);
+    owner.shapeDrawing_ = false;
+    return AdvancedShape(dc, left, top, right, bottom);
 }
 
 }  // namespace snaplite::detail
@@ -431,6 +457,132 @@ private:
 
 namespace snaplite {
 
+void SnipWindow::PaintArrows(HDC dc) const {
+    const int saved = SaveDC(dc);
+    const RECT r = NormalizedSelection();
+    IntersectClipRect(dc, r.left, r.top, r.right, r.bottom);
+    const auto color = detail::gAnnotationColor;
+    const int kind = detail::gArrowKind;
+    const int width = detail::gStrokeWidth;
+    const int shapeKind = detail::gShapeKind;
+    const int fillMode = detail::gShapeFillMode;
+    for (const auto& arrow : arrows_) {
+        detail::gAnnotationColor = arrow.color;
+        detail::gArrowKind = arrow.kind;
+        detail::gStrokeWidth = arrow.width;
+        if (arrow.tool == Tool::Arrow) {
+            detail::DrawAdvancedArrow(dc, arrow.from, arrow.to);
+        } else {
+            detail::gShapeKind = arrow.kind;
+            detail::gShapeFillMode = arrow.fillMode;
+            detail::AdvancedShape(dc, arrow.from.x, arrow.from.y, arrow.to.x, arrow.to.y);
+        }
+    }
+    detail::gAnnotationColor = color;
+    detail::gArrowKind = kind;
+    detail::gStrokeWidth = width;
+    detail::gShapeKind = shapeKind;
+    detail::gShapeFillMode = fillMode;
+    RestoreDC(dc, saved);
+}
+
+int SnipWindow::HitArrow(POINT point, int* part) const {
+    const RECT r = NormalizedSelection();
+    if (!selected_ || !PtInRect(&r, point)) return -1;
+    const int radius = std::max(8, MulDiv(10, static_cast<int>(GetDpiForWindow(hwnd_)), 96));
+    HDC dc = GetDC(hwnd_);
+    if (!dc) return -1;
+    const int kind = detail::gArrowKind;
+    const int width = detail::gStrokeWidth;
+    const int shapeKind = detail::gShapeKind;
+    const int fillMode = detail::gShapeFillMode;
+    int found = -1;
+    for (int i = static_cast<int>(arrows_.size()) - 1; i >= 0; --i) {
+        const auto& arrow = arrows_[i];
+        int hitPart = 0;
+        const bool handles = arrow.tool == Tool::Arrow || selectedArrow_ == i;
+        if (handles && Near(point, arrow.to, radius)) hitPart = 3;
+        else if (handles && Near(point, arrow.from, radius)) hitPart = 2;
+        else {
+            detail::gArrowKind = arrow.kind;
+            detail::gStrokeWidth = arrow.width;
+            if (arrow.tool == Tool::Arrow) {
+                if (detail::AdvancedArrow(dc, arrow.from, arrow.to, &point, radius)) hitPart = 1;
+            } else {
+                detail::gShapeKind = arrow.kind;
+                detail::gShapeFillMode = arrow.fillMode;
+                if (detail::AdvancedShape(dc, arrow.from.x, arrow.from.y, arrow.to.x, arrow.to.y, &point, radius)) hitPart = 1;
+            }
+        }
+        if (hitPart) {
+            found = i;
+            if (part) *part = hitPart;
+            break;
+        }
+    }
+    detail::gArrowKind = kind;
+    detail::gStrokeWidth = width;
+    detail::gShapeKind = shapeKind;
+    detail::gShapeFillMode = fillMode;
+    ReleaseDC(hwnd_, dc);
+    return found;
+}
+
+void SnipWindow::UpdateArrowDrag(POINT point) {
+    if (!arrowDragPart_ || selectedArrow_ < 0) return;
+    const RECT r = NormalizedSelection();
+    ArrowAnnotation next = arrowDragOrigin_;
+    LONG dx = point.x - arrowDragStart_.x;
+    LONG dy = point.y - arrowDragStart_.y;
+    if (arrowDragPart_ == 1) {
+        dx = std::clamp(dx, r.left - std::min(next.from.x, next.to.x), r.right - 1 - std::max(next.from.x, next.to.x));
+        dy = std::clamp(dy, r.top - std::min(next.from.y, next.to.y), r.bottom - 1 - std::max(next.from.y, next.to.y));
+        next.from.x += dx; next.from.y += dy;
+        next.to.x += dx; next.to.y += dy;
+    } else {
+        POINT& endpoint = arrowDragPart_ == 2 ? next.from : next.to;
+        endpoint = ClampPoint({endpoint.x + dx, endpoint.y + dy}, r);
+    }
+    const auto& current = arrows_[selectedArrow_];
+    if (current.from.x == next.from.x && current.from.y == next.from.y &&
+        current.to.x == next.to.x && current.to.y == next.to.y) return;
+    arrowDragChanged_ = true;
+    arrows_[selectedArrow_] = next;
+    InvalidateRect(hwnd_, nullptr, FALSE);
+}
+
+void SnipWindow::FinishArrowDrag(bool cancel) {
+    if (!arrowDragPart_) return;
+    arrowDragPart_ = 0;
+    if (arrowDragChanged_ && selectedArrow_ >= 0) {
+        const ArrowAnnotation moved = arrows_[selectedArrow_];
+        arrows_[selectedArrow_] = arrowDragOrigin_;
+        const bool changed = moved.from.x != arrowDragOrigin_.from.x || moved.from.y != arrowDragOrigin_.from.y ||
+            moved.to.x != arrowDragOrigin_.to.x || moved.to.y != arrowDragOrigin_.to.y;
+        // 松开时再提交历史，取消或拖回原位不会吞掉重做记录。
+        if (!cancel && changed) {
+            BeginEdit();
+            arrows_[selectedArrow_] = moved;
+        }
+    }
+    arrowDragChanged_ = false;
+    if (GetCapture() == hwnd_) ReleaseCapture();
+    InvalidateRect(hwnd_, nullptr, FALSE);
+}
+
+void SnipWindow::EraseArrows(POINT from, POINT to) {
+    // 几何标注是可编辑对象，橡皮触碰后移除整个对象；同一次笔画仍只占一步历史。
+    const int steps = std::max(1, static_cast<int>(std::hypot(
+        static_cast<double>(to.x - from.x), static_cast<double>(to.y - from.y)) / 4));
+    for (int step = 0; step <= steps; ++step) {
+        POINT point{from.x + (to.x - from.x) * step / steps, from.y + (to.y - from.y) * step / steps};
+        for (int hit = HitArrow(point); hit >= 0; hit = HitArrow(point)) {
+            arrows_.erase(arrows_.begin() + hit);
+        }
+    }
+    selectedArrow_ = -1;
+}
+
 bool SnipWindow::UiHasSelection() const {
     detail::gAnnotationColor = annotationColor_;
     detail::gTextSizePt = textSizePt_;
@@ -512,7 +664,26 @@ void SnipWindow::UiRedo() { Redo(); }
 void SnipWindow::UiFinish(FinishAction action) { Finish(action); }
 void SnipWindow::UiCancel() { if (hwnd_) DestroyWindow(hwnd_); }
 HWND SnipWindow::UiHwnd() const { return hwnd_; }
-HBITMAP SnipWindow::UiCaptureBitmap() const { return capture_; }
+bool SnipWindow::UiInteractionActive() const { return dragging_ || drawing_ || arrowDragPart_ != 0; }
+bool SnipWindow::UiSelectionDragActive() const { return dragging_; }
+bool SnipWindow::UiHitSelectionBorder(POINT point) const {
+    const DragMode hit = HitSelection(point);
+    return hit != DragMode::None && hit != DragMode::Move;
+}
+bool SnipWindow::UiHitArrow(POINT point) const { return HitArrow(point) >= 0; }
+unsigned long long SnipWindow::UiEditRevision() const { return editRevision_; }
+HBITMAP SnipWindow::UiCaptureBitmap() const {
+    if (arrows_.empty()) return capture_;
+    if (arrowComposite_) DeleteObject(arrowComposite_);
+    arrowComposite_ = CloneBitmap(capture_);
+    HDC dc = arrowComposite_ ? CreateCompatibleDC(nullptr) : nullptr;
+    if (!dc) return capture_;
+    const HGDIOBJ old = SelectObject(dc, arrowComposite_);
+    PaintArrows(dc);
+    SelectObject(dc, old);
+    DeleteDC(dc);
+    return arrowComposite_;
+}
 
 HDC SnipWindow::AcquireFrameBuffer(HDC reference) {
     if (frameDc_ && frameBitmap_) {
