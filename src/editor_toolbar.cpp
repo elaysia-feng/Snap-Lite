@@ -346,6 +346,16 @@ public:
                 DeleteText(selectedText_);
                 return true;
             }
+            const auto revision = snip_->UiEditRevision();
+            if (!selectedText_ && snip_->UiHandleAnnotationKey(wParam)) {
+                if (revision != snip_->UiEditRevision()) {
+                    HistoryAction action;
+                    action.kind = HistoryAction::Kind::Raster;
+                    undoActions_.push_back(std::move(action));
+                    redoActions_.clear();
+                }
+                return true;
+            }
             if (wParam == VK_RETURN) {
                 // If a text edit is active, Enter must insert a newline into
                 // the multiline EDIT, not finish the snip. Click-outside or
@@ -386,7 +396,7 @@ public:
                 return true;
             }
 
-            if (tool < 0) {
+            if (tool < 0 || snip_->UiHitArrow(p)) {
                 DeselectText();
             }
 
@@ -758,12 +768,12 @@ private:
             }
         }
         switch (category_) {
-        case Category::Shape: return L"形状：拖边线移动，填充形状也可拖内部；选中后拖控制点调整大小";
-        case Category::Arrow: return L"箭头：拖箭身移动，拖两端调整；Esc 取消本次拖动";
+        case Category::Shape: return L"形状：拖边线移动、拖控制点缩放；方向键微调，Shift 加速，Delete 删除";
+        case Category::Arrow: return L"箭头：拖箭身移动、拖两端调整；方向键微调，Delete 删除，Esc 取消拖动";
         case Category::Pen: return L"画笔：选择粗细和颜色后自由绘制";
         case Category::Mosaic: return L"马赛克：按住鼠标左键涂抹需要隐藏的区域";
         case Category::Text: return L"文字：单击创建；选中文字可改颜色/字号；双击继续编辑";
-        default: return selectedText_ ? L"已选中文字：拖动移动，双击编辑，Delete 删除" : L"选择：拖动截图选区；单击文字对象可选中并移动";
+        default: return selectedText_ ? L"已选中文字：拖动移动，双击编辑，Delete 删除" : L"选中标注：拖动移动，方向键微调，Shift 加速，Delete 删除";
         }
     }
 

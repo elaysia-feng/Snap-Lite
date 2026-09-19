@@ -672,14 +672,53 @@ bool SnipWindow::UiHitSelectionBorder(POINT point) const {
 }
 bool SnipWindow::UiHitArrow(POINT point) const { return HitArrow(point) >= 0; }
 unsigned long long SnipWindow::UiEditRevision() const { return editRevision_; }
+bool SnipWindow::UiHandleAnnotationKey(WPARAM key) {
+    if (UiInteractionActive() || selectedArrow_ < 0 || selectedArrow_ >= static_cast<int>(arrows_.size()) ||
+        (tool_ != Tool::None && tool_ != Tool::Arrow && tool_ != Tool::Rectangle) ||
+        (GetKeyState(VK_CONTROL) & 0x8000) || (GetKeyState(VK_MENU) & 0x8000)) return false;
+    if (key == VK_DELETE) {
+        BeginEdit();
+        arrows_.erase(arrows_.begin() + selectedArrow_);
+        selectedArrow_ = -1;
+        InvalidateRect(hwnd_, nullptr, FALSE);
+        return true;
+    }
+    if (key != VK_LEFT && key != VK_RIGHT && key != VK_UP && key != VK_DOWN) return false;
+    const LONG step = (GetKeyState(VK_SHIFT) & 0x8000) ? 10 : 1;
+    const RECT r = NormalizedSelection();
+    ArrowAnnotation next = arrows_[selectedArrow_];
+    LONG dx = key == VK_LEFT ? -step : key == VK_RIGHT ? step : 0;
+    LONG dy = key == VK_UP ? -step : key == VK_DOWN ? step : 0;
+    dx = std::clamp(dx, r.left - std::min(next.from.x, next.to.x), r.right - 1 - std::max(next.from.x, next.to.x));
+    dy = std::clamp(dy, r.top - std::min(next.from.y, next.to.y), r.bottom - 1 - std::max(next.from.y, next.to.y));
+    // 边缘处无实际移动时不增加历史，也不清空重做。
+    if (dx || dy) {
+        BeginEdit();
+        next.from.x += dx; next.from.y += dy;
+        next.to.x += dx; next.to.y += dy;
+        arrows_[selectedArrow_] = next;
+        InvalidateRect(hwnd_, nullptr, FALSE);
+    }
+    return true;
+}
+
 HBITMAP SnipWindow::UiCaptureBitmap() const {
-    if (arrows_.empty()) return capture_;
-    if (arrowComposite_) DeleteObject(arrowComposite_);
-    arrowComposite_ = CloneBitmap(capture_);
+    if (arrows_.empty()) {
+        if (arrowComposite_) { DeleteObject(arrowComposite_); arrowComposite_ = nullptr; }
+        return capture_;
+    }
+    // 复用整屏位图，但每次刷新像素，避免拖动或撤销后显示旧图。
+    if (!arrowComposite_) arrowComposite_ = CloneBitmap(capture_);
     HDC dc = arrowComposite_ ? CreateCompatibleDC(nullptr) : nullptr;
     if (!dc) return capture_;
+    HDC source = CreateCompatibleDC(nullptr);
+    if (!source) { DeleteDC(dc); return capture_; }
     const HGDIOBJ old = SelectObject(dc, arrowComposite_);
+    const HGDIOBJ oldSource = SelectObject(source, capture_);
+    BitBlt(dc, 0, 0, screen_.width, screen_.height, source, 0, 0, SRCCOPY);
     PaintArrows(dc);
+    SelectObject(source, oldSource);
+    DeleteDC(source);
     SelectObject(dc, old);
     DeleteDC(dc);
     return arrowComposite_;

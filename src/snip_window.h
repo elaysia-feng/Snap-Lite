@@ -131,6 +131,7 @@ public:
     bool UiHitSelectionBorder(POINT point) const;
     bool UiHitArrow(POINT point) const;
     unsigned long long UiEditRevision() const;
+    bool UiHandleAnnotationKey(WPARAM key);
 
 private:
     enum class Tool {

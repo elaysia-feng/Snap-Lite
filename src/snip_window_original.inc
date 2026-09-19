@@ -1426,7 +1426,7 @@ LRESULT SnipWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
             drawing_ = true;
             drawStart_ = ClampPoint(point, r);
             drawCurrent_ = drawStart_;
-            BeginEdit();
+            if (tool_ != Tool::Arrow && tool_ != Tool::Rectangle) BeginEdit();
             SetCapture(hwnd_);
             if (tool_ == Tool::Mosaic) {
                 ApplyMosaic(drawStart_);
@@ -1461,7 +1461,17 @@ LRESULT SnipWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
             point = ClampPoint(point, NormalizedSelection());
             drawCurrent_ = point;
             drawing_ = false;
-            ReleaseCapture();
+
+            // 几何标注只在有效笔画结束时提交，单击或轻微手抖不生成对象。
+            if (tool_ == Tool::Arrow || tool_ == Tool::Rectangle) {
+                if (std::hypot(static_cast<double>(point.x - drawStart_.x),
+                               static_cast<double>(point.y - drawStart_.y)) < 3.0) {
+                    ReleaseCapture();
+                    InvalidateRect(hwnd_, nullptr, FALSE);
+                    return 0;
+                }
+                BeginEdit();
+            }
 
             if (tool_ == Tool::Arrow) {
                 arrows_.push_back({drawStart_, drawCurrent_, annotationColor_, detail::gArrowKind, detail::gStrokeWidth});
@@ -1473,6 +1483,7 @@ LRESULT SnipWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
             }
             drawing_ = false;
             edited_ = true;
+            ReleaseCapture();
             InvalidateRect(hwnd_, nullptr, FALSE);
             return 0;
         }
@@ -1505,6 +1516,12 @@ LRESULT SnipWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
         if (UiInteractionActive() && wParam != VK_ESCAPE) return 0;
         if (wParam == VK_ESCAPE) {
             if (arrowDragPart_) { FinishArrowDrag(true); return 0; }
+            if (drawing_ && (tool_ == Tool::Arrow || tool_ == Tool::Rectangle)) {
+                drawing_ = false;
+                if (GetCapture() == hwnd_) ReleaseCapture();
+                InvalidateRect(hwnd_, nullptr, FALSE);
+                return 0;
+            }
             if (tool_ != Tool::None) {
                 tool_ = Tool::None;
                 InvalidateRect(hwnd_, nullptr, FALSE);
@@ -1530,6 +1547,7 @@ LRESULT SnipWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
             return 0;
         }
         if (selected_) {
+            if (UiHandleAnnotationKey(wParam)) return 0;
             if (wParam == 'R') tool_ = Tool::Rectangle;
             if (wParam == 'A') tool_ = Tool::Arrow;
             if (wParam == 'P') tool_ = Tool::Pen;
