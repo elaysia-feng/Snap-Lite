@@ -112,5 +112,5 @@ python scripts/verify_generated_sources.py build
 发布版本号解析（纯函数，可单测）：
 
 ```powershell
-python scripts/resolve_release_version.py --base-version 1.7.0
+python scripts/resolve_release_version.py --base-version 1.7.1
 ```
