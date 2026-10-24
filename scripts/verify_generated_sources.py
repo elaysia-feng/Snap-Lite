@@ -146,12 +146,20 @@ def strip_comments(text: str) -> str:
     "必需内容"；注释里提到一句不该出现的旧映射，又会让"禁用内容"永远
     失败——而那句旧映射正是仓库模板当前的样子，将来谁在模板里补一句
     历史注释，构建就会从此一直红。
+
+    Args:
+        text: C++ 源码文本。
+
+    Returns:
+        注释字符被空格替换、长度和换行位置不变的文本。
     """
+    # 1. 保留可变副本，后续替换不会改变字符偏移和行号。
     out = list(text)
     index = 0
     length = len(text)
     while index < length:
         ch = text[index]
+        # 2. 跳过字符串和字符字面量，避免误删其中的注释符号。
         if ch == '"':
             index += 1
             while index < length:
@@ -174,6 +182,7 @@ def strip_comments(text: str) -> str:
                     break
                 index += 1
             continue
+        # 3. 将行注释与块注释替为空格，保留换行位置。
         if text.startswith("//", index):
             while index < length and text[index] != "\n":
                 out[index] = " "
@@ -193,6 +202,7 @@ def strip_comments(text: str) -> str:
                 index += 2
             continue
         index += 1
+    # 4. 返回保留原始位置关系的文本。
     return "".join(out)
 
 
@@ -202,12 +212,21 @@ def contains_token(text: str, needle: str) -> bool:
     只做子串匹配时，"PrimaryAction::Ocr" 会被改名成 "PrimaryAction::OcrX"
     蒙混过关——产物内容已经变了，校验却仍然通过。这里要求片段前后都不能
     再跟标识符字符（前缀也要管：枚举类改名成 XPrimaryAction 同样该被拦下）。
+
+    Args:
+        text: 待检查的源码文本。
+        needle: 必须以完整标识符边界出现的片段。
+
+    Returns:
+        片段存在且前后不是标识符字符时返回 True。
     """
+    # 1. 搜索候选片段；没有候选时结束。
     start = 0
     while True:
         index = text.find(needle, start)
         if index < 0:
             return False
+        # 2. 仅接受前后都不与标识符字符相连的候选片段。
         head_ok = index == 0 or text[index - 1] not in _IDENT_CHARS
         end = index + len(needle)
         tail_ok = end >= len(text) or text[end] not in _IDENT_CHARS
@@ -217,6 +236,24 @@ def contains_token(text: str, needle: str) -> bool:
 
 
 def main(argv: list[str]) -> int:
+    """校验构建目录中的生成源码。
+
+    Args:
+        argv: 命令行参数；第二项可指定构建目录。
+
+    Returns:
+        0 表示校验通过，1 表示内容不匹配，2 表示构建目录不存在。
+    """
+    # 1. 避免 Windows runner 的 CP1252 控制台无法输出中文校验信息。
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            try:
+                reconfigure(encoding="utf-8", errors="backslashreplace")
+            except (OSError, ValueError):
+                pass
+
+    # 2. 解析构建目录；目录无效时不继续检查。
     if len(argv) > 1:
         build_dir = Path(argv[1]).resolve()
     else:
@@ -227,6 +264,7 @@ def main(argv: list[str]) -> int:
         print(f"[verify] 找不到构建目录：{build_dir}", file=sys.stderr)
         return 2
 
+    # 3. 检查生成源码中的结构约束及其与仓库模板的一致性。
     failures: list[str] = []
     checked = 0
     for relative, required, forbidden in CHECKS:
@@ -262,6 +300,7 @@ def main(argv: list[str]) -> int:
                 "两份同名头文件会作为不同定义进入同一二进制（Tool 枚举可能错位）"
             )
 
+    # 4. 输出校验结果，并用退出码通知构建流程。
     if failures:
         print("[verify] 生成产物内容校验失败：", file=sys.stderr)
         for failure in failures:
