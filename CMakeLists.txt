@@ -35,7 +35,6 @@ set(SNAP_LITE_GENERATION_INPUTS
     src/edit_repaint_fix.h
     src/window_bounds_fix.h
     resources/SnapLite.ico
-    resources/k_on_five_chibi.png
     resources/toolbar_function_mascots.png
 )
 foreach(snaplite_generation_input IN LISTS SNAP_LITE_GENERATION_INPUTS)
@@ -155,6 +154,7 @@ add_executable(SnapLite WIN32
     src/delay_overlay.cpp
     src/update_checker.cpp
     src/update_notes_dialog.cpp
+    src/update_status_toast.cpp
     src/ocr_v2.cpp
     ${SNAPLITE_OCR_PANEL_SOURCE}
     ${SNAPLITE_PIN_SOURCE}

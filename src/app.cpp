@@ -9,6 +9,7 @@
 #include "snip_window.h"
 #include "update_version.h"
 #include "update_notes_dialog.h"
+#include "update_status_toast.h"
 
 #include <commdlg.h>
 #include <shellapi.h>
@@ -495,6 +496,7 @@ void App::Shutdown() {
     if (updateWorker_.joinable()) {
         updateWorker_.join();
     }
+    CloseUpdateStatusToast(hwnd_);
 
     // 退出时先把倒计时覆盖层收掉：它是顶层窗口，不销毁的话会在进程真正
     // 结束前留在屏幕上闪一下。
@@ -603,8 +605,20 @@ void App::ShowShortcutHelp() {
 }
 
 void App::StartUpdateCheck(bool manual) {
-    if (updateCheckInProgress_ || updateDownloadInProgress_) {
-        if (manual) ShowNotice(L"更新检查或下载正在进行");
+    if (updateCheckInProgress_) {
+        if (manual) {
+            updateCheckWasManual_ = true;
+            ShowUpdateStatusToast(
+                hwnd_, UpdateStatusToastState::Checking, SNAP_LITE_VERSION);
+        }
+        return;
+    }
+    if (updateDownloadInProgress_) {
+        if (manual) {
+            ShowUpdateStatusToast(
+                hwnd_, UpdateStatusToastState::Downloading, SNAP_LITE_VERSION,
+                updateAvailableVersion_.value_or(L""));
+        }
         return;
     }
     if (!manual && !IsUpdateCheckDueToday()) return;
@@ -628,19 +642,29 @@ void App::StartUpdateCheck(bool manual) {
         });
     } catch (...) {
         updateCheckInProgress_ = false;
-        if (manual) ShowNotice(L"无法启动更新检查");
+        if (manual) {
+            ShowUpdateStatusToast(
+                hwnd_, UpdateStatusToastState::CheckFailed, SNAP_LITE_VERSION,
+                {}, L"无法启动更新检查，请稍后重试。");
+        }
         return;
     }
-    if (manual) ShowNotice(L"正在检查 GitHub 上的最新版本");
+    if (manual) {
+        ShowUpdateStatusToast(
+            hwnd_, UpdateStatusToastState::Checking, SNAP_LITE_VERSION);
+    }
 }
 
 void App::StartUpdateDownload() {
     if (updateDownloadInProgress_) {
-        ShowNotice(L"更新安装包正在下载");
+        ShowUpdateStatusToast(
+            hwnd_, UpdateStatusToastState::Downloading, SNAP_LITE_VERSION,
+            updateAvailableVersion_.value_or(L""));
         return;
     }
     if (updateCheckInProgress_) {
-        ShowNotice(L"正在检查更新，请稍后重试");
+        ShowUpdateStatusToast(
+            hwnd_, UpdateStatusToastState::Checking, SNAP_LITE_VERSION);
         return;
     }
     if (!updateAvailableVersion_) {
@@ -652,7 +676,8 @@ void App::StartUpdateDownload() {
     updateDownloadInProgress_ = true;
     const std::wstring version = *updateAvailableVersion_;
     const HWND target = hwnd_;
-    ShowNotice(L"正在下载并校验更新安装包");
+    ShowUpdateStatusToast(
+        hwnd_, UpdateStatusToastState::Downloading, SNAP_LITE_VERSION, version);
     try {
         updateWorker_ = std::thread([this, target, version] {
             UpdateDownloadResult result = DownloadVerifiedUpdate(version);
@@ -667,7 +692,9 @@ void App::StartUpdateDownload() {
         });
     } catch (...) {
         updateDownloadInProgress_ = false;
-        ShowNotice(L"无法启动更新下载");
+        ShowUpdateStatusToast(
+            hwnd_, UpdateStatusToastState::DownloadFailed, SNAP_LITE_VERSION,
+            version, L"无法启动更新下载，请稍后重试。");
     }
 }
 
@@ -729,11 +756,14 @@ void App::ShowTrayMenu() {
     AppendMenuW(menu, MF_STRING, CMD_OPEN_FOLDER, L"打开截图目录");
     AppendMenuW(menu, MF_STRING, CMD_SET_FOLDER, L"设置默认保存目录...");
     AppendMenuW(menu, MF_STRING, CMD_SHORTCUTS, L"快捷键说明...");
-    std::wstring updateLabel = L"自动更新";
-    if (updateAvailableVersion_) {
-        updateLabel += L"\t●";
-    } else if (updateCheckInProgress_) {
-        updateLabel += L"\t检查中";
+    std::wstring updateLabel = L"自动更新\t当前版本 v";
+    updateLabel += SNAP_LITE_VERSION;
+    if (updateCheckInProgress_) {
+        updateLabel += L" · 检查中";
+    } else if (updateDownloadInProgress_) {
+        updateLabel += L" · 下载中";
+    } else if (updateAvailableVersion_) {
+        updateLabel += L" · 有新版本";
     }
     AppendMenuW(menu, MF_STRING, CMD_AUTO_UPDATE, updateLabel.c_str());
     AppendMenuW(
@@ -966,11 +996,7 @@ LRESULT App::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
             ShowShortcutHelp();
             return 0;
         case CMD_AUTO_UPDATE:
-            if (updateAvailableVersion_) {
-                StartUpdateDownload();
-            } else {
-                StartUpdateCheck(true);
-            }
+            StartUpdateCheck(true);
             return 0;
         case CMD_DELAY_3:
             StartSnipDelayed(3);
@@ -988,6 +1014,14 @@ LRESULT App::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
             break;
         }
         break;
+
+    case WM_SNAPLITE_UPDATE_TOAST_ACTION:
+        if (static_cast<UpdateStatusToastAction>(wParam) == UpdateStatusToastAction::Check) {
+            StartUpdateCheck(true);
+        } else if (static_cast<UpdateStatusToastAction>(wParam) == UpdateStatusToastAction::Download) {
+            StartUpdateDownload();
+        }
+        return 0;
 
     case WM_SNAPLITE_SHOW_EXISTING:
         // 用户第二次启动了本程序：明确告诉他已经在运行，而不是静默退出。
@@ -1008,22 +1042,41 @@ LRESULT App::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
         }
         updateCheckInProgress_ = false;
         if (!result || !result->succeeded) {
-            if (updateCheckWasManual_) ShowNotice(L"检查更新失败，请稍后重试并确认网络可访问 GitHub");
+            if (updateCheckWasManual_) {
+                ShowUpdateStatusToast(
+                    hwnd_, UpdateStatusToastState::CheckFailed, SNAP_LITE_VERSION,
+                    {}, L"连接 GitHub 失败。请确认网络后重新检查。");
+            }
             return 0;
         }
         CacheLatestVersion(result->latestVersion);
         const auto comparison = CompareReleaseVersions(result->latestVersion, SNAP_LITE_VERSION);
         if (!comparison) {
-            if (updateCheckWasManual_) ShowNotice(L"GitHub 返回的版本号无法识别");
+            if (updateCheckWasManual_) {
+                ShowUpdateStatusToast(
+                    hwnd_, UpdateStatusToastState::CheckFailed, SNAP_LITE_VERSION,
+                    {}, L"GitHub 返回的版本号无法识别。");
+            }
             return 0;
         }
         if (*comparison > 0) {
             updateAvailableVersion_ = result->latestVersion;
-            const std::wstring notice = L"发现新版本 v" + result->latestVersion + L"，右键托盘图标可自动更新";
-            ShowNotice(notice.c_str());
+            if (updateCheckWasManual_) {
+                ShowUpdateStatusToast(
+                    hwnd_, UpdateStatusToastState::Available, SNAP_LITE_VERSION,
+                    result->latestVersion);
+            } else {
+                const std::wstring notice =
+                    L"发现新版本 v" + result->latestVersion + L"，右键托盘图标可自动更新";
+                ShowNotice(notice.c_str());
+            }
         } else {
             updateAvailableVersion_.reset();
-            if (updateCheckWasManual_) ShowNotice(L"当前已是最新版本");
+            if (updateCheckWasManual_) {
+                ShowUpdateStatusToast(
+                    hwnd_, UpdateStatusToastState::UpToDate, SNAP_LITE_VERSION,
+                    result->latestVersion);
+            }
         }
         return 0;
     }
@@ -1038,11 +1091,16 @@ LRESULT App::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
         }
         updateDownloadInProgress_ = false;
         if (!result || !result->succeeded) {
-            if (result && !result->error.empty()) ShowNotice(result->error.c_str());
-            else ShowNotice(L"更新包准备失败");
+            const std::wstring error = result && !result->error.empty()
+                ? result->error
+                : L"更新包准备失败，请稍后重试。";
+            ShowUpdateStatusToast(
+                hwnd_, UpdateStatusToastState::DownloadFailed, SNAP_LITE_VERSION,
+                updateAvailableVersion_.value_or(L""), error);
             return 0;
         }
 
+        CloseUpdateStatusToast(hwnd_);
         const UpdateNotesDialogChoice choice = ShowUpdateNotesDialog(
             hwnd_, *updateAvailableVersion_, result->releaseNotes);
         if (choice == UpdateNotesDialogChoice::Install &&

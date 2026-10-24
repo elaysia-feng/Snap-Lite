@@ -1,15 +1,9 @@
 #include "ocr_result_panel.h"
 
 #include "ocr.h"
-#include "resource.h"
 
 #include <algorithm>
 #include <commctrl.h>
-#include <cstring>
-#include <objidl.h>
-#include <propidl.h>
-#include <gdiplus.h>
-#include <memory>
 #include <string>
 
 namespace snaplite {
@@ -18,11 +12,10 @@ namespace {
 constexpr wchar_t kPanelClass[] = L"SnapLiteOcrResultPanelV2";
 constexpr int kButtonCopySelected = 101;
 constexpr int kButtonCopyAll = 102;
-constexpr int kButtonCloseBottom = 103;
 constexpr int kButtonCloseTop = 104;
 constexpr int kPanelWidth = 430;
 constexpr int kPanelHeight = 380;
-constexpr int kHeaderHeight = 72;
+constexpr int kHeaderHeight = 76;
 constexpr int kCornerRadius = 18;
 
 constexpr COLORREF kPanelBg = RGB(255, 248, 250);
@@ -39,14 +32,11 @@ struct PanelState {
     HWND edit{};
     HWND copySelected{};
     HWND copyAll{};
-    HWND closeBottom{};
     HWND closeTop{};
     HFONT titleFont{};
     HFONT bodyFont{};
     HFONT smallFont{};
     HBRUSH editBrush{};
-    IStream* stickerStream{};
-    std::unique_ptr<Gdiplus::Bitmap> sticker;
     std::wstring text;
     RECT editFrame{};
 };
@@ -66,48 +56,6 @@ void ApplyFont(HWND control, HFONT font) {
     if (control && font) {
         SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
     }
-}
-
-bool LoadPanelSticker(PanelState* state) {
-    if (!state) return false;
-
-    const HRSRC resource = FindResourceW(
-        GetModuleHandleW(nullptr),
-        MAKEINTRESOURCEW(IDR_OCR_PANEL_KON_STICKER),
-        MAKEINTRESOURCEW(10));
-    if (!resource) return false;
-
-    const DWORD size = SizeofResource(GetModuleHandleW(nullptr), resource);
-    const HGLOBAL loaded = LoadResource(GetModuleHandleW(nullptr), resource);
-    const void* source = loaded ? LockResource(loaded) : nullptr;
-    if (!source || size == 0) return false;
-
-    const HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, size);
-    if (!memory) return false;
-    void* destination = GlobalLock(memory);
-    if (!destination) {
-        GlobalFree(memory);
-        return false;
-    }
-    std::memcpy(destination, source, size);
-    GlobalUnlock(memory);
-
-    IStream* stream = nullptr;
-    if (FAILED(CreateStreamOnHGlobal(memory, TRUE, &stream))) {
-        GlobalFree(memory);
-        return false;
-    }
-
-    auto bitmap = std::make_unique<Gdiplus::Bitmap>(stream, FALSE);
-    if (!bitmap || bitmap->GetLastStatus() != Gdiplus::Ok) {
-        bitmap.reset();
-        stream->Release();
-        return false;
-    }
-
-    state->stickerStream = stream;
-    state->sticker = std::move(bitmap);
-    return true;
 }
 
 // 面板是弹出窗口，键盘焦点落在只读文本框里。键盘消息不会自动回到父窗口，
@@ -196,12 +144,12 @@ void LayoutPanel(HWND hwnd, PanelState* state) {
     GetClientRect(hwnd, &client);
     const int width = std::max(320, static_cast<int>(client.right - client.left));
     const int height = std::max(260, static_cast<int>(client.bottom - client.top));
-    const int pad = 16;
-    const int buttonHeight = 34;
-    const int buttonGap = 8;
-    const int buttonWidth = 96;
+    const int pad = 18;
+    const int buttonHeight = 36;
+    const int buttonGap = 10;
+    const int buttonWidth = 112;
 
-    MoveWindow(state->closeTop, width - 48, 12, 32, 32, TRUE);
+    MoveWindow(state->closeTop, width - 50, 12, 32, 32, TRUE);
 
     const int buttonsTop = height - pad - buttonHeight;
     const int editTop = kHeaderHeight;
@@ -218,8 +166,6 @@ void LayoutPanel(HWND hwnd, PanelState* state) {
     SetEditFormattingRect(state->edit);
 
     int x = width - pad - buttonWidth;
-    MoveWindow(state->closeBottom, x, buttonsTop, buttonWidth, buttonHeight, TRUE);
-    x -= buttonGap + buttonWidth;
     MoveWindow(state->copyAll, x, buttonsTop, buttonWidth, buttonHeight, TRUE);
     x -= buttonGap + buttonWidth;
     MoveWindow(state->copySelected, x, buttonsTop, buttonWidth, buttonHeight, TRUE);
@@ -254,14 +200,14 @@ void DrawOwnerButton(const DRAWITEMSTRUCT* draw) {
     COLORREF border = kBorder;
     COLORREF textColor = kText;
 
-    if (draw->CtlID == kButtonCopySelected) {
-        fill = pressed ? kAccentPressed : kAccent;
+    if (draw->CtlID == kButtonCopyAll) {
+        fill = pressed ? ui::kAccentActionPressed : ui::kAccentAction;
         border = fill;
         textColor = RGB(255, 255, 255);
     } else if (draw->CtlID == kButtonCloseTop) {
         fill = pressed ? RGB(245, 224, 230) : kPanelBg;
         border = fill;
-        textColor = kMutedText;
+        textColor = ui::kTextSecondary;
     } else if (pressed) {
         fill = kSecondaryPressed;
     }
@@ -300,56 +246,36 @@ void PaintPanel(HWND hwnd, PanelState* state) {
     const RECT dotRect{18, 18, 28, 28};
     ui::FillRoundRect(dc, dotRect, 4, kAccent, kAccent);
 
-    const int stickerRight = static_cast<int>(client.right) - 54;
-    const int stickerLeft = stickerRight - 128;
-    if (state && state->sticker) {
-        Gdiplus::Graphics graphics(dc);
-        if (graphics.GetLastStatus() == Gdiplus::Ok) {
-            graphics.SetCompositingMode(Gdiplus::CompositingModeSourceOver);
-            graphics.SetCompositingQuality(Gdiplus::CompositingQualityHighQuality);
-            graphics.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
-            graphics.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHighQuality);
-            graphics.DrawImage(
-                state->sticker.get(),
-                Gdiplus::Rect(stickerLeft, 1, 128, 48),
-                0,
-                0,
-                static_cast<INT>(state->sticker->GetWidth()),
-                static_cast<INT>(state->sticker->GetHeight()),
-                Gdiplus::UnitPixel);
-        }
-    }
-
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, kText);
     if (state && state->titleFont) SelectObject(dc, state->titleFont);
-    RECT titleRect{36, 10, stickerLeft - 12, 38};
-    DrawTextW(dc, L"提取文字", -1, &titleRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    RECT titleRect{36, 10, client.right - 58, 38};
+    DrawTextW(dc, L"文字识别结果", -1, &titleRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
-    SetTextColor(dc, kMutedText);
+    SetTextColor(dc, ui::kTextSecondary);
     if (state && state->smallFont) SelectObject(dc, state->smallFont);
     const int countBadgeRight = static_cast<int>(client.right) - 18;
-    const int countBadgeLeft = countBadgeRight - 62;
-    RECT subtitleRect{18, 49, countBadgeLeft - 8, 69};
-    const std::wstring subtitle = L"保留换行 · 拖选文字后 Ctrl+C";
+    const int countBadgeLeft = countBadgeRight - 68;
+    RECT subtitleRect{18, 46, countBadgeLeft - 8, 68};
+    const std::wstring subtitle = L"保留换行 · 可拖选并复制";
     DrawTextW(dc, subtitle.c_str(), -1, &subtitleRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 
     if (state) {
-        RECT countBadge{countBadgeLeft, 49, countBadgeRight, 69};
+        RECT countBadge{countBadgeLeft, 46, countBadgeRight, 68};
         DrawRoundRectFill(dc, countBadge, 10, RGB(255, 238, 243), kBorder);
-        SetTextColor(dc, kMutedText);
+        SetTextColor(dc, ui::kTextSecondary);
         const std::wstring lineCount = std::to_wstring(CountVisualLines(state->text)) + L" 行";
         DrawTextW(dc, lineCount.c_str(), -1, &countBadge, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     }
 
     HPEN divider = CreatePen(PS_SOLID, 1, RGB(246, 226, 231));
     if (divider) {
-        const HGDIOBJ oldPen = SelectObject(dc, divider);
-        const HGDIOBJ oldBrush = SelectObject(dc, GetStockObject(NULL_BRUSH));
+        const HGDIOBJ dividerPreviousPen = SelectObject(dc, divider);
+        const HGDIOBJ dividerPreviousBrush = SelectObject(dc, GetStockObject(NULL_BRUSH));
         MoveToEx(dc, 16, kHeaderHeight - 1, nullptr);
         LineTo(dc, client.right - 16, kHeaderHeight - 1);
-        SelectObject(dc, oldBrush);
-        SelectObject(dc, oldPen);
+        SelectObject(dc, dividerPreviousBrush);
+        SelectObject(dc, dividerPreviousPen);
         DeleteObject(divider);
     }
 
@@ -375,7 +301,7 @@ LRESULT CALLBACK PanelProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
 
         const UINT dpi = GetDpiForWindow(hwnd);
         state->titleFont = CreateFontW(
-            -MulDiv(13, static_cast<int>(dpi), 72), 0, 0, 0, FW_SEMIBOLD,
+            -MulDiv(14, static_cast<int>(dpi), 72), 0, 0, 0, FW_SEMIBOLD,
             FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_TT_PRECIS,
             CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
             DEFAULT_PITCH | FF_DONTCARE, L"Microsoft YaHei UI");
@@ -390,7 +316,6 @@ LRESULT CALLBACK PanelProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
             CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
             DEFAULT_PITCH | FF_DONTCARE, L"Microsoft YaHei UI");
         state->editBrush = CreateSolidBrush(kCardBg);
-        LoadPanelSticker(state);
 
         state->edit = CreateWindowExW(
             0,
@@ -418,13 +343,6 @@ LRESULT CALLBACK PanelProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
             reinterpret_cast<HMENU>(static_cast<INT_PTR>(kButtonCopyAll)),
             GetModuleHandleW(nullptr), nullptr);
 
-        state->closeBottom = CreateWindowExW(
-            0, L"BUTTON", L"关闭",
-            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
-            0, 0, 0, 0, hwnd,
-            reinterpret_cast<HMENU>(static_cast<INT_PTR>(kButtonCloseBottom)),
-            GetModuleHandleW(nullptr), nullptr);
-
         state->closeTop = CreateWindowExW(
             0, L"BUTTON", L"×",
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
@@ -435,10 +353,9 @@ LRESULT CALLBACK PanelProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
         ApplyFont(state->edit, state->bodyFont);
         ApplyFont(state->copySelected, state->bodyFont);
         ApplyFont(state->copyAll, state->bodyFont);
-        ApplyFont(state->closeBottom, state->bodyFont);
         ApplyFont(state->closeTop, state->titleFont);
 
-        SendMessageW(state->edit, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELPARAM(10, 10));
+        SendMessageW(state->edit, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELPARAM(12, 12));
         SetWindowSubclass(state->edit, PanelEditSubclassProc, kPanelEditSubclassId, 0);
         LayoutPanel(hwnd, state);
         SetFocus(state->edit);
@@ -506,7 +423,6 @@ LRESULT CALLBACK PanelProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
             }
             SetFocus(state->edit);
             return 0;
-        case kButtonCloseBottom:
         case kButtonCloseTop:
             DestroyWindow(hwnd);
             return 0;
@@ -526,11 +442,6 @@ LRESULT CALLBACK PanelProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
     case WM_NCDESTROY:
         if (g_activePanel == hwnd) g_activePanel = nullptr;
         if (state) {
-            state->sticker.reset();
-            if (state->stickerStream) {
-                state->stickerStream->Release();
-                state->stickerStream = nullptr;
-            }
             if (state->titleFont) DeleteObject(state->titleFont);
             if (state->bodyFont) DeleteObject(state->bodyFont);
             if (state->smallFont) DeleteObject(state->smallFont);
@@ -619,7 +530,7 @@ void ShowOcrResultPanel(HWND owner, const RECT& selectionClientRect, const std::
     HWND panel = CreateWindowExW(
         WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
         kPanelClass,
-        L"Snap-Lite · 提取文字",
+        L"Snap-Lite · 文字识别结果",
         WS_POPUP,
         bounds.left,
         bounds.top,

@@ -4571,7 +4571,7 @@ class ReleaseVersionTest(unittest.TestCase):
         project(...) 在文件第 2 行。
         """
         cmake = (REPO_ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
-        self.assertEqual(self.resolver.parse_base_version(cmake), "1.7.1")
+        self.assertEqual(self.resolver.parse_base_version(cmake), "1.7.2")
 
     def test_version_comparison_uses_components_not_prefixes(self) -> None:
         """版本比较必须按分量，不能只做字符串前缀比较。
