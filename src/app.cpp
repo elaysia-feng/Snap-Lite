@@ -8,6 +8,7 @@
 #include "resource.h"
 #include "snip_window.h"
 #include "update_version.h"
+#include "update_notes_dialog.h"
 
 #include <commdlg.h>
 #include <shellapi.h>
@@ -1042,12 +1043,17 @@ LRESULT App::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
             return 0;
         }
 
-        const std::wstring title = L"Snap-Lite v" + *updateAvailableVersion_ + L" 更新说明";
-        std::wstring details = result->releaseNotes;
-        details += L"\n\n点击“确定”启动安装程序。Windows 可能会要求管理员授权。";
-        MessageBoxW(hwnd_, details.c_str(), title.c_str(), MB_OK | MB_ICONINFORMATION);
-        if (!LaunchUpdateInstaller(result->installerPath)) {
+        const UpdateNotesDialogChoice choice = ShowUpdateNotesDialog(
+            hwnd_, *updateAvailableVersion_, result->releaseNotes);
+        if (choice == UpdateNotesDialogChoice::Install &&
+            !LaunchUpdateInstaller(result->installerPath)) {
             ShowNotice(L"无法启动更新安装程序");
+        } else if (choice != UpdateNotesDialogChoice::Install) {
+            std::error_code ignored;
+            std::filesystem::remove(result->installerPath, ignored);
+            if (choice == UpdateNotesDialogChoice::Failed) {
+                ShowNotice(L"无法显示更新说明，请重试更新");
+            }
         }
         return 0;
     }

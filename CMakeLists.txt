@@ -154,6 +154,7 @@ add_executable(SnapLite WIN32
     src/capture_settings.cpp
     src/delay_overlay.cpp
     src/update_checker.cpp
+    src/update_notes_dialog.cpp
     src/ocr_v2.cpp
     ${SNAPLITE_OCR_PANEL_SOURCE}
     ${SNAPLITE_PIN_SOURCE}
