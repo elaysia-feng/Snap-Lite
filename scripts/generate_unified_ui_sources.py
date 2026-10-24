@@ -21,7 +21,7 @@ def replace_or_keep(text: str, old: str, new: str, label: str) -> str:
 def patch_pin(source: Path, target: Path) -> None:
     text = source.read_text(encoding="utf-8")
 
-    text = replace_once(
+    text = replace_or_keep(
         text,
         '#include "capture.h"\n',
         '#include "capture.h"\n#include "ui_theme.h"\n',
@@ -34,8 +34,32 @@ def patch_pin(source: Path, target: Path) -> None:
         "pin menu dimensions",
     )
 
-    text = re.sub(
+    # 布局块用正则定位，但必须命中且只命中一次：
+    # 上游一旦重命名或重排 SliderRect/MenuRowRect，静默匹配 0 次会让贴图菜单
+    # 回退旧布局且构建全绿，这里改成响亮失败。
+    #
+    # 注意：配对正则要求 SliderRect 后面紧跟 MenuRowRect，所以"只复制一份
+    # SliderRect"这类改动仍会被配对数=1 掩盖。因此先单独断言两个函数的
+    # 出现次数各为 1。
+    for symbol in ("RECT SliderRect()", "RECT MenuRowRect(int row)"):
+        occurrences = text.count(symbol)
+        if occurrences != 1:
+            raise RuntimeError(
+                f"pin menu layout symbol {symbol!r}: expected exactly one "
+                f"occurrence, got {occurrences}"
+            )
+
+    layout_pattern = re.compile(
         r'RECT SliderRect\(\) \{.*?\n\}\n\nRECT MenuRowRect\(int row\) \{.*?\n\}',
+        re.S,
+    )
+    layout_matches = layout_pattern.findall(text)
+    if len(layout_matches) != 1:
+        raise RuntimeError(
+            "pin menu layout block: expected exactly one match, "
+            f"got {len(layout_matches)}"
+        )
+    text = layout_pattern.sub(
         '''RECT SliderRect() {
     return {28, 91, kMenuWidth - 28, 109};
 }
@@ -50,7 +74,6 @@ RECT MenuRowRect(int row) {
 }''',
         text,
         count=1,
-        flags=re.S,
     )
 
     paint_start = text.find('void PaintPinMenu(HWND hwnd, PinMenuState* state) {')
@@ -142,10 +165,18 @@ RECT MenuRowRect(int row) {
     for (int row = 0; row < 3; ++row) {
         RECT rect = MenuRowRect(row);
         const bool danger = row == 2;
-        if (state->hoverRow == row) {
-            const COLORREF hover = danger ? ui::kDangerHover : ui::kHover;
-            ui::FillRoundRect(dc, rect, 10, hover, hover);
+        const bool pressed = state->pressedRow == row;
+        const bool hovered = state->hoverRow == row;
+        COLORREF fill = ui::kCard;
+        COLORREF border = ui::kBorder;
+        if (pressed) {
+            fill = danger ? ui::Blend(ui::kDangerHover, ui::kPressed) : ui::kPressed;
+            border = danger ? ui::kDanger : ui::kAccentStrong;
+        } else if (hovered) {
+            fill = danger ? ui::kDangerHover : ui::kHover;
+            border = danger ? ui::kDanger : ui::kAccent;
         }
+        ui::FillRoundRect(dc, rect, 10, fill, border);
 
         const int cy = static_cast<int>((rect.top + rect.bottom) / 2);
         RECT dot{26, cy - 4, 34, cy + 4};
@@ -157,6 +188,16 @@ RECT MenuRowRect(int row) {
         textRect.left = 44;
         textRect.right -= 10;
         DrawTextW(dc, labels[row], -1, &textRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    }
+
+    if (state->hasFocus) {
+        HPEN focusPen = CreatePen(PS_SOLID, 1, ui::kAccentStrong);
+        HGDIOBJ previousPen = SelectObject(dc, focusPen);
+        HGDIOBJ previousBrush = SelectObject(dc, GetStockObject(NULL_BRUSH));
+        RoundRect(dc, 2, 2, client.right - 2, client.bottom - 2, 16, 16);
+        SelectObject(dc, previousBrush);
+        SelectObject(dc, previousPen);
+        DeleteObject(focusPen);
     }
 
     SelectObject(dc, oldFont);

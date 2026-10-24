@@ -206,13 +206,9 @@ bool Near(POINT point, POINT target, int radius) {
            std::abs(static_cast<int>(point.y - target.y)) <= radius;
 }
 
-void DeleteBitmaps(std::vector<HBITMAP>& bitmaps) {
-    for (HBITMAP bitmap : bitmaps) {
-        if (bitmap) {
-            DeleteObject(bitmap);
-        }
-    }
-    bitmaps.clear();
+template <typename Companion>
+void DeleteBitmaps(BitmapHistory<Companion>& history) {
+    history.clear();
 }
 
 }  // namespace
@@ -279,6 +275,10 @@ bool SnipWindow::Start(HINSTANCE instance, HWND owner, CaptureCallback callback)
     }
 
     self->hwnd_ = hwnd;
+    // 给窗口实例发一个唯一序号，挂在窗口属性上。异步 OCR 靠它区分
+    // "还是不是当初发起识别的那一个窗口"（HWND 会被系统回收复用）。
+    SetPropW(hwnd, kSnipInstanceIdProp,
+             reinterpret_cast<HANDLE>(static_cast<uintptr_t>(NextSnipInstanceId())));
     ShowWindow(hwnd, SW_SHOW);
     UpdateWindow(hwnd);
     SetForegroundWindow(hwnd);
@@ -882,6 +882,14 @@ void SnipWindow::Paint() {
     PAINTSTRUCT ps{};
     HDC dc = BeginPaint(hwnd_, &ps);
 
+    const RECT dirty = ps.rcPaint;
+    const int dirtyWidth = dirty.right - dirty.left;
+    const int dirtyHeight = dirty.bottom - dirty.top;
+    if (dirtyWidth <= 0 || dirtyHeight <= 0) {
+        EndPaint(hwnd_, &ps);
+        return;
+    }
+
     HDC frameDc = AcquireFrameBuffer(dc);
     if (!frameDc) {
         EndPaint(hwnd_, &ps);
@@ -893,6 +901,12 @@ void SnipWindow::Paint() {
         EndPaint(hwnd_, &ps);
         return;
     }
+    const int savedFrameState = SaveDC(frameDc);
+    if (savedFrameState != 0) {
+        IntersectClipRect(
+            frameDc, dirty.left, dirty.top, dirty.right, dirty.bottom);
+    }
+
     const HGDIOBJ oldCapture = SelectObject(captureDc, capture_);
     BitBlt(frameDc, 0, 0, screen_.width, screen_.height, captureDc, 0, 0, SRCCOPY);
     SelectObject(captureDc, oldCapture);
@@ -955,7 +969,19 @@ void SnipWindow::Paint() {
         PaintHint(frameDc);
     }
 
-    BitBlt(dc, 0, 0, screen_.width, screen_.height, frameDc, 0, 0, SRCCOPY);
+    if (savedFrameState != 0) {
+        RestoreDC(frameDc, savedFrameState);
+    }
+    BitBlt(
+        dc,
+        dirty.left,
+        dirty.top,
+        dirtyWidth,
+        dirtyHeight,
+        frameDc,
+        dirty.left,
+        dirty.top,
+        SRCCOPY);
 
     EndPaint(hwnd_, &ps);
 }
@@ -964,10 +990,10 @@ void SnipWindow::ClearHistory() {
     DeleteBitmaps(undo_);
     DeleteBitmaps(redo_);
     arrows_.clear();
-    arrowUndo_.clear();
-    arrowRedo_.clear();
     selectedArrow_ = -1;
     edited_ = false;
+    // 几何标注被清空，合成图缓存必须失效。
+    ++contentRevision_;
 }
 
 void SnipWindow::BeginSelectionDrag(POINT point) {
@@ -1127,14 +1153,16 @@ void SnipWindow::BeginEdit() {
     ++editRevision_;
     HBITMAP snapshot = SnapshotSelection();
     if (snapshot) {
-        // BitmapHistory::Trim enforces size > 6 OR bytes > 32MB on every
-        // push_back, so no manual trimming is needed here.
-        undo_.push_back(snapshot);
-        arrowUndo_.push_back(arrows_);
-        while (arrowUndo_.size() > undo_.size()) arrowUndo_.erase(arrowUndo_.begin());
+        // BitmapHistory keeps two hot raw snapshots for fast Ctrl+Z and
+        // losslessly compresses older steps, with a 64MB cap per stack.
+        //
+        // 标注状态和位图压进**同一条**历史条目：以前是两个平行的栈，
+        // 位图栈被裁剪（从队首丢老条目）时标注栈不跟着丢，两边就再也
+        // 对不齐（长度可能相等，配对却整体错开一位——实测表现是撤销
+        // 之后箭头还在，而且越撤越错）。现在配对是结构性的。
+        undo_.push_back(snapshot, arrows_);
     }
     DeleteBitmaps(redo_);
-    arrowRedo_.clear();
     edited_ = true;
 }
 
@@ -1144,19 +1172,30 @@ void SnipWindow::Undo() {
         return;
     }
 
-    if (HBITMAP current = SnapshotSelection()) {
-        redo_.push_back(current);
-        arrowRedo_.push_back(arrows_);
-        while (arrowRedo_.size() > redo_.size()) arrowRedo_.erase(arrowRedo_.begin());
+    // 先取位图，再压重做栈。
+    //
+    // 顺序反了会出事：take_back() 拿不到位图时（条目只剩 PNG、而那张 PNG
+    // 解不开），旧代码已经把当前状态压进了 redo_，然后直接 return——
+    // 重做栈多一条、撤销栈少一条，两个栈从此对不齐，之后每次重做
+    // 恢复出来的画面都是错位的。
+    //
+    // 位图与标注状态在同一条历史条目里，取的时候一起取：拿不到位图就
+    // 什么都不做，不需要调用方再去同步另一个栈（以前要同步，漏一次
+    // 就越撤越错）。
+    std::vector<ArrowAnnotation> previousArrows;
+    HBITMAP previous = undo_.take_back(&previousArrows);
+    if (!previous) {
+        return;
     }
 
-    HBITMAP previous = undo_.back();
-    undo_.pop_back();
-    RestoreSelection(previous);
-    if (!arrowUndo_.empty()) {
-        arrows_ = std::move(arrowUndo_.back());
-        arrowUndo_.pop_back();
+    if (HBITMAP current = SnapshotSelection()) {
+        redo_.push_back(current, arrows_);
     }
+
+    // 撤销会换掉捕获像素与几何标注，但不走 BeginEdit，必须单独计数。
+    ++contentRevision_;
+    RestoreSelection(previous);
+    arrows_ = std::move(previousArrows);
     selectedArrow_ = -1;
     DeleteObject(previous);
     edited_ = !undo_.empty() || !redo_.empty();
@@ -1169,19 +1208,22 @@ void SnipWindow::Redo() {
         return;
     }
 
-    if (HBITMAP current = SnapshotSelection()) {
-        undo_.push_back(current);
-        arrowUndo_.push_back(arrows_);
-        while (arrowUndo_.size() > undo_.size()) arrowUndo_.erase(arrowUndo_.begin());
+    // 与 Undo 同一个道理：先取位图，取不到就什么都不做。
+    // 位图与标注状态从同一条条目里一起出来，两边不可能失同步。
+    std::vector<ArrowAnnotation> nextArrows;
+    HBITMAP next = redo_.take_back(&nextArrows);
+    if (!next) {
+        return;
     }
 
-    HBITMAP next = redo_.back();
-    redo_.pop_back();
-    RestoreSelection(next);
-    if (!arrowRedo_.empty()) {
-        arrows_ = std::move(arrowRedo_.back());
-        arrowRedo_.pop_back();
+    if (HBITMAP current = SnapshotSelection()) {
+        undo_.push_back(current, arrows_);
     }
+
+    // 重做同样不经过 BeginEdit。
+    ++contentRevision_;
+    RestoreSelection(next);
+    arrows_ = std::move(nextArrows);
     selectedArrow_ = -1;
     DeleteObject(next);
     edited_ = true;
@@ -1234,6 +1276,11 @@ void SnipWindow::DrawPenSegment(POINT from, POINT to) {
 
     SelectObject(dc, oldBitmap);
     DeleteDC(dc);
+
+    // 笔画是逐段写入 capture_ 的，中途不会走 BeginEdit。这里必须单独记一次
+    // 内容版本：否则笔画中途重建的合成图会被缓存下来，笔画结束后用户看到的
+    // 仍是半截笔画。
+    ++contentRevision_;
 }
 
 void SnipWindow::ApplyMosaic(POINT point) {
@@ -1258,6 +1305,9 @@ void SnipWindow::ApplyMosaic(POINT point) {
     DeleteObject(brush);
     SelectObject(dc, oldBitmap);
     DeleteDC(dc);
+
+    // 马赛克同样是逐点写入 capture_，不走 BeginEdit，必须记内容版本。
+    ++contentRevision_;
 }
 
 void SnipWindow::HandleToolbarClick(int index) {

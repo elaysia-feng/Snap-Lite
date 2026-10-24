@@ -2,6 +2,7 @@
 #include "snip_window.h"
 #include "toolbar_icon_render_gdi.h"
 #include "edit_repaint_fix.h"
+#include "ui_theme.h"
 
 #include <commctrl.h>
 #include <commdlg.h>
@@ -27,14 +28,14 @@ constexpr UINT_PTR kParentSubclassId = 0x534C1400;
 constexpr UINT_PTR kEditSubclassId = 0x534C1401;
 
 constexpr int kToolbarWidth = 900;
-constexpr int kPrimaryHeight = 42;
-constexpr int kSecondaryHeight = 42;
-constexpr int kHintHeight = 24;
+constexpr int kPrimaryHeight = 52;
+constexpr int kSecondaryHeight = 44;
+constexpr int kHintHeight = 26;
 constexpr int kToolbarHeight = kPrimaryHeight + kSecondaryHeight + kHintHeight;
 constexpr int kToolCount = 6;
-constexpr int kToolWidth = 78;
+constexpr int kToolWidth = 50;
 constexpr int kPad = 10;
-constexpr int kGap = 3;
+constexpr int kGap = 5;
 constexpr int kActionGap = 3;
 // Distance in pixels the mouse must travel after LBDOWN before a click on a
 // text annotation is treated as a drag rather than a select. 4 px matches the
@@ -94,6 +95,17 @@ struct TextItem {
 };
 
 enum class Category { Select = 0, Shape, Arrow, Pen, Mosaic, Text };
+Category CategoryFromToolIndex(SnipWindow::UiToolIndex toolIndex) {
+    switch (toolIndex) {
+    case SnipWindow::UiToolIndex::Rectangle: return Category::Shape;
+    case SnipWindow::UiToolIndex::Arrow: return Category::Arrow;
+    case SnipWindow::UiToolIndex::Pen: return Category::Pen;
+    case SnipWindow::UiToolIndex::Mosaic: return Category::Mosaic;
+    case SnipWindow::UiToolIndex::Text: return Category::Text;
+    default: return Category::Select;
+    }
+}
+
 enum class ItemAction {
     None,
     ShapeKind,
@@ -126,7 +138,7 @@ constexpr std::array<const wchar_t*, kToolCount> kToolLabels = {
 constexpr std::array<const wchar_t*, 7> kActionLabels = {
     L"图钉", L"撤销", L"重做", L"复制", L"保存", L"另存为", L"取消"
 };
-constexpr std::array<int, 7> kActionWidths = {46, 46, 46, 50, 50, 62, 50};
+constexpr std::array<int, 7> kActionWidths = {48, 48, 48, 48, 48, 52, 48};
 
 void AddRoundRect(Gdiplus::GraphicsPath& path, const Gdiplus::RectF& r, float radius) {
     path.Reset();
@@ -145,6 +157,19 @@ void FillRoundRect(Gdiplus::Graphics& g, const Gdiplus::RectF& r, float radius, 
     g.FillPath(&brush, &path);
 }
 
+Gdiplus::Color ToGdiColor(COLORREF color) {
+    return Gdiplus::Color(255, GetRValue(color), GetGValue(color), GetBValue(color));
+}
+
+void DrawRoundRectBorder(
+    Gdiplus::Graphics& g, const Gdiplus::RectF& r, float radius,
+    COLORREF color, float width = 1.0f) {
+    Gdiplus::GraphicsPath path;
+    AddRoundRect(path, r, radius);
+    Gdiplus::Pen pen(ToGdiColor(color), width);
+    g.DrawPath(&pen, &path);
+}
+
 std::vector<SecondaryItem> ColorItems() {
     return {
         {L"", ItemAction::ColorPreset, 0, 24, RGB(235, 70, 70)},
@@ -156,6 +181,21 @@ std::vector<SecondaryItem> ColorItems() {
         {L"", ItemAction::ColorPreset, 0, 24, RGB(245, 245, 245)},
         {L"更多", ItemAction::ColorCustom, 0, 42},
     };
+}
+
+// 色块本身不画文字，悬停时需要用颜色名告诉用户这是什么颜色 ——
+// 否则用户面对的是一排无名色块。
+const wchar_t* ColorTooltipName(COLORREF color) {
+    switch (color) {
+    case RGB(235, 70, 70): return L"红色";
+    case RGB(245, 166, 35): return L"橙色";
+    case RGB(70, 170, 105): return L"绿色";
+    case RGB(70, 120, 210): return L"蓝色";
+    case RGB(145, 105, 195): return L"紫色";
+    case RGB(35, 35, 38): return L"黑色";
+    case RGB(245, 245, 245): return L"白色";
+    default: return L"自定义颜色";
+    }
 }
 
 std::vector<SecondaryItem> BuildSecondary(Category category) {
@@ -309,9 +349,11 @@ public:
 
     void SyncCategoryFromTool() {
         if (!snip_) return;
-        const int tool = snip_->UiActiveTool();
-        if (tool >= 0 && tool <= 4) {
-            const Category next = static_cast<Category>(tool + 1);
+        const int toolIndex = snip_->UiActiveTool();
+        if (toolIndex >= static_cast<int>(SnipWindow::UiToolIndex::Rectangle) &&
+            toolIndex <= static_cast<int>(SnipWindow::UiToolIndex::Text)) {
+            const Category next = CategoryFromToolIndex(
+                static_cast<SnipWindow::UiToolIndex>(toolIndex));
             if (next != category_) {
                 category_ = next;
                 UpdatePosition();
@@ -390,7 +432,8 @@ public:
             rasterRevision_ = snip_->UiEditRevision();
             if (snip_->UiHitSelectionBorder(p)) return false;
 
-            if (tool == 4 && PtInRect(&selection, p)) {
+            if (tool == static_cast<int>(SnipWindow::UiToolIndex::Text) &&
+                PtInRect(&selection, p)) {
                 rasterPending_ = false;
                 BeginCreateText(p);
                 return true;
@@ -446,22 +489,31 @@ public:
                 InvalidateRect(hwnd, nullptr, FALSE);
             }
             return 0;
-        case WM_LBUTTONDOWN:
+        case WM_LBUTTONDOWN: {
+            POINT p{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+            SetPressed(p);
             SetFocus(parent_);
+            return 0;
+        }
+        case WM_CAPTURECHANGED:
+            ClearPressed();
+            InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
         case WM_LBUTTONUP: {
             POINT p{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
             const int tool = HitTool(p);
+            const int action = tool < 0 ? HitAction(p) : -1;
+            const int secondary = tool < 0 && action < 0 ? HitSecondary(p) : -1;
+            ClearPressed();
+            InvalidateRect(hwnd, nullptr, FALSE);
             if (tool >= 0) {
                 SelectCategory(static_cast<Category>(tool));
                 return 0;
             }
-            const int action = HitAction(p);
             if (action >= 0) {
                 ExecutePrimaryAction(static_cast<PrimaryAction>(action));
                 return 0;
             }
-            const int secondary = HitSecondary(p);
             if (secondary >= 0) ClickSecondary(secondary);
             return 0;
         }
@@ -739,6 +791,17 @@ private:
         }
     }
 
+    void SetPressed(POINT p) {
+        pressedTool_ = HitTool(p);
+        pressedAction_ = pressedTool_ < 0 ? HitAction(p) : -1;
+        pressedSecondary_ = pressedTool_ < 0 && pressedAction_ < 0 ? HitSecondary(p) : -1;
+        InvalidateRect(toolbar_, nullptr, FALSE);
+    }
+
+    void ClearPressed() {
+        pressedTool_ = pressedAction_ = pressedSecondary_ = -1;
+    }
+
     bool IsSelected(const SecondaryItem& item) const {
         if (!snip_) return false;
         switch (item.action) {
@@ -793,7 +856,7 @@ private:
         }
         const HGDIOBJ oldBitmap = SelectObject(mem, bitmap);
         RECT all{0, 0, kToolbarWidth, kToolbarHeight};
-        HBRUSH background = CreateSolidBrush(RGB(252, 250, 247));
+        HBRUSH background = CreateSolidBrush(ui::kSurface);
         FillRect(mem, &all, background);
         DeleteObject(background);
 
@@ -801,7 +864,7 @@ private:
         g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
         g.SetCompositingQuality(Gdiplus::CompositingQualityHighQuality);
         g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHighQuality);
-        Gdiplus::Pen divider(Gdiplus::Color(255, 232, 226, 219), 1.0f);
+        Gdiplus::Pen divider(ToGdiColor(ui::kBorder), 1.0f);
         g.DrawLine(&divider, 10.0f, static_cast<float>(kPrimaryHeight),
                    static_cast<float>(kToolbarWidth - 10), static_cast<float>(kPrimaryHeight));
         g.DrawLine(&divider, 10.0f, static_cast<float>(kPrimaryHeight + kSecondaryHeight),
@@ -809,37 +872,68 @@ private:
         g.DrawLine(&divider, static_cast<float>(kActionStart - 7), 10.0f,
                    static_cast<float>(kActionStart - 7), static_cast<float>(kPrimaryHeight - 10));
 
+        // 操作区按固定、编辑、导出和取消分组，细分隔线保留轻音少女头像按钮的主视觉。
+        Gdiplus::Pen actionDivider(ToGdiColor(ui::kBorder), 1.0f);
+        for (int i = 0; i + 1 < static_cast<int>(kActionLabels.size()); ++i) {
+            if (i != 0 && i != 2 && i != 3 && i != 5) continue;
+            const RECT current = ActionRect(i);
+            const RECT next = ActionRect(i + 1);
+            const float x = (static_cast<float>(current.right) + next.left) / 2.0f;
+            g.DrawLine(&actionDivider, x, 15.0f, x, static_cast<float>(kPrimaryHeight - 15));
+        }
+
         const HGDIOBJ oldFont = SelectObject(mem, font_);
         SetBkMode(mem, TRANSPARENT);
+        const bool parentFocused = GetFocus() == parent_;
 
         for (int i = 0; i < kToolCount; ++i) {
             RECT r = ToolRect(i);
             const bool active = category_ == static_cast<Category>(i);
             const bool hovered = hoverTool_ == i;
+            const bool pressed = pressedTool_ == i && hovered;
+            const Gdiplus::RectF button(
+                static_cast<float>(r.left), static_cast<float>(r.top),
+                static_cast<float>(r.right - r.left), static_cast<float>(r.bottom - r.top));
             if (active || hovered) {
-                FillRoundRect(g,
-                    Gdiplus::RectF(static_cast<float>(r.left), static_cast<float>(r.top),
-                                   static_cast<float>(r.right-r.left), static_cast<float>(r.bottom-r.top)),
-                    7.0f, active ? Gdiplus::Color(255, 255, 232, 240)
-                                 : Gdiplus::Color(255, 255, 246, 249));
+                const COLORREF fill = pressed ? ui::kPressed : active ? ui::kHover : ui::kCard;
+                FillRoundRect(g, button, 8.0f, ToGdiColor(fill));
+                DrawRoundRectBorder(g, button, 8.0f,
+                                    active || pressed ? ui::kAccentStrong : ui::kBorder);
             }
-            SetTextColor(mem, active ? RGB(99, 82, 62) : RGB(58, 56, 53));
+            if (active) {
+                // 下沿强调当前工具；焦点描边提示截图窗口当前接收键盘快捷键。
+                FillRoundRect(g,
+                    Gdiplus::RectF(button.X + 15.0f, button.GetBottom() - 3.0f,
+                                   button.Width - 30.0f, 2.0f),
+                    1.0f, ToGdiColor(ui::kAccentStrong));
+                if (parentFocused) {
+                    Gdiplus::Pen focus(ToGdiColor(ui::kAccent), 1.0f);
+                    focus.SetDashStyle(Gdiplus::DashStyleDot);
+                    g.DrawRectangle(&focus, button.X + 3.0f, button.Y + 3.0f,
+                                    button.Width - 6.0f, button.Height - 6.0f);
+                }
+            }
+            SetTextColor(mem, active ? RGB(88, 55, 69) : RGB(82, 70, 78));
             toolbaricons_gdi::DrawTextOrIcon(mem, kToolLabels[i], -1, &r, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         }
 
         for (int i = 0; i < static_cast<int>(kActionLabels.size()); ++i) {
             RECT r = ActionRect(i);
             const bool hovered = hoverAction_ == i;
-            if (hovered) {
-                FillRoundRect(g,
-                    Gdiplus::RectF(static_cast<float>(r.left), static_cast<float>(r.top),
-                                   static_cast<float>(r.right-r.left), static_cast<float>(r.bottom-r.top)),
-                    7.0f, static_cast<PrimaryAction>(i) == PrimaryAction::Cancel
-                              ? Gdiplus::Color(255, 255, 237, 239)
-                              : Gdiplus::Color(255, 255, 246, 249));
+            const bool pressed = pressedAction_ == i && hovered;
+            if (hovered || pressed) {
+                const bool cancel = static_cast<PrimaryAction>(i) == PrimaryAction::Cancel;
+                const Gdiplus::RectF button(
+                    static_cast<float>(r.left), static_cast<float>(r.top),
+                    static_cast<float>(r.right - r.left), static_cast<float>(r.bottom - r.top));
+                const COLORREF fill = cancel
+                    ? (pressed ? RGB(250, 220, 224) : ui::kDangerHover)
+                    : (pressed ? ui::kPressed : ui::kHover);
+                FillRoundRect(g, button, 8.0f, ToGdiColor(fill));
+                DrawRoundRectBorder(g, button, 8.0f, cancel ? ui::kDanger : ui::kBorder);
             }
             SetTextColor(mem, static_cast<PrimaryAction>(i) == PrimaryAction::Cancel
-                                  ? RGB(196, 76, 72) : RGB(70, 67, 63));
+                                  ? ui::kDanger : RGB(82, 70, 78));
             toolbaricons_gdi::DrawTextOrIcon(mem, kActionLabels[i], -1, &r, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         }
 
@@ -851,6 +945,7 @@ private:
             const auto& item = items[i];
             const bool selected = IsSelected(item);
             const bool hovered = hoverSecondary_ == static_cast<int>(i);
+            const bool pressed = pressedSecondary_ == static_cast<int>(i) && hovered;
 
             if (item.action == ItemAction::ColorPreset) {
                 const float cx = static_cast<float>(r.left + r.right) / 2.0f;
@@ -864,8 +959,7 @@ private:
                             static_cast<float>(r.right - r.left - 2),
                             static_cast<float>(r.bottom - r.top - 2)),
                         10.0f,
-                        selected ? Gdiplus::Color(255, 255, 235, 242)
-                                 : Gdiplus::Color(255, 255, 248, 250));
+                        ToGdiColor(pressed ? ui::kPressed : selected ? ui::kHover : ui::kCard));
                 }
 
                 Gdiplus::SolidBrush halo(Gdiplus::Color(255, 255, 255, 255));
@@ -874,10 +968,9 @@ private:
                     255, GetRValue(item.color), GetGValue(item.color), GetBValue(item.color)));
                 g.FillEllipse(&swatch, cx - 6.5f, cy - 6.5f, 13.0f, 13.0f);
                 Gdiplus::Pen border(
-                    selected ? Gdiplus::Color(255, 224, 119, 151)
-                             : hovered ? Gdiplus::Color(255, 239, 189, 202)
-                                       : Gdiplus::Color(255, 218, 204, 210),
-                    selected ? 1.8f : 1.0f);
+                    ToGdiColor(selected || pressed ? ui::kAccentStrong
+                                                   : hovered ? ui::kAccent : ui::kBorder),
+                    selected || pressed ? 1.8f : 1.0f);
                 g.DrawEllipse(&border, cx - 7.5f, cy - 7.5f, 15.0f, 15.0f);
                 continue;
             }
@@ -886,25 +979,19 @@ private:
                 FillRoundRect(g,
                     Gdiplus::RectF(static_cast<float>(r.left), static_cast<float>(r.top),
                                    static_cast<float>(r.right-r.left), static_cast<float>(r.bottom-r.top)),
-                    10.0f, selected ? Gdiplus::Color(255, 255, 235, 242)
-                                     : Gdiplus::Color(255, 255, 248, 250));
-                if (selected) {
-                    Gdiplus::GraphicsPath selectedPath;
-                    AddRoundRect(selectedPath,
-                        Gdiplus::RectF(static_cast<float>(r.left), static_cast<float>(r.top),
-                                       static_cast<float>(r.right-r.left), static_cast<float>(r.bottom-r.top)),
-                        10.0f);
-                    Gdiplus::Pen selectedBorder(Gdiplus::Color(255, 239, 171, 191), 1.0f);
-                    g.DrawPath(&selectedBorder, &selectedPath);
-                }
+                    10.0f, ToGdiColor(pressed ? ui::kPressed : selected ? ui::kHover : ui::kCard));
+                DrawRoundRectBorder(g,
+                    Gdiplus::RectF(static_cast<float>(r.left), static_cast<float>(r.top),
+                                   static_cast<float>(r.right-r.left), static_cast<float>(r.bottom-r.top)),
+                    10.0f, selected || pressed ? ui::kAccentStrong : ui::kBorder);
             }
-            SetTextColor(mem, selected ? RGB(91, 60, 72) : RGB(79, 70, 76));
+            SetTextColor(mem, selected ? RGB(88, 55, 69) : RGB(82, 70, 78));
             toolbaricons_gdi::DrawTextOrIcon(mem, item.label.c_str(), -1, &r,
                       DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
         }
 
         RECT hint{kPad, kPrimaryHeight + kSecondaryHeight, kToolbarWidth-kPad, kToolbarHeight};
-        SetTextColor(mem, RGB(137, 119, 128));
+        SetTextColor(mem, ui::kMutedText);
         DrawTextW(mem, HintText().c_str(), -1, &hint,
                   DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 
@@ -912,7 +999,7 @@ private:
         BitBlt(dc, 0, 0, kToolbarWidth, kToolbarHeight, mem, 0, 0, SRCCOPY);
         RECT client{};
         GetClientRect(hwnd, &client);
-        HPEN border = CreatePen(PS_SOLID, 1, RGB(229, 223, 216));
+        HPEN border = CreatePen(PS_SOLID, 1, ui::kBorder);
         const HGDIOBJ oldPen = SelectObject(dc, border);
         const HGDIOBJ oldBrush = SelectObject(dc, GetStockObject(NULL_BRUSH));
         RoundRect(dc, 0, 0, client.right, client.bottom, 18, 18);
@@ -929,12 +1016,28 @@ private:
         category_ = category;
         if (!snip_) return;
         switch (category) {
-        case Category::Shape: snip_->UiSetTool(0); DeselectText(); break;
-        case Category::Arrow: snip_->UiSetTool(1); DeselectText(); break;
-        case Category::Pen: snip_->UiSetTool(2); DeselectText(); break;
-        case Category::Mosaic: snip_->UiSetTool(3); DeselectText(); break;
-        case Category::Text: snip_->UiSetTool(4); break;
-        case Category::Select: snip_->UiSetTool(-1); break;
+        case Category::Shape:
+            snip_->UiSetTool(static_cast<int>(SnipWindow::UiToolIndex::Rectangle));
+            DeselectText();
+            break;
+        case Category::Arrow:
+            snip_->UiSetTool(static_cast<int>(SnipWindow::UiToolIndex::Arrow));
+            DeselectText();
+            break;
+        case Category::Pen:
+            snip_->UiSetTool(static_cast<int>(SnipWindow::UiToolIndex::Pen));
+            DeselectText();
+            break;
+        case Category::Mosaic:
+            snip_->UiSetTool(static_cast<int>(SnipWindow::UiToolIndex::Mosaic));
+            DeselectText();
+            break;
+        case Category::Text:
+            snip_->UiSetTool(static_cast<int>(SnipWindow::UiToolIndex::Text));
+            break;
+        case Category::Select:
+            snip_->UiSetTool(static_cast<int>(SnipWindow::UiToolIndex::None));
+            break;
         }
         UpdatePosition();
         InvalidateRect(toolbar_, nullptr, FALSE);
@@ -1435,6 +1538,9 @@ private:
     int hoverTool_{-1};
     int hoverAction_{-1};
     int hoverSecondary_{-1};
+    int pressedTool_{-1};
+    int pressedAction_{-1};
+    int pressedSecondary_{-1};
     bool rasterPending_{false};
     unsigned long long rasterRevision_{0};
     TextItem* selectedText_{};
@@ -1599,7 +1705,11 @@ void AnimeToolbar::ShowForSnip(HINSTANCE instance) {
     }
 
     HRGN region = CreateRoundRectRgn(0, 0, kToolbarWidth + 1, kToolbarHeight + 1, 18, 18);
-    if (region) SetWindowRgn(child, region, TRUE);
+    if (region && SetWindowRgn(child, region, TRUE) == 0) {
+        // SetWindowRgn 失败时区域仍然归我们所有，必须自己释放；
+        // 成功之后才交给系统。这里漏掉的话，每个截图窗口会漏一个 HRGN。
+        DeleteObject(region);
+    }
 
     if (!SetWindowSubclass(parent, ParentSubclassProc, kParentSubclassId,
                            reinterpret_cast<DWORD_PTR>(host))) {

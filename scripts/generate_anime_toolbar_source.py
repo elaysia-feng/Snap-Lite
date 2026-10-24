@@ -26,43 +26,6 @@ def main() -> int:
         '#include "toolbar_icon_render_gdi_anime.h"',
         "anime icon renderer include",
     )
-    text = replace_once(
-        text,
-        "constexpr int kPrimaryHeight = 42;",
-        "constexpr int kPrimaryHeight = 52;",
-        "comfortable primary toolbar height",
-    )
-    text = replace_once(
-        text,
-        "constexpr int kSecondaryHeight = 42;",
-        "constexpr int kSecondaryHeight = 44;",
-        "comfortable secondary toolbar height",
-    )
-    text = replace_once(
-        text,
-        "constexpr int kHintHeight = 24;",
-        "constexpr int kHintHeight = 26;",
-        "comfortable toolbar hint height",
-    )
-    text = replace_once(
-        text,
-        "constexpr int kToolWidth = 78;",
-        "constexpr int kToolWidth = 50;",
-        "portrait badge tool width",
-    )
-    text = replace_once(
-        text,
-        "constexpr int kGap = 3;",
-        "constexpr int kGap = 5;",
-        "secondary icon spacing",
-    )
-    text = replace_once(
-        text,
-        "constexpr std::array<int, 7> kActionWidths = {46, 46, 46, 50, 50, 62, 50};",
-        "constexpr std::array<int, 7> kActionWidths = {48, 48, 48, 48, 48, 52, 48};",
-        "portrait badge action widths",
-    )
-
     # Keep the button size exactly as-is, but make the host width follow the
     # actual content. Expanded rows may be wider than the primary row; the
     # window region clips the unused top-right area instead of showing a long
@@ -224,13 +187,19 @@ def main() -> int:
     )
     text = replace_once(
         text,
-        "        Gdiplus::Pen divider(Gdiplus::Color(255, 232, 226, 219), 1.0f);\n",
+        "        Gdiplus::Pen divider(ToGdiColor(ui::kBorder), 1.0f);\n",
         "",
         "remove legacy divider pen",
     )
 
-    text = replace_once(
-        text,
+    if "const bool pressed = pressedTool_ == i && hovered;" in text:
+        if text.count("const bool pressed = pressedTool_ == i && hovered;") != 1:
+            raise RuntimeError("toolbar primary state: expected one pressed-state marker")
+        if text.count("const bool parentFocused = GetFocus() == parent_;") != 1:
+            raise RuntimeError("toolbar focus state: expected one focus-state marker")
+    else:
+        text = replace_once(
+            text,
         "        for (int i = 0; i < kToolCount; ++i) {\n"
         "            RECT r = ToolRect(i);\n"
         "            const bool active = category_ == static_cast<Category>(i);\n"
@@ -255,10 +224,14 @@ def main() -> int:
         "            toolbaricons_gdi::DrawTextOrIcon(mem, kToolLabels[i], -1, &r, DT_CENTER | DT_VCENTER | DT_SINGLELINE);\n"
         "        }",
         "designed anime category slots",
-    )
+        )
 
-    text = replace_once(
-        text,
+    if "const bool pressed = pressedAction_ == i && hovered;" in text:
+        if text.count("const bool pressed = pressedAction_ == i && hovered;") != 1:
+            raise RuntimeError("toolbar action state: expected one pressed-state marker")
+    else:
+        text = replace_once(
+            text,
         "        for (int i = 0; i < static_cast<int>(kActionLabels.size()); ++i) {\n"
         "            RECT r = ActionRect(i);\n"
         "            const bool hovered = hoverAction_ == i;\n"
@@ -284,7 +257,7 @@ def main() -> int:
         "            toolbaricons_gdi::DrawTextOrIcon(mem, kActionLabels[i], -1, &r, DT_CENTER | DT_VCENTER | DT_SINGLELINE);\n"
         "        }",
         "designed anime action slots",
-    )
+        )
     text = replace_once(
         text,
         "        RECT hint{kPad, kPrimaryHeight + kSecondaryHeight, kToolbarWidth-kPad, kToolbarHeight};",
@@ -298,17 +271,26 @@ def main() -> int:
         "dynamic toolbar blit",
     )
 
-    text = replace_once(
-        text,
+    current_border = (
+        "        RECT client{};\n"
+        "        GetClientRect(hwnd, &client);\n"
+        "        HPEN border = CreatePen(PS_SOLID, 1, ui::kBorder);\n"
+        "        const HGDIOBJ oldPen = SelectObject(dc, border);\n"
+        "        const HGDIOBJ oldBrush = SelectObject(dc, GetStockObject(NULL_BRUSH));\n"
+        "        RoundRect(dc, 0, 0, client.right, client.bottom, 18, 18);"
+    )
+    legacy_border = (
         "        RECT client{};\n"
         "        GetClientRect(hwnd, &client);\n"
         "        HPEN border = CreatePen(PS_SOLID, 1, RGB(229, 223, 216));\n"
         "        const HGDIOBJ oldPen = SelectObject(dc, border);\n"
         "        const HGDIOBJ oldBrush = SelectObject(dc, GetStockObject(NULL_BRUSH));\n"
-        "        RoundRect(dc, 0, 0, client.right, client.bottom, 18, 18);",
+        "        RoundRect(dc, 0, 0, client.right, client.bottom, 18, 18);"
+    )
+    border_replacement = (
         "        RECT client{};\n"
         "        GetClientRect(hwnd, &client);\n"
-        "        HPEN border = CreatePen(PS_SOLID, 1, RGB(231, 216, 222));\n"
+        "        HPEN border = CreatePen(PS_SOLID, 1, snaplite::ui::kBorder);\n"
         "        const HGDIOBJ oldPen = SelectObject(dc, border);\n"
         "        const HGDIOBJ oldBrush = SelectObject(dc, GetStockObject(NULL_BRUSH));\n"
         "        if (client.bottom <= kPrimaryHeight) {\n"
@@ -317,22 +299,34 @@ def main() -> int:
         "            const int primaryWidth = std::min<int>(client.right, PrimaryContentWidth());\n"
         "            RoundRect(dc, 0, 0, primaryWidth, kPrimaryHeight, 22, 22);\n"
         "            RoundRect(dc, 0, kPrimaryHeight - 1, client.right, client.bottom, 18, 18);\n"
-        "        }",
-        "content-shaped outer border",
+        "        }"
     )
+    if current_border in text:
+        text = replace_once(text, current_border, border_replacement, "content-shaped outer border")
+    else:
+        text = replace_once(text, legacy_border, border_replacement, "content-shaped outer border")
 
-    text = replace_once(
-        text,
+    current_background = (
+        "        HBRUSH background = CreateSolidBrush(ui::kSurface);\n"
+        "        FillRect(mem, &all, background);\n"
+        "        DeleteObject(background);"
+    )
+    legacy_background = (
         "        HBRUSH background = CreateSolidBrush(RGB(252, 250, 247));\n"
         "        FillRect(mem, &all, background);\n"
-        "        DeleteObject(background);",
+        "        DeleteObject(background);"
+    )
+    background_replacement = (
         "        HBRUSH background = CreateSolidBrush(snaplite::ui::kSurface);\n"
         "        FillRect(mem, &all, background);\n"
         "        DeleteObject(background);\n"
         "        toolbaricons_gdi::DrawAnimeBackdrop(\n"
-        "            mem, all, kActionStart - 7, PrimaryContentWidth(), kPrimaryHeight);",
-        "anime toolbar backdrop",
+        "            mem, all, kActionStart - 7, PrimaryContentWidth(), kPrimaryHeight);"
     )
+    if current_background in text:
+        text = replace_once(text, current_background, background_replacement, "anime toolbar backdrop")
+    else:
+        text = replace_once(text, legacy_background, background_replacement, "anime toolbar backdrop")
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(text, encoding="utf-8", newline="\n")
     print(f"Generated compact anime toolbar source: {output}")

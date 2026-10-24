@@ -1,6 +1,7 @@
 #include "pin_window.h"
 
 #include "capture.h"
+#include "ui_theme.h"
 
 #include <commdlg.h>
 #include <gdiplus.h>
@@ -44,7 +45,10 @@ struct PinMenuState {
     HWND owner{};
     BYTE opacity{255};
     bool dragging{};
+    bool trackingMouse{};
+    bool hasFocus{};
     int hoverRow{-1};
+    int pressedRow{-1};
 };
 
 RECT SliderRect() {
@@ -111,12 +115,10 @@ void PaintPinMenu(HWND hwnd, PinMenuState* state) {
     RECT client{};
     GetClientRect(hwnd, &client);
 
-    HBRUSH background = CreateSolidBrush(RGB(24, 30, 48));
-    FillRect(dc, &client, background);
-    DeleteObject(background);
+    ui::FillRoundRect(dc, client, 18, ui::kSurface, ui::kBorder);
 
     SetBkMode(dc, TRANSPARENT);
-    SetTextColor(dc, RGB(229, 241, 255));
+    SetTextColor(dc, ui::kText);
 
     HFONT font = CreateFontW(
         -15, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
@@ -134,8 +136,8 @@ void PaintPinMenu(HWND hwnd, PinMenuState* state) {
     const int centerY = static_cast<int>((slider.top + slider.bottom) / 2);
     const int knobX = SliderXFromOpacity(state->opacity);
 
-    HPEN basePen = CreatePen(PS_SOLID, 4, RGB(68, 81, 111));
-    HPEN activePen = CreatePen(PS_SOLID, 4, RGB(111, 231, 255));
+    HPEN basePen = CreatePen(PS_SOLID, 4, ui::kSliderTrack);
+    HPEN activePen = CreatePen(PS_SOLID, 4, ui::kAccent);
     HGDIOBJ oldPen = SelectObject(dc, basePen);
     MoveToEx(dc, slider.left, centerY, nullptr);
     LineTo(dc, slider.right, centerY);
@@ -143,10 +145,14 @@ void PaintPinMenu(HWND hwnd, PinMenuState* state) {
     MoveToEx(dc, slider.left, centerY, nullptr);
     LineTo(dc, knobX, centerY);
 
-    HBRUSH knobBrush = CreateSolidBrush(RGB(202, 247, 255));
+    HBRUSH knobBrush = CreateSolidBrush(ui::kCard);
+    HPEN knobPen = CreatePen(PS_SOLID, 2, ui::kAccentStrong);
     HGDIOBJ oldBrush = SelectObject(dc, knobBrush);
+    HGDIOBJ oldKnobPen = SelectObject(dc, knobPen);
     Ellipse(dc, knobX - 7, centerY - 7, knobX + 7, centerY + 7);
+    SelectObject(dc, oldKnobPen);
     SelectObject(dc, oldBrush);
+    DeleteObject(knobPen);
     DeleteObject(knobBrush);
     SelectObject(dc, oldPen);
     DeleteObject(basePen);
@@ -155,24 +161,42 @@ void PaintPinMenu(HWND hwnd, PinMenuState* state) {
     const wchar_t* labels[3] = {L"复制贴图", L"另存为...", L"关闭贴图"};
     for (int row = 0; row < 3; ++row) {
         RECT rect = MenuRowRect(row);
-        if (state->hoverRow == row) {
-            HBRUSH hover = CreateSolidBrush(row == 2 ? RGB(72, 42, 55) : RGB(39, 55, 83));
-            FillRect(dc, &rect, hover);
-            DeleteObject(hover);
+        const bool danger = row == 2;
+        const bool pressed = state->pressedRow == row;
+        const bool hovered = state->hoverRow == row;
+        COLORREF fill = ui::kCard;
+        COLORREF border = ui::kBorder;
+        if (pressed) {
+            fill = danger ? ui::Blend(ui::kDangerHover, ui::kPressed) : ui::kPressed;
+            border = danger ? ui::kDanger : ui::kAccentStrong;
+        } else if (hovered) {
+            fill = danger ? ui::kDangerHover : ui::kHover;
+            border = danger ? ui::kDanger : ui::kAccent;
         }
+        ui::FillRoundRect(dc, rect, 10, fill, border);
 
-        SetTextColor(dc, row == 2 ? RGB(255, 166, 190) : RGB(224, 241, 255));
+        SetTextColor(dc, danger ? ui::kDanger : ui::kText);
         RECT textRect = rect;
         textRect.left += 10;
         DrawTextW(dc, labels[row], -1, &textRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     }
 
-    HPEN separator = CreatePen(PS_SOLID, 1, RGB(53, 66, 91));
+    HPEN separator = CreatePen(PS_SOLID, 1, ui::kBorder);
     oldPen = SelectObject(dc, separator);
     MoveToEx(dc, 16, 149, nullptr);
     LineTo(dc, kMenuWidth - 16, 149);
     SelectObject(dc, oldPen);
     DeleteObject(separator);
+
+    if (state->hasFocus) {
+        HPEN focusPen = CreatePen(PS_SOLID, 1, ui::kAccentStrong);
+        HGDIOBJ previousPen = SelectObject(dc, focusPen);
+        HGDIOBJ previousBrush = SelectObject(dc, GetStockObject(NULL_BRUSH));
+        RoundRect(dc, 2, 2, client.right - 2, client.bottom - 2, 16, 16);
+        SelectObject(dc, previousBrush);
+        SelectObject(dc, previousPen);
+        DeleteObject(focusPen);
+    }
 
     SelectObject(dc, oldFont);
     DeleteObject(font);
@@ -201,9 +225,20 @@ LRESULT CALLBACK PinMenuWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARA
         return 0;
     case WM_ERASEBKGND:
         return 1;
+    case WM_SETFOCUS:
+    case WM_KILLFOCUS:
+        if (state) {
+            state->hasFocus = message == WM_SETFOCUS;
+            InvalidateRect(hwnd, nullptr, FALSE);
+        }
+        return 0;
     case WM_MOUSEMOVE: {
         if (!state) {
             return 0;
+        }
+        if (!state->trackingMouse) {
+            TRACKMOUSEEVENT track{sizeof(track), TME_LEAVE, hwnd, 0};
+            state->trackingMouse = TrackMouseEvent(&track) != FALSE;
         }
         POINT point{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
         if (state->dragging) {
@@ -217,6 +252,15 @@ LRESULT CALLBACK PinMenuWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARA
         }
         return 0;
     }
+    case WM_MOUSELEAVE:
+        if (state) {
+            state->trackingMouse = false;
+            if (!state->dragging && state->hoverRow != -1) {
+                state->hoverRow = -1;
+                InvalidateRect(hwnd, nullptr, FALSE);
+            }
+        }
+        return 0;
     case WM_LBUTTONDOWN: {
         if (!state) {
             return 0;
@@ -233,6 +277,9 @@ LRESULT CALLBACK PinMenuWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARA
 
         const int row = HitMenuRow(point);
         if (row >= 0 && state->owner && IsWindow(state->owner)) {
+            state->pressedRow = row;
+            InvalidateRect(hwnd, nullptr, FALSE);
+            UpdateWindow(hwnd);
             const UINT command = row == 0 ? WM_PIN_COPY : (row == 1 ? WM_PIN_SAVE_AS : WM_PIN_CLOSE);
             PostMessageW(state->owner, command, 0, 0);
             DestroyWindow(hwnd);
@@ -327,16 +374,6 @@ HWND CreatePinMenu(HWND owner, BYTE opacity, POINT cursor) {
     UpdateWindow(hwnd);
     SetForegroundWindow(hwnd);
     return hwnd;
-}
-
-bool OpenClipboardWithRetry() {
-    for (int attempt = 0; attempt < 8; ++attempt) {
-        if (OpenClipboard(nullptr)) {
-            return true;
-        }
-        Sleep(15);
-    }
-    return false;
 }
 
 HBITMAP BitmapFromPngClipboard() {
@@ -625,6 +662,10 @@ PinWindow::~PinWindow() {
         DestroyWindow(contextMenu_);
         contextMenu_ = nullptr;
     }
+    if (scaledBitmap_) {
+        DeleteObject(scaledBitmap_);
+        scaledBitmap_ = nullptr;
+    }
     if (bitmap_) {
         DeleteObject(bitmap_);
         bitmap_ = nullptr;
@@ -718,27 +759,92 @@ bool PinWindow::Create(HINSTANCE instance, HBITMAP bitmap) {
     return true;
 }
 
-bool PinWindow::CreateFromClipboard(HINSTANCE instance) {
+PinClipboardResult PinWindow::CreateFromClipboard(HINSTANCE instance) {
     const DWORD clipboardSequence = GetClipboardSequenceNumber();
     if (clipboardSequence != 0 && clipboardSequence == gDismissedClipboardSequence) {
-        return true;
+        // 同一份剪贴板内容刚被贴过并关闭过，本次调用被有意忽略。
+        return PinClipboardResult::Dismissed;
     }
 
-    if (!OpenClipboardWithRetry()) {
-        return false;
+    // 统一走 capture.h 里的重试入口：剪贴板被别的进程短暂占用是常态，
+    // 一次失败就返回会让用户看到"按了贴图没反应"。
+    if (!OpenClipboardWithRetry(nullptr)) {
+        return PinClipboardResult::ClipboardBusy;
     }
 
     HBITMAP bitmap = BitmapFromClipboard();
     CloseClipboard();
 
     if (!bitmap) {
-        return false;
+        return PinClipboardResult::NoImage;
     }
 
     gPendingClipboardSequence = clipboardSequence;
     const bool created = Create(instance, bitmap);
     gPendingClipboardSequence = 0;
-    return created;
+    return created ? PinClipboardResult::Ok : PinClipboardResult::Failed;
+}
+
+void PinWindow::RebuildScaledBitmap(int width, int height) {
+    if (scaledBitmap_) {
+        DeleteObject(scaledBitmap_);
+        scaledBitmap_ = nullptr;
+    }
+    scaledWidth_ = 0;
+    scaledHeight_ = 0;
+    if (width <= 0 || height <= 0 || !bitmap_) return;
+
+    BITMAPINFO info{};
+    info.bmiHeader.biSize = sizeof(info.bmiHeader);
+    info.bmiHeader.biWidth = width;
+    info.bmiHeader.biHeight = -height;
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    info.bmiHeader.biCompression = BI_RGB;
+
+    void* bits = nullptr;
+    HBITMAP scaled = CreateDIBSection(nullptr, &info, DIB_RGB_COLORS, &bits, nullptr, 0);
+    if (!scaled || !bits) {
+        if (scaled) DeleteObject(scaled);
+        return;
+    }
+
+    HDC target = CreateCompatibleDC(nullptr);
+    HDC source = CreateCompatibleDC(nullptr);
+    if (!target || !source) {
+        if (target) DeleteDC(target);
+        if (source) DeleteDC(source);
+        DeleteObject(scaled);
+        return;
+    }
+
+    const HGDIOBJ oldTarget = SelectObject(target, scaled);
+    const HGDIOBJ oldSource = SelectObject(source, bitmap_);
+    // 放大后要看到原始像素，所以用最近邻而不是 HALFTONE 平滑：
+    // 截图工具的用途是看清细节，HALFTONE 会把像素平均掉，而且慢得多。
+    // 拉伸模式要设在参与拉伸的两个 DC 上，原来只设了目标 DC，实际没生效。
+    SetStretchBltMode(source, COLORONCOLOR);
+    SetStretchBltMode(target, COLORONCOLOR);
+    StretchBlt(
+        target,
+        0,
+        0,
+        width,
+        height,
+        source,
+        0,
+        0,
+        bitmapWidth_,
+        bitmapHeight_,
+        SRCCOPY);
+    SelectObject(source, oldSource);
+    SelectObject(target, oldTarget);
+    DeleteDC(source);
+    DeleteDC(target);
+
+    scaledBitmap_ = scaled;
+    scaledWidth_ = width;
+    scaledHeight_ = height;
 }
 
 void PinWindow::ResizeForZoom() {
@@ -864,24 +970,24 @@ LRESULT PinWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
         HDC dc = BeginPaint(hwnd_, &ps);
         RECT client{};
         GetClientRect(hwnd_, &client);
+        const int width = client.right;
+        const int height = client.bottom;
 
-        HDC memory = CreateCompatibleDC(dc);
-        const HGDIOBJ old = SelectObject(memory, bitmap_);
-        SetStretchBltMode(dc, HALFTONE);
-        StretchBlt(
-            dc,
-            0,
-            0,
-            client.right,
-            client.bottom,
-            memory,
-            0,
-            0,
-            bitmapWidth_,
-            bitmapHeight_,
-            SRCCOPY);
-        SelectObject(memory, old);
-        DeleteDC(memory);
+        // 尺寸没变时直接复用上次的缩放结果；否则重新拉伸整幅原图。
+        if (width > 0 && height > 0) {
+            if (!scaledBitmap_ || scaledWidth_ != width || scaledHeight_ != height) {
+                RebuildScaledBitmap(width, height);
+            }
+            if (scaledBitmap_) {
+                HDC memory = CreateCompatibleDC(dc);
+                if (memory) {
+                    const HGDIOBJ old = SelectObject(memory, scaledBitmap_);
+                    BitBlt(dc, 0, 0, width, height, memory, 0, 0, SRCCOPY);
+                    SelectObject(memory, old);
+                    DeleteDC(memory);
+                }
+            }
+        }
         EndPaint(hwnd_, &ps);
         return 0;
     }

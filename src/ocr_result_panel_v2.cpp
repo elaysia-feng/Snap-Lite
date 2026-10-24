@@ -1,8 +1,14 @@
 #include "ocr_result_panel.h"
 
 #include "ocr.h"
+#include "resource.h"
 
 #include <algorithm>
+#include <commctrl.h>
+#include <cstring>
+#include <gdiplus.h>
+#include <memory>
+#include <objidl.h>
 #include <string>
 
 namespace snaplite {
@@ -38,6 +44,8 @@ struct PanelState {
     HFONT bodyFont{};
     HFONT smallFont{};
     HBRUSH editBrush{};
+    IStream* stickerStream{};
+    std::unique_ptr<Gdiplus::Bitmap> sticker;
     std::wstring text;
     RECT editFrame{};
 };
@@ -57,6 +65,72 @@ void ApplyFont(HWND control, HFONT font) {
     if (control && font) {
         SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
     }
+}
+
+bool LoadPanelSticker(PanelState* state) {
+    if (!state) return false;
+
+    const HRSRC resource = FindResourceW(
+        GetModuleHandleW(nullptr),
+        MAKEINTRESOURCEW(IDR_OCR_PANEL_KON_STICKER),
+        MAKEINTRESOURCEW(10));
+    if (!resource) return false;
+
+    const DWORD size = SizeofResource(GetModuleHandleW(nullptr), resource);
+    const HGLOBAL loaded = LoadResource(GetModuleHandleW(nullptr), resource);
+    const void* source = loaded ? LockResource(loaded) : nullptr;
+    if (!source || size == 0) return false;
+
+    const HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, size);
+    if (!memory) return false;
+    void* destination = GlobalLock(memory);
+    if (!destination) {
+        GlobalFree(memory);
+        return false;
+    }
+    std::memcpy(destination, source, size);
+    GlobalUnlock(memory);
+
+    IStream* stream = nullptr;
+    if (FAILED(CreateStreamOnHGlobal(memory, TRUE, &stream))) {
+        GlobalFree(memory);
+        return false;
+    }
+
+    auto bitmap = std::make_unique<Gdiplus::Bitmap>(stream, FALSE);
+    if (!bitmap || bitmap->GetLastStatus() != Gdiplus::Ok) {
+        bitmap.reset();
+        stream->Release();
+        return false;
+    }
+
+    state->stickerStream = stream;
+    state->sticker = std::move(bitmap);
+    return true;
+}
+
+// 面板是弹出窗口，键盘焦点落在只读文本框里。键盘消息不会自动回到父窗口，
+// 所以 ESC 必须由文本框的子类截获，否则面板打开后 Esc 完全失效，
+// 而工具栏仍然提示"取消截图 Esc"。
+constexpr UINT_PTR kPanelEditSubclassId = 0x534C1501;
+
+LRESULT CALLBACK PanelEditSubclassProc(
+    HWND hwnd,
+    UINT message,
+    WPARAM wParam,
+    LPARAM lParam,
+    UINT_PTR subclassId,
+    DWORD_PTR refData) {
+    (void)subclassId;
+    (void)refData;
+    (void)lParam;
+    if (message == WM_KEYDOWN && wParam == VK_ESCAPE) {
+        if (HWND panel = GetParent(hwnd)) {
+            PostMessageW(panel, WM_CLOSE, 0, 0);
+        }
+        return 0;
+    }
+    return DefSubclassProc(hwnd, message, wParam, lParam);
 }
 
 std::wstring SelectedText(HWND edit) {
@@ -93,7 +167,11 @@ void SetRoundedWindowRegion(HWND hwnd) {
         kCornerRadius,
         kCornerRadius);
     if (region) {
-        SetWindowRgn(hwnd, region, TRUE);
+        // SetWindowRgn 成功后区域的所有权交给系统；失败时必须自己释放，
+        // 否则每次调用都会泄漏一个 HRGN。
+        if (SetWindowRgn(hwnd, region, TRUE) == 0) {
+            DeleteObject(region);
+        }
     }
 }
 
@@ -221,22 +299,58 @@ void PaintPanel(HWND hwnd, PanelState* state) {
     const RECT dotRect{18, 18, 28, 28};
     ui::FillRoundRect(dc, dotRect, 4, kAccent, kAccent);
 
+    const int stickerRight = static_cast<int>(client.right) - 54;
+    const int stickerLeft = stickerRight - 128;
+    if (state && state->sticker) {
+        Gdiplus::Graphics graphics(dc);
+        if (graphics.GetLastStatus() == Gdiplus::Ok) {
+            graphics.SetCompositingMode(Gdiplus::CompositingModeSourceOver);
+            graphics.SetCompositingQuality(Gdiplus::CompositingQualityHighQuality);
+            graphics.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
+            graphics.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHighQuality);
+            graphics.DrawImage(
+                state->sticker.get(),
+                Gdiplus::Rect(stickerLeft, 1, 128, 48),
+                0,
+                0,
+                static_cast<INT>(state->sticker->GetWidth()),
+                static_cast<INT>(state->sticker->GetHeight()),
+                Gdiplus::UnitPixel);
+        }
+    }
+
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, kText);
     if (state && state->titleFont) SelectObject(dc, state->titleFont);
-    RECT titleRect{36, 10, client.right - 56, 38};
+    RECT titleRect{36, 10, stickerLeft - 12, 38};
     DrawTextW(dc, L"提取文字", -1, &titleRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
     SetTextColor(dc, kMutedText);
     if (state && state->smallFont) SelectObject(dc, state->smallFont);
-    RECT subtitleRect{18, 40, client.right - 18, 65};
-    std::wstring subtitle = L"按原图保留换行 · 拖选需要的内容后 Ctrl+C";
-    if (state) {
-        subtitle += L"  ·  ";
-        subtitle += std::to_wstring(CountVisualLines(state->text));
-        subtitle += L" 行";
-    }
+    const int countBadgeRight = static_cast<int>(client.right) - 18;
+    const int countBadgeLeft = countBadgeRight - 62;
+    RECT subtitleRect{18, 49, countBadgeLeft - 8, 69};
+    const std::wstring subtitle = L"保留换行 · 拖选文字后 Ctrl+C";
     DrawTextW(dc, subtitle.c_str(), -1, &subtitleRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+
+    if (state) {
+        RECT countBadge{countBadgeLeft, 49, countBadgeRight, 69};
+        DrawRoundRectFill(dc, countBadge, 10, RGB(255, 238, 243), kBorder);
+        SetTextColor(dc, kMutedText);
+        const std::wstring lineCount = std::to_wstring(CountVisualLines(state->text)) + L" 行";
+        DrawTextW(dc, lineCount.c_str(), -1, &countBadge, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    }
+
+    HPEN divider = CreatePen(PS_SOLID, 1, RGB(246, 226, 231));
+    if (divider) {
+        const HGDIOBJ oldPen = SelectObject(dc, divider);
+        const HGDIOBJ oldBrush = SelectObject(dc, GetStockObject(NULL_BRUSH));
+        MoveToEx(dc, 16, kHeaderHeight - 1, nullptr);
+        LineTo(dc, client.right - 16, kHeaderHeight - 1);
+        SelectObject(dc, oldBrush);
+        SelectObject(dc, oldPen);
+        DeleteObject(divider);
+    }
 
     if (state) {
         DrawRoundRectFill(dc, state->editFrame, 12, kCardBg, kBorder);
@@ -275,6 +389,7 @@ LRESULT CALLBACK PanelProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
             CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
             DEFAULT_PITCH | FF_DONTCARE, L"Microsoft YaHei UI");
         state->editBrush = CreateSolidBrush(kCardBg);
+        LoadPanelSticker(state);
 
         state->edit = CreateWindowExW(
             0,
@@ -323,6 +438,7 @@ LRESULT CALLBACK PanelProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
         ApplyFont(state->closeTop, state->titleFont);
 
         SendMessageW(state->edit, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELPARAM(10, 10));
+        SetWindowSubclass(state->edit, PanelEditSubclassProc, kPanelEditSubclassId, 0);
         LayoutPanel(hwnd, state);
         SetFocus(state->edit);
         SendMessageW(state->edit, EM_SETSEL, 0, 0);
@@ -368,12 +484,25 @@ LRESULT CALLBACK PanelProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
                 SetFocus(state->edit);
                 return 0;
             }
-            CopyUnicodeTextToClipboard(hwnd, selected);
+            // 剪贴板被别的程序占用时不能静默失败：否则用户点了没反应。
+            if (!CopyUnicodeTextToClipboard(hwnd, selected)) {
+                MessageBoxW(
+                    hwnd,
+                    L"复制失败：剪贴板被其他程序占用，请稍后重试。",
+                    L"Snap-Lite · 提取文字",
+                    MB_OK | MB_ICONWARNING);
+            }
             SetFocus(state->edit);
             return 0;
         }
         case kButtonCopyAll:
-            CopyUnicodeTextToClipboard(hwnd, state->text);
+            if (!CopyUnicodeTextToClipboard(hwnd, state->text)) {
+                MessageBoxW(
+                    hwnd,
+                    L"复制失败：剪贴板被其他程序占用，请稍后重试。",
+                    L"Snap-Lite · 提取文字",
+                    MB_OK | MB_ICONWARNING);
+            }
             SetFocus(state->edit);
             return 0;
         case kButtonCloseBottom:
@@ -384,18 +513,37 @@ LRESULT CALLBACK PanelProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
             break;
         }
         break;
+    case WM_KEYDOWN:
+        if (wParam == VK_ESCAPE) {
+            DestroyWindow(hwnd);
+            return 0;
+        }
+        break;
     case WM_CLOSE:
         DestroyWindow(hwnd);
         return 0;
     case WM_NCDESTROY:
         if (g_activePanel == hwnd) g_activePanel = nullptr;
         if (state) {
+            state->sticker.reset();
+            if (state->stickerStream) {
+                state->stickerStream->Release();
+                state->stickerStream = nullptr;
+            }
             if (state->titleFont) DeleteObject(state->titleFont);
             if (state->bodyFont) DeleteObject(state->bodyFont);
             if (state->smallFont) DeleteObject(state->smallFont);
             if (state->editBrush) DeleteObject(state->editBrush);
             delete state;
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+        }
+        // 面板抢走了键盘焦点；关闭后必须还给截图窗口，
+        // 否则 Esc / Enter 等截图快捷键会继续失效。
+        if (HWND owner = GetWindow(hwnd, GW_OWNER)) {
+            if (IsWindow(owner)) {
+                SetFocus(owner);
+                SetForegroundWindow(owner);
+            }
         }
         return 0;
     default:

@@ -1,4 +1,51 @@
 #include "@CMAKE_CURRENT_SOURCE_DIR@/resources/resource.h"
+#include <winver.h>
+#pragma code_page(65001)
 
 IDI_SNAPLITE ICON "@SNAPLITE_ICON@"
 IDR_TOOLBAR_FUNCTION_MASCOTS RCDATA "@CMAKE_CURRENT_SOURCE_DIR@/resources/toolbar_function_mascots.png"
+IDR_OCR_PANEL_KON_STICKER RCDATA "@CMAKE_CURRENT_SOURCE_DIR@/resources/k_on_five_chibi.png"
+
+1 VERSIONINFO
+FILEVERSION @SNAP_LITE_VERSION_COMMA@
+PRODUCTVERSION @SNAP_LITE_VERSION_COMMA@
+FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
+#ifdef _DEBUG
+FILEFLAGS VS_FF_DEBUG
+#else
+FILEFLAGS 0x0L
+#endif
+FILEOS VOS_NT_WINDOWS32
+FILETYPE VFT_APP
+FILESUBTYPE VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "080404B0"
+        BEGIN
+            VALUE "CompanyName", "Snap-Lite"
+            VALUE "FileDescription", "Snap-Lite 截图与贴图工具"
+            VALUE "FileVersion", "@PROJECT_VERSION@"
+            VALUE "InternalName", "SnapLite"
+            VALUE "LegalCopyright", "Copyright (C) Snap-Lite"
+            VALUE "OriginalFilename", "SnapLite.exe"
+            VALUE "ProductName", "Snap-Lite"
+            VALUE "ProductVersion", "@PROJECT_VERSION@"
+        END
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName", "Snap-Lite"
+            VALUE "FileDescription", "Snap-Lite Screen Capture and Pin Tool"
+            VALUE "FileVersion", "@PROJECT_VERSION@"
+            VALUE "InternalName", "SnapLite"
+            VALUE "LegalCopyright", "Copyright (C) Snap-Lite"
+            VALUE "OriginalFilename", "SnapLite.exe"
+            VALUE "ProductName", "Snap-Lite"
+            VALUE "ProductVersion", "@PROJECT_VERSION@"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0804, 1200, 0x0409, 1200
+    END
+END

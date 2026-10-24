@@ -198,6 +198,23 @@ void FreeGlobalCandidate(HGLOBAL memory) {
 
 }  // namespace
 
+// 剪贴板经常被别的进程短暂占用。直接 OpenClipboard 失败会让"复制"静默
+// 什么都没发生，所以这里重试一小段时间。图片复制、文字复制、OCR 面板复制
+// 统一走这个入口，避免某一条路径还留在"一次失败就放弃"的老行为上。
+bool OpenClipboardWithRetry(HWND owner) {
+    constexpr int kAttempts = 8;
+    for (int attempt = 0; attempt < kAttempts; ++attempt) {
+        if (OpenClipboard(owner)) {
+            return true;
+        }
+        // 最后一次失败就不用再等了。
+        if (attempt + 1 < kAttempts) {
+            Sleep(15);
+        }
+    }
+    return false;
+}
+
 VirtualScreen GetVirtualScreen() {
     return {
         GetSystemMetrics(SM_XVIRTUALSCREEN),
@@ -328,6 +345,40 @@ COLORREF ReadBitmapPixel(HBITMAP bitmap, int x, int y) {
     return color;
 }
 
+bool ReadBitmapPixels(HBITMAP bitmap, int width, int height, std::vector<BYTE>& pixels) {
+    if (!bitmap || width <= 0 || height <= 0) {
+        return false;
+    }
+
+    BITMAPINFO info{};
+    info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    info.bmiHeader.biWidth = width;
+    // 负高度 = 行序自上而下（第 0 行是位图最上面一行）。
+    info.bmiHeader.biHeight = -height;
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    info.bmiHeader.biCompression = BI_RGB;
+
+    pixels.assign(
+        static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 4,
+        0);
+
+    HDC dc = GetDC(nullptr);
+    if (!dc) {
+        return false;
+    }
+    const int lines = GetDIBits(
+        dc,
+        bitmap,
+        0,
+        static_cast<UINT>(height),
+        pixels.data(),
+        &info,
+        DIB_RGB_COLORS);
+    ReleaseDC(nullptr, dc);
+    return lines == height;
+}
+
 bool CopyBitmapToClipboard(
     HWND owner,
     HBITMAP bitmap,
@@ -346,7 +397,7 @@ bool CopyBitmapToClipboard(
         return false;
     }
 
-    if (!OpenClipboard(owner)) {
+    if (!OpenClipboardWithRetry(owner)) {
         FreeBitmapCandidate(bitmapCopy);
         FreeGlobalCandidate(dibData);
         FreeGlobalCandidate(pngData);
@@ -406,7 +457,7 @@ bool CopyBitmapToClipboard(
 }
 
 bool CopyTextToClipboard(HWND owner, const std::wstring& text) {
-    if (!OpenClipboard(owner)) {
+    if (!OpenClipboardWithRetry(owner)) {
         return false;
     }
 

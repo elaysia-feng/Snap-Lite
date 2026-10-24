@@ -13,30 +13,13 @@ def replace_once(path: str, old: str, new: str, label: str) -> None:
 
 
 def main() -> None:
-    # 1) History: the previous 6-entry / 32MB cap was the direct reason Ctrl+Z
-    # stopped after only a few edits. Keep a practical cap, but large enough for
-    # normal editing sessions.
-    replace_once(
-        "src/snip_window.h",
-        "        constexpr size_t kMaxEntries = 6;\n"
-        "        constexpr SIZE_T kMaxBytes = 32ull * 1024ull * 1024ull;",
-        "        constexpr size_t kMaxEntries = 128;\n"
-        "        constexpr SIZE_T kMaxBytes = 512ull * 1024ull * 1024ull;",
-        "expand bitmap undo history",
-    )
-    replace_once(
-        "src/snip_window.h",
-        "        Pen,\n"
-        "        Mosaic,\n"
-        "        Text,",
-        "        Pen,\n"
-        "        Eraser,\n"
-        "        Mosaic,\n"
-        "        Text,",
-        "add eraser tool enum",
-    )
+    # NOTE: src/snip_window.h and src/snip_window_original.inc are no longer
+    # patched here. The compressed BitmapHistory, the Eraser tool enum and the
+    # take_back()-based undo/redo calls now live directly in the repository
+    # sources, so the generated copies are byte-identical to src/ and the two
+    # "same header, different Tool enum" variants can no longer diverge.
 
-    # 2) Core eraser: preserve one pristine screenshot bitmap per active snip.
+    # 1) Core eraser: preserve one pristine screenshot bitmap per active snip.
     replace_once(
         "src/snip_window_original.inc",
         "#include <string>\n"
@@ -89,31 +72,44 @@ def main() -> None:
         "    }\n"
         "    const HGDIOBJ oldDst = SelectObject(dst, target);\n"
         "    const HGDIOBJ oldSrc = SelectObject(src, pristine);\n\n"
-        "    for (int i = 0; i <= samples; ++i) {\n"
-        "        const int x = static_cast<int>(from.x + dx * i / samples);\n"
-        "        const int y = static_cast<int>(from.y + dy * i / samples);\n"
-        "        RECT patch{\n"
-        "            std::max(static_cast<int>(bounds.left), x - radius),\n"
-        "            std::max(static_cast<int>(bounds.top), y - radius),\n"
-        "            std::min(static_cast<int>(bounds.right), x + radius + 1),\n"
-        "            std::min(static_cast<int>(bounds.bottom), y + radius + 1),\n"
-        "        };\n"
-        "        if (patch.right <= patch.left || patch.bottom <= patch.top) continue;\n\n"
-        "        HRGN ellipse = CreateEllipticRgn(x - radius, y - radius,\n"
-        "                                        x + radius + 1, y + radius + 1);\n"
-        "        HRGN limit = CreateRectRgn(bounds.left, bounds.top, bounds.right, bounds.bottom);\n"
-        "        HRGN clip = CreateRectRgn(0, 0, 0, 0);\n"
-        "        if (ellipse && limit && clip) {\n"
+        "    // 采样点很多（400px 笔画约 100 个），每个采样点新建三个 Region 会\n"
+        "    // 产生成百上千次 GDI 对象创建/销毁。这里把 Region 提到笔画级复用：\n"
+        "    // 椭圆靠 OffsetRgn 平移，剪裁区每轮重算。\n"
+        "    HRGN ellipse = CreateEllipticRgn(-radius, -radius, radius + 1, radius + 1);\n"
+        "    HRGN limit = CreateRectRgn(bounds.left, bounds.top, bounds.right, bounds.bottom);\n"
+        "    HRGN clip = CreateRectRgn(0, 0, 0, 0);\n\n"
+        "    int ellipseX = 0;\n"
+        "    int ellipseY = 0;\n"
+        "    bool ellipsePlaced = false;\n\n"
+        "    if (ellipse && limit && clip) {\n"
+        "        for (int i = 0; i <= samples; ++i) {\n"
+        "            const int x = static_cast<int>(from.x + dx * i / samples);\n"
+        "            const int y = static_cast<int>(from.y + dy * i / samples);\n\n"
+        "            if (!ellipsePlaced) {\n"
+        "                OffsetRgn(ellipse, x, y);\n"
+        "                ellipsePlaced = true;\n"
+        "            } else {\n"
+        "                OffsetRgn(ellipse, x - ellipseX, y - ellipseY);\n"
+        "            }\n"
+        "            ellipseX = x;\n"
+        "            ellipseY = y;\n\n"
+        "            RECT patch{\n"
+        "                std::max(static_cast<int>(bounds.left), x - radius),\n"
+        "                std::max(static_cast<int>(bounds.top), y - radius),\n"
+        "                std::min(static_cast<int>(bounds.right), x + radius + 1),\n"
+        "                std::min(static_cast<int>(bounds.bottom), y + radius + 1),\n"
+        "            };\n"
+        "            if (patch.right <= patch.left || patch.bottom <= patch.top) continue;\n\n"
         "            CombineRgn(clip, ellipse, limit, RGN_AND);\n"
         "            SelectClipRgn(dst, clip);\n"
         "            BitBlt(dst, patch.left, patch.top, patch.right - patch.left,\n"
         "                   patch.bottom - patch.top, src, patch.left, patch.top, SRCCOPY);\n"
         "            SelectClipRgn(dst, nullptr);\n"
         "        }\n"
-        "        if (clip) DeleteObject(clip);\n"
-        "        if (limit) DeleteObject(limit);\n"
-        "        if (ellipse) DeleteObject(ellipse);\n"
         "    }\n\n"
+        "    if (clip) DeleteObject(clip);\n"
+        "    if (limit) DeleteObject(limit);\n"
+        "    if (ellipse) DeleteObject(ellipse);\n\n"
         "    SelectObject(src, oldSrc);\n"
         "    SelectObject(dst, oldDst);\n"
         "    DeleteDC(src);\n"
@@ -166,6 +162,9 @@ def main() -> None:
         "                RestoreOriginalBrush(this, capture_, NormalizedSelection(),\n"
         "                                     drawCurrent_, point,\n"
         "                                     std::clamp(detail::gStrokeWidth * 4, 8, 48));\n"
+        "                // 橡皮把原始像素写回 capture_，不走 BeginEdit，\n"
+        "                // 合成图缓存键必须跟着变（EraseArrows 自己也会记一次）。\n"
+        "                ++contentRevision_;\n"
         "            } else if (tool_ == Tool::Mosaic) {\n"
         "                ApplyMosaic(point);\n"
         "            }",
@@ -184,6 +183,7 @@ def main() -> None:
         "                RestoreOriginalBrush(this, capture_, NormalizedSelection(),\n"
         "                                     drawStart_, drawStart_,\n"
         "                                     std::clamp(detail::gStrokeWidth * 4, 8, 48));\n"
+        "                ++contentRevision_;\n"
         "            }\n"
         "            return 0;",
         "initial eraser stamp",
@@ -199,55 +199,54 @@ def main() -> None:
         "            if (wParam == 'T') tool_ = Tool::Text;",
         "eraser keyboard shortcut",
     )
-    replace_once(
-        "src/snip_window_original.inc",
-        "        // BitmapHistory::Trim enforces size > 6 OR bytes > 32MB on every\n"
-        "        // push_back, so no manual trimming is needed here.",
-        "        // BitmapHistory::Trim keeps a generous 128-step / 512MB session cap.\n"
-        "        // This avoids the old behavior where Ctrl+Z stopped after ~6 edits.",
-        "undo history comment",
-    )
 
-    # 3) Public UI tool mapping. Keep indices aligned with toolbar category order:
-    # shape=0, arrow=1, pen=2, eraser=3, mosaic=4, text=5.
+    # 3) 公共 UI 工具索引由枚举统一维护，新增工具时同步更新映射。
     replace_once(
         "src/snip_window.cpp",
-        "    case Tool::Pen: detail::gActiveToolIndex = 2; break;\n"
-        "    case Tool::Mosaic: detail::gActiveToolIndex = 3; break;\n"
-        "    case Tool::Text: detail::gActiveToolIndex = 4; break;",
-        "    case Tool::Pen: detail::gActiveToolIndex = 2; break;\n"
-        "    case Tool::Eraser: detail::gActiveToolIndex = 3; break;\n"
-        "    case Tool::Mosaic: detail::gActiveToolIndex = 4; break;\n"
-        "    case Tool::Text: detail::gActiveToolIndex = 5; break;",
+        "    case Tool::Pen:\n"
+        "        detail::gActiveToolIndex = static_cast<int>(UiToolIndex::Pen);\n"
+        "        break;\n"
+        "    case Tool::Mosaic:\n"
+        "        detail::gActiveToolIndex = static_cast<int>(UiToolIndex::Mosaic);\n"
+        "        break;\n"
+        "    case Tool::Text:\n"
+        "        detail::gActiveToolIndex = static_cast<int>(UiToolIndex::Text);\n"
+        "        break;",
+        "    case Tool::Pen:\n"
+        "        detail::gActiveToolIndex = static_cast<int>(UiToolIndex::Pen);\n"
+        "        break;\n"
+        "    case Tool::Eraser:\n"
+        "        detail::gActiveToolIndex = static_cast<int>(UiToolIndex::Eraser);\n"
+        "        break;\n"
+        "    case Tool::Mosaic:\n"
+        "        detail::gActiveToolIndex = static_cast<int>(UiToolIndex::Mosaic);\n"
+        "        break;\n"
+        "    case Tool::Text:\n"
+        "        detail::gActiveToolIndex = static_cast<int>(UiToolIndex::Text);\n"
+        "        break;",
         "active eraser index",
     )
     replace_once(
         "src/snip_window.cpp",
-        "    case Tool::Pen: return 2;\n"
-        "    case Tool::Mosaic: return 3;\n"
-        "    case Tool::Text: return 4;",
-        "    case Tool::Pen: return 2;\n"
-        "    case Tool::Eraser: return 3;\n"
-        "    case Tool::Mosaic: return 4;\n"
-        "    case Tool::Text: return 5;",
+        "    case Tool::Pen: return static_cast<int>(UiToolIndex::Pen);\n"
+        "    case Tool::Mosaic: return static_cast<int>(UiToolIndex::Mosaic);\n"
+        "    case Tool::Text: return static_cast<int>(UiToolIndex::Text);",
+        "    case Tool::Pen: return static_cast<int>(UiToolIndex::Pen);\n"
+        "    case Tool::Eraser: return static_cast<int>(UiToolIndex::Eraser);\n"
+        "    case Tool::Mosaic: return static_cast<int>(UiToolIndex::Mosaic);\n"
+        "    case Tool::Text: return static_cast<int>(UiToolIndex::Text);",
         "eraser UiActiveTool mapping",
     )
     replace_once(
         "src/snip_window.cpp",
-        "    case 2: tool_ = Tool::Pen; break;\n"
-        "    case 3: tool_ = Tool::Mosaic; break;\n"
-        "    case 4: tool_ = Tool::Text; break;",
-        "    case 2: tool_ = Tool::Pen; break;\n"
-        "    case 3: tool_ = Tool::Eraser; break;\n"
-        "    case 4: tool_ = Tool::Mosaic; break;\n"
-        "    case 5: tool_ = Tool::Text; break;",
+        "    case UiToolIndex::Pen: tool_ = Tool::Pen; break;\n"
+        "    case UiToolIndex::Mosaic: tool_ = Tool::Mosaic; break;\n"
+        "    case UiToolIndex::Text: tool_ = Tool::Text; break;",
+        "    case UiToolIndex::Pen: tool_ = Tool::Pen; break;\n"
+        "    case UiToolIndex::Eraser: tool_ = Tool::Eraser; break;\n"
+        "    case UiToolIndex::Mosaic: tool_ = Tool::Mosaic; break;\n"
+        "    case UiToolIndex::Text: tool_ = Tool::Text; break;",
         "eraser UiSetTool mapping",
-    )
-    replace_once(
-        "src/snip_window.cpp",
-        "    detail::gActiveToolIndex = toolIndex >= 0 && toolIndex <= 4 ? toolIndex : -1;",
-        "    detail::gActiveToolIndex = toolIndex >= 0 && toolIndex <= 5 ? toolIndex : -1;",
-        "active tool index range",
     )
 
     # 4) Editor toolbar category and behavior.
@@ -257,6 +256,15 @@ def main() -> None:
         "enum class Category { Select = 0, Shape, Arrow, Pen, Mosaic, Text };",
         "enum class Category { Select = 0, Shape, Arrow, Pen, Eraser, Mosaic, Text };",
         "eraser toolbar category",
+    )
+    replace_once(
+        "src/editor_toolbar.cpp",
+        "    case SnipWindow::UiToolIndex::Pen: return Category::Pen;\n"
+        "    case SnipWindow::UiToolIndex::Mosaic: return Category::Mosaic;",
+        "    case SnipWindow::UiToolIndex::Pen: return Category::Pen;\n"
+        "    case SnipWindow::UiToolIndex::Eraser: return Category::Eraser;\n"
+        "    case SnipWindow::UiToolIndex::Mosaic: return Category::Mosaic;",
+        "eraser toolbar tool-index mapping",
     )
     replace_once(
         "src/editor_toolbar.cpp",
@@ -289,18 +297,6 @@ def main() -> None:
     )
     replace_once(
         "src/editor_toolbar.cpp",
-        "        if (tool >= 0 && tool <= 4) {",
-        "        if (tool >= 0 && tool <= 5) {",
-        "sync category range",
-    )
-    replace_once(
-        "src/editor_toolbar.cpp",
-        "            if (tool == 4 && PtInRect(&selection, p)) {",
-        "            if (tool == 5 && PtInRect(&selection, p)) {",
-        "text tool shifted index",
-    )
-    replace_once(
-        "src/editor_toolbar.cpp",
         "        case Category::Pen: return L\"画笔：选择粗细和颜色后自由绘制\";\n"
         "        case Category::Mosaic: return L\"马赛克：按住鼠标左键涂抹需要隐藏的区域\";",
         "        case Category::Pen: return L\"画笔：选择粗细和颜色后自由绘制\";\n"
@@ -310,13 +306,32 @@ def main() -> None:
     )
     replace_once(
         "src/editor_toolbar.cpp",
-        "        case Category::Pen: snip_->UiSetTool(2); DeselectText(); break;\n"
-        "        case Category::Mosaic: snip_->UiSetTool(3); DeselectText(); break;\n"
-        "        case Category::Text: snip_->UiSetTool(4); break;",
-        "        case Category::Pen: snip_->UiSetTool(2); DeselectText(); break;\n"
-        "        case Category::Eraser: snip_->UiSetTool(3); DeselectText(); break;\n"
-        "        case Category::Mosaic: snip_->UiSetTool(4); DeselectText(); break;\n"
-        "        case Category::Text: snip_->UiSetTool(5); break;",
+        "        case Category::Pen:\n"
+        "            snip_->UiSetTool(static_cast<int>(SnipWindow::UiToolIndex::Pen));\n"
+        "            DeselectText();\n"
+        "            break;\n"
+        "        case Category::Mosaic:\n"
+        "            snip_->UiSetTool(static_cast<int>(SnipWindow::UiToolIndex::Mosaic));\n"
+        "            DeselectText();\n"
+        "            break;\n"
+        "        case Category::Text:\n"
+        "            snip_->UiSetTool(static_cast<int>(SnipWindow::UiToolIndex::Text));\n"
+        "            break;",
+        "        case Category::Pen:\n"
+        "            snip_->UiSetTool(static_cast<int>(SnipWindow::UiToolIndex::Pen));\n"
+        "            DeselectText();\n"
+        "            break;\n"
+        "        case Category::Eraser:\n"
+        "            snip_->UiSetTool(static_cast<int>(SnipWindow::UiToolIndex::Eraser));\n"
+        "            DeselectText();\n"
+        "            break;\n"
+        "        case Category::Mosaic:\n"
+        "            snip_->UiSetTool(static_cast<int>(SnipWindow::UiToolIndex::Mosaic));\n"
+        "            DeselectText();\n"
+        "            break;\n"
+        "        case Category::Text:\n"
+        "            snip_->UiSetTool(static_cast<int>(SnipWindow::UiToolIndex::Text));\n"
+        "            break;",
         "eraser category selection",
     )
 

@@ -5,10 +5,12 @@
 #include <gdiplus.h>
 #include <iostream>
 #include <stdexcept>
+#include <vector>
 
 // 测试链接真实工具栏；本机没有 C++/WinRT SDK，未触发的 OCR 入口显式报错。
 namespace snaplite {
-OcrResult ExtractTextFromBitmapRegion(HBITMAP, const RECT&) {
+bool StartTextExtractionFromBitmapRegion(
+    HBITMAP, const RECT&, HWND, unsigned long long, OcrCompletionCallback) {
     throw std::runtime_error("OCR is outside this interaction test");
 }
 void ShowOcrResultPanel(HWND, const RECT&, const std::wstring&) {
@@ -52,6 +54,18 @@ void History(HWND hwnd, int key) {
     SetKeyboardState(pressed);
     SendMessageW(hwnd, WM_KEYDOWN, key, 0);
     SetKeyboardState(previous);
+}
+
+DWORD MinGdiObjects() {
+    // 一段时间内的最小 GDI 对象数。抖动来自后台线程的临时句柄；
+    // 真泄漏是单调的，最小值压不下去。
+    DWORD lowest = 0xFFFFFFFFu;
+    for (int attempt = 0; attempt < 30; ++attempt) {
+        const DWORD current = GetGuiResources(GetCurrentProcess(), GR_GDIOBJECTS);
+        if (current < lowest) lowest = current;
+        Sleep(10);
+    }
+    return lowest;
 }
 
 bool RedNear(HBITMAP bitmap, int x, int y) {
@@ -133,6 +147,11 @@ int wmain(int argc, wchar_t** argv) {
 
         Mouse(hwnd, WM_LBUTTONDOWN, 400, 510);
         Mouse(hwnd, WM_MOUSEMOVE, 430, 540);
+        // 拖动途中重建一次合成图。若缓存键没有覆盖"拖动取消还原"，这次重建
+        // 会把"拖到一半"的图缓存下来，取消之后用户读到的仍是旧标注。
+        HBITMAP midDrag = snaplite::CloneBitmap(snip->UiCaptureBitmap());
+        Check(midDrag != nullptr, "mid-drag composite rebuild succeeds");
+        DeleteObject(midDrag);
         SendMessageW(hwnd, WM_KEYDOWN, VK_ESCAPE, 0);
         Check(Red(snip->UiCaptureBitmap(), 400, 510), "escape cancels active arrow drag");
         Check(GetCapture() != hwnd, "escape releases mouse capture");
@@ -161,10 +180,71 @@ int wmain(int argc, wchar_t** argv) {
         Drag(hwnd, 400, 510, 400, 540);
         Check(Red(snip->UiCaptureBitmap(), 400, 540), "selection tool can move old arrow");
         snip->UiSetTool(3);
-        Drag(hwnd, 400, 540, 450, 540);
+        Mouse(hwnd, WM_LBUTTONDOWN, 400, 540);
+        Mouse(hwnd, WM_MOUSEMOVE, 425, 540);
+        // 擦除途中重建一次合成图：橡皮移除的几何标注必须从重建结果里消失，
+        // 不能因为缓存没失效而继续留在图上。
+        HBITMAP midErase = snaplite::CloneBitmap(snip->UiCaptureBitmap());
+        Check(midErase != nullptr, "mid-erase composite rebuild succeeds");
+        DeleteObject(midErase);
+        Mouse(hwnd, WM_MOUSEMOVE, 450, 540);
+        Mouse(hwnd, WM_LBUTTONUP, 450, 540);
         Check(!Red(snip->UiCaptureBitmap(), 400, 540), "eraser removes editable arrow");
         History(hwnd, 'Z');
         Check(Red(snip->UiCaptureBitmap(), 400, 540), "undo eraser restores editable arrow");
+
+        // 画笔是逐段写进 capture_ 的。若缓存键没有覆盖"笔画中途的写入"，
+        // 笔画中途重建出来的半截图会被缓存住，笔画结束后用户看到的仍是半截。
+        snip->UiSetArrowKind(0);
+        snip->UiSetTool(2);
+        snip->UiSetColor(RGB(235, 70, 70));
+        snip->UiSetStrokeWidth(5);
+        Mouse(hwnd, WM_LBUTTONDOWN, 200, 580);
+        Mouse(hwnd, WM_MOUSEMOVE, 300, 580);
+        HBITMAP midStroke = snaplite::CloneBitmap(snip->UiCaptureBitmap());
+        Check(midStroke != nullptr, "mid-stroke composite rebuild succeeds");
+        DeleteObject(midStroke);
+        Mouse(hwnd, WM_MOUSEMOVE, 400, 580);
+        Mouse(hwnd, WM_LBUTTONUP, 400, 580);
+        Check(Red(snip->UiCaptureBitmap(), 400, 580), "pen stroke keeps its tail after mid-stroke rebuild");
+        // 内容再次变化后重建：合成图必须同时包含之前的笔画和后来新增的箭头，
+        // 缓存不能因为"上一次重建过"就把后来的标注挡在旧图后面。
+        snip->UiSetTool(1);
+        snip->UiSetColor(RGB(235, 70, 70));
+        Drag(hwnd, 200, 640, 400, 640);
+        Check(Red(snip->UiCaptureBitmap(), 300, 640), "arrow added after the pen stroke appears in composite");
+        Check(Red(snip->UiCaptureBitmap(), 400, 580), "pen stroke is still present after the arrow was added");
+        History(hwnd, 'Z');
+        History(hwnd, 'Z');
+        Check(!Red(snip->UiCaptureBitmap(), 400, 580), "undo removes the pen stroke from the composite");
+        snip->UiSetTool(-1);
+
+        // 橡皮把原始像素写回 capture_，这条路径也必须让合成图缓存失效。
+        //
+        // 断言要落在"中途重建之后才被擦掉"的那一段上：如果只断言中途重建
+        // 之前就已被擦掉的位置，旧图也同样满足，断言就没有鉴别力。
+        snip->UiSetTool(2);
+        snip->UiSetColor(RGB(235, 70, 70));
+        snip->UiSetStrokeWidth(5);
+        Mouse(hwnd, WM_LBUTTONDOWN, 200, 620);
+        Mouse(hwnd, WM_MOUSEMOVE, 400, 620);
+        Mouse(hwnd, WM_LBUTTONUP, 400, 620);
+        Check(Red(snip->UiCaptureBitmap(), 300, 620), "pen stroke for the eraser check");
+        snip->UiSetTool(3);
+        Mouse(hwnd, WM_LBUTTONDOWN, 200, 620);
+        Mouse(hwnd, WM_MOUSEMOVE, 300, 620);
+        // 中途重建：此时只有 200..300 被擦回原始像素。
+        HBITMAP midErase2 = snaplite::CloneBitmap(snip->UiCaptureBitmap());
+        Check(midErase2 != nullptr, "mid-erase rebuild of a pen stroke succeeds");
+        DeleteObject(midErase2);
+        Mouse(hwnd, WM_MOUSEMOVE, 400, 620);
+        Mouse(hwnd, WM_LBUTTONUP, 400, 620);
+        // 300..400 是在中途重建之后才被擦掉的：缓存没失效的话这里仍然是红的。
+        Check(!Red(snip->UiCaptureBitmap(), 350, 620), "erase after mid-erase rebuild reaches the composite");
+        History(hwnd, 'Z');
+        History(hwnd, 'Z');
+        Check(!Red(snip->UiCaptureBitmap(), 350, 620), "undo removes the erased pen stroke");
+        snip->UiSetTool(-1);
         // 所有几何形状及三种填充模式共用可编辑对象，验证命中、移动和历史。
         for (int kind = 0; kind < 8; ++kind) {
             for (int fill = 0; fill < 3; ++fill) {
@@ -229,9 +309,24 @@ int wmain(int argc, wchar_t** argv) {
         History(hwnd, 'Y');
         Check(!snip->UiHitArrow({730, 220}), "redo deletion uses toolbar unified history");
         History(hwnd, 'Z');
-        const DWORD gdiBefore = GetGuiResources(GetCurrentProcess(), GR_GDIOBJECTS);
+        // 进程级 GDI 计数会被后台 PNG 压缩线程**同时**占用而抖动：
+        // 第 14 轮验收实测 16 次运行里误红 1 次（红在一个只改了文案字符串的
+        // 等价变异上，与被测代码无关）。
+        //
+        // 这里把测量做成"取整段采样里的最小值"：后台线程的临时句柄迟早会
+        // 释放，最小值更接近"这个对象自己占了多少"；真泄漏是单调的
+        // （40 次刷新涨 40），最小值也压不下去。
+        //
+        // 刷新后再测两轮、取较小的那个：后台线程的占用要是正好横跨第一轮
+        // 的采样窗口，第二轮能把它滤掉。
+        const DWORD gdiBefore = MinGdiObjects();
         for (int repeat = 0; repeat < 40; ++repeat) snip->UiCaptureBitmap();
-        Check(GetGuiResources(GetCurrentProcess(), GR_GDIOBJECTS) <= gdiBefore + 1, "repeated composite refresh does not leak GDI objects");
+        const DWORD gdiAfter = MinGdiObjects();
+        for (int repeat = 0; repeat < 40; ++repeat) snip->UiCaptureBitmap();
+        const DWORD gdiAfter2 = MinGdiObjects();
+        Check(
+            (gdiAfter < gdiAfter2 ? gdiAfter : gdiAfter2) <= gdiBefore + 1,
+            "repeated composite refresh does not leak GDI objects");
         HWND toolbar = FindWindowExW(hwnd, nullptr, L"SnapLiteEditorToolbarChild", nullptr);
         snip->UiSetTool(0);
         Mouse(hwnd, WM_LBUTTONDOWN, 730, 220);
@@ -342,6 +437,64 @@ int wmain(int argc, wchar_t** argv) {
         HBITMAP visible = snaplite::CaptureVirtualScreen();
         Check(snaplite::SaveBitmapPng(visible, output / L"native-window.png"), "save native window evidence");
         DeleteObject(visible);
+        // 产品级的"裁剪 → 编辑 → 撤销"路径（第 14 批补的覆盖缺口 F1）。
+        //
+        // 之前那条裁剪配对测试用的是 BitmapHistory<int>，而产品用的是
+        // BitmapHistory<std::vector<ArrowAnnotation>>。测试钩子是
+        // **按模板实例化**存的静态量，两个实例化各有一份——测试压的
+        // 上限根本落不到产品那一份上。实测：把平行标注栈原样装回产品
+        // （变异 M3），259 项运行时断言全绿，只有源码文本守卫会红。
+        //
+        // 现在由产品自己提供一个入口，压的就是产品真正用的那一份：
+        // 上限压到 2 → 连做 3 次带标注的编辑 → 撤销 → 恢复出来的标注
+        // 必须逐条对得上（第一个、第二个在，第三个不在）。
+        {
+            const RECT area = snip->UiSelectionRect();
+            const int arrowY = area.top + 24;
+            const POINT first{area.left + 24, arrowY};
+            const POINT second{area.left + 124, arrowY};
+            const POINT third{area.left + 224, arrowY};
+            // 这三个点必须本来是空的：否则"箭头在不在"的断言会被
+            // 别的标注干扰（命中测试是从后往前找，先撞上哪个算哪个）。
+            Check(
+                !snip->UiHitArrow(first) && !snip->UiHitArrow(second) &&
+                    !snip->UiHitArrow(third),
+                "the product level history test uses empty spots");
+            snaplite::SnipWindow::SetHistoryEntryLimitForTest(2);
+            snip->UiSetTool(1);
+            snip->UiSetColor(RGB(235, 70, 70));
+            snip->UiSetStrokeWidth(5);
+            snip->UiSetArrowKind(0);
+            Drag(hwnd, first.x, first.y, first.x + 40, first.y);
+            Check(snip->UiHitArrow(first), "first product arrow is drawn");
+            Drag(hwnd, second.x, second.y, second.x + 40, second.y);
+            Check(snip->UiHitArrow(second), "second product arrow is drawn");
+            Drag(hwnd, third.x, third.y, third.x + 40, third.y);
+            Check(snip->UiHitArrow(third), "third product arrow is drawn");
+            // 撤销一次：恢复出来的必须是"第三个箭头画出来之前"的那一套标注。
+            History(hwnd, 'Z');
+            Check(
+                snip->UiHitArrow(first) && snip->UiHitArrow(second),
+                "after trimming, undo restores the annotations of that very step");
+            Check(
+                !snip->UiHitArrow(third),
+                "after trimming, undo drops the annotation created after the kept step");
+            // 探针：确认"裁剪**真的发生了**"。
+            //
+            // 前面那几条只能证明"撤销恢复出来的标注是对的那一套"，证明不了
+            // "裁剪真的发生过"——上限钩子要是没落到产品那一份栈上（或者
+            // 上限写错了），栈里一条都没丢，撤销当然不会错位，断言照样全绿。
+            //
+            // 上限是 2 时最老那条早就被裁掉了：撤三次也回不去，第一个箭头
+            // 必须还在。钩子没生效时栈里有 3 条，撤第三次正好回到"第一个
+            // 箭头还没画"的那一刻，它就不在了。
+            History(hwnd, 'Z');
+            History(hwnd, 'Z');
+            Check(
+                snip->UiHitArrow(first),
+                "the trimmed oldest step is really gone: the first arrow survives three undos");
+            snaplite::SnipWindow::SetHistoryEntryLimitForTest(0);
+        }
         RECT selection = snip->UiSelectionRect();
         snip->UiFinish(snaplite::SnipWindow::FinishAction::Copy);
         hwnd = nullptr;
@@ -350,7 +503,115 @@ int wmain(int argc, wchar_t** argv) {
         Check(Red(exported, 730 - selection.left, 220 - selection.top), "export includes moved and resized circle");
         Check(snaplite::SaveBitmapPng(exported, output / L"export.png"), "save export evidence");
         DeleteObject(baseline);
-        std::cout << "PASS: " << checks << " native interaction checks\n";
+        // 撤销历史的后台压缩：压完的条目取回时走的是"PNG 解码"那条路，
+        // 不是"直接拿原始位图"。压缩改成异步之后，不主动等它的话这条路径
+        // 在测试里根本不会被走到——后台压缩一坏，撤销就静默失效。
+        {
+            snaplite::BitmapHistory<int> history;
+            std::vector<HBITMAP> references;
+            for (int index = 0; index < 6; ++index) {
+                HDC screen = GetDC(nullptr);
+                HBITMAP bitmap = CreateCompatibleBitmap(screen, 8, 8);
+                ReleaseDC(nullptr, screen);
+                HDC dc = CreateCompatibleDC(nullptr);
+                const HGDIOBJ old = SelectObject(dc, bitmap);
+                const HBRUSH brush = CreateSolidBrush(RGB(10 + index * 20, 30, 40));
+                RECT rect{0, 0, 8, 8};
+                FillRect(dc, &rect, brush);
+                DeleteObject(brush);
+                SelectObject(dc, old);
+                DeleteDC(dc);
+                // 自己留一份原始像素做对照：判据是"压过再取回，内容不变"，
+                // 而不是某个写死的颜色值。
+                references.push_back(snaplite::CloneBitmap(bitmap));
+                history.push_back(bitmap, index);
+            }
+            for (int spin = 0; spin < 300 && history.IsCompressing(); ++spin) {
+                Sleep(20);
+            }
+            Check(!history.IsCompressing(), "background history compression finished");
+            for (int index = 5; index >= 0; --index) {
+                int companion = -1;
+                HBITMAP restored = history.take_back(&companion);
+                Check(restored != nullptr, "compressed history entry is restored");
+                // 取出来的这一帧必须带着**它自己**的那份状态。
+                //
+                // 这一条不是装饰：状态存在历史条目里就是为了这个。位图与
+                // 状态如果住在两个平行的栈里，裁剪（丢队首）之后配对就会
+                // 错开一位，撤销恢复出来的是另一套标注。
+                Check(
+                    companion == index,
+                    "a restored frame keeps its own annotation state");
+                Check(
+                    snaplite::ReadBitmapPixel(restored, 4, 4) ==
+                        snaplite::ReadBitmapPixel(references[static_cast<size_t>(index)], 4, 4),
+                    "a compressed frame comes back with the same pixels");
+                DeleteObject(restored);
+            }
+            for (HBITMAP reference : references) {
+                DeleteObject(reference);
+            }
+        }
+        // 历史有长度上限，超了会从**队首**丢老条目。丢的时候必须连着
+        // "与这一帧配对的状态"一起丢。
+        //
+        // 只丢位图、留着状态，两边从此对不齐：位图栈少了队首的，状态栈
+        // 还留着，于是下一次编辑时"把多出来的状态从队尾扔掉"会把**新的**
+        // 那一套扔掉——之后每次撤销恢复出来的都是旧的那一套（实测表现：
+        // 撤销之后箭头还在，而且越撤越错）。
+        //
+        // 裁剪平时几乎测不到（要攒够 64MB 或 128 条），所以这里把上限
+        // 压到 2 条，几秒钟就把这条路走一遍。
+        {
+            snaplite::BitmapHistory<int> history;
+            snaplite::BitmapHistory<int>::SetMaxEntriesOverrideForTest(2);
+            std::vector<HBITMAP> references;
+            for (int index = 0; index < 4; ++index) {
+                HDC screen = GetDC(nullptr);
+                HBITMAP bitmap = CreateCompatibleBitmap(screen, 8, 8);
+                ReleaseDC(nullptr, screen);
+                HDC dc = CreateCompatibleDC(nullptr);
+                const HGDIOBJ old = SelectObject(dc, bitmap);
+                const HBRUSH brush = CreateSolidBrush(RGB(200 - index * 20, 60, 90));
+                RECT rect{0, 0, 8, 8};
+                FillRect(dc, &rect, brush);
+                DeleteObject(brush);
+                SelectObject(dc, old);
+                DeleteDC(dc);
+                references.push_back(snaplite::CloneBitmap(bitmap));
+                history.push_back(bitmap, index);
+            }
+            for (int spin = 0; spin < 300 && history.IsCompressing(); ++spin) {
+                Sleep(20);
+            }
+            Check(
+                history.size() == 2,
+                "the history is trimmed down to the configured limit");
+            // 剩下的必须是**最后压进去的那两条**，各自的编号必须对得上。
+            for (int index = 3; index >= 2; --index) {
+                int companion = -1;
+                HBITMAP restored = history.take_back(&companion);
+                Check(restored != nullptr, "a trimmed history entry is restored");
+                Check(
+                    companion == index,
+                    "a trimmed frame keeps its own annotation state");
+                if (restored) {
+                    Check(
+                        snaplite::ReadBitmapPixel(restored, 4, 4) ==
+                            snaplite::ReadBitmapPixel(
+                                references[static_cast<size_t>(index)], 4, 4),
+                        "a trimmed frame comes back with the same pixels");
+                    DeleteObject(restored);
+                }
+            }
+            for (HBITMAP reference : references) {
+                DeleteObject(reference);
+            }
+            snaplite::BitmapHistory<int>::SetMaxEntriesOverrideForTest(0);
+        }
+        // 用 endl 立即刷新：stdout 是带缓冲的，不刷新的话 CI 日志里可能看不到
+        // 这一行，测试就变成"跑了但不知道跑了多少断言"。
+        std::cout << "PASS: " << checks << " native interaction checks" << std::endl;
     } catch (const std::exception& error) {
         std::cerr << "FAIL after " << checks << " checks: " << error.what() << '\n';
         result = 1;

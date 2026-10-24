@@ -74,7 +74,13 @@ inline void SetRoundedWindowRegion(HWND hwnd, int radius) {
         rect.bottom - rect.top + 1,
         radius,
         radius);
-    if (region) SetWindowRgn(hwnd, region, TRUE);
+    if (region) {
+        // SetWindowRgn 成功后区域的所有权交给系统；失败时必须自己释放，
+        // 否则每次调用都会泄漏一个 HRGN。
+        if (SetWindowRgn(hwnd, region, TRUE) == 0) {
+            DeleteObject(region);
+        }
+    }
 }
 
 inline COLORREF Blend(COLORREF a, COLORREF b) {

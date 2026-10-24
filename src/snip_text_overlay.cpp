@@ -83,6 +83,10 @@ void SnipWindow::UiBakeTextOverlays(const std::vector<TextOverlay>& overlays) {
 
     SelectObject(dc, oldBitmap);
     DeleteDC(dc);
+    // 文字烘焙会把箭头与文字一起写进 capture_，并清空几何标注集合。
+    // 这里直接改了捕获像素，必须记一次内容版本：合成图缓存键不能落后于
+    // capture_ 的实际内容。
+    ++contentRevision_;
     InvalidateRect(hwnd_, nullptr, FALSE);
 }
 

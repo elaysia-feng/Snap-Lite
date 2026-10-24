@@ -1,5 +1,7 @@
 #include "ocr.h"
 
+#include "capture.h"
+
 #include <objidl.h>
 #include <propidl.h>
 #include <gdiplus.h>
@@ -14,15 +16,18 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <cwctype>
 #include <filesystem>
-#include <future>
 #include <limits>
+#include <memory>
+#include <mutex>
 #include <string>
 #include <system_error>
+#include <thread>
 #include <vector>
 
 namespace snaplite {
@@ -191,11 +196,16 @@ HBITMAP PrepareBitmap(HBITMAP source, PreparedVariant variant) {
     if (sourceWidth <= 0 || sourceHeight <= 0) return nullptr;
 
     const int sourceMax = std::max(sourceWidth, sourceHeight);
-    double scale = sourceMax <= 900 ? 3.0 : 2.0;
-    if (sourceMax > 0) {
-        scale = std::min(scale, 2600.0 / static_cast<double>(sourceMax));
-    }
-    scale = std::max(1.0, scale);
+    // OCR 引擎对单边像素有硬上限（MaxImageDimension=2600），超出会直接抛异常。
+    //
+    // 缩放策略必须连续：小的选区最多放大 3 倍（太小识别不准），同时保证长边
+    // 永远不超过 2560（给引擎 2600 上限留 40px 余量）。之前的写法里
+    // "scale = max(1.0, scale)" 会把上限收敛抵消掉，大选区必然识别失败；
+    // 而 900/901 之间的硬阈值分支还会让分辨率在断崖处突然掉一档。
+    constexpr double kOcrMaxDimension = 2560.0;
+    constexpr double kOcrMaxUpscale = 3.0;
+    const double scale = std::min(
+        kOcrMaxUpscale, kOcrMaxDimension / static_cast<double>(sourceMax));
 
     const int width = std::max(1, static_cast<int>(std::lround(sourceWidth * scale)));
     const int height = std::max(1, static_cast<int>(std::lround(sourceHeight * scale)));
@@ -302,10 +312,18 @@ std::filesystem::path MakeTempOcrPath(int index) {
     const DWORD length = GetTempPathW(MAX_PATH, tempDirectory);
     if (length == 0 || length > MAX_PATH) return {};
 
+    // 文件名必须唯一。GetTickCount64() 的分辨率是系统时钟粒度（约 15.6ms），
+    // 同一 tick 内的两次请求会算出同一个路径，两个后台线程互相覆盖、
+    // 甚至删掉同一批 PNG。这里补一个进程内自增序号兜底。
+    static std::atomic<unsigned long long> g_tempPathCounter{0};
+
     std::wstring name = L"SnapLite-OCR2-";
     name += std::to_wstring(GetCurrentProcessId());
     name += L"-";
     name += std::to_wstring(GetTickCount64());
+    name += L"-";
+    name += std::to_wstring(
+        g_tempPathCounter.fetch_add(1, std::memory_order_relaxed));
     name += L"-";
     name += std::to_wstring(index);
     name += L".png";
@@ -583,11 +601,10 @@ OcrResult RecognizePreparedVariants(const std::vector<std::filesystem::path>& pa
     }
 }
 
-}  // namespace
-
-OcrResult ExtractTextFromBitmapRegion(HBITMAP bitmap, const RECT& region) {
+// 完整的 OCR 流水线：预处理变体 → 临时 PNG → 系统 OCR 择优。
+// 本函数会释放 cropped。
+OcrResult RunOcrPipeline(HBITMAP cropped) {
     OcrResult output;
-    HBITMAP cropped = CropBitmap(bitmap, region);
     if (!cropped) {
         output.error = L"无法读取当前截图选区。";
         return output;
@@ -619,9 +636,7 @@ OcrResult ExtractTextFromBitmapRegion(HBITMAP bitmap, const RECT& region) {
     }
 
     // 直接使用 Windows 自带 OCR，候选图像只在系统 OCR 内部择优。
-    output = std::async(std::launch::async, [paths]() {
-        return RecognizePreparedVariants(paths);
-    }).get();
+    output = RecognizePreparedVariants(paths);
 
     for (const auto& path : paths) {
         std::error_code ignored;
@@ -630,8 +645,200 @@ OcrResult ExtractTextFromBitmapRegion(HBITMAP bitmap, const RECT& region) {
     return output;
 }
 
+// --- 后台识别 -> UI 线程回调 -----------------------------------------------
+
+constexpr wchar_t kOcrCompletionWindowClass[] = L"SnapLiteOcrCompletionWindow";
+constexpr UINT WM_SNAPLITE_OCR_COMPLETE = WM_APP + 0x2A1;
+
+struct OcrCompletionPayload {
+    OcrResult result;
+    OcrRequest request;
+    OcrCompletionCallback callback{};
+};
+
+// 还没被 UI 线程处理掉的完成消息。
+//
+// 消息是 PostMessage 过去的：进程在消息被处理之前退出，那份 payload
+// 就泄漏了（识别结果连同它持有的东西一起丢在内存里）。
+//
+// 这里登记一份，退出时统一回收。所有权转移都走"从表里摘走"这一种方式：
+// 摘到的人负责释放，摘不到说明别人已经回收过了——不会出现二次释放。
+std::mutex g_pendingPayloadMutex;
+std::vector<OcrCompletionPayload*> g_pendingPayloads;
+
+void RegisterPendingPayload(OcrCompletionPayload* payload) {
+    std::lock_guard<std::mutex> lock(g_pendingPayloadMutex);
+    g_pendingPayloads.push_back(payload);
+}
+
+// 从待处理表里摘走一份 payload。返回 nullptr 表示它已经被回收过了。
+OcrCompletionPayload* TakePendingPayload(OcrCompletionPayload* payload) {
+    std::lock_guard<std::mutex> lock(g_pendingPayloadMutex);
+    for (auto it = g_pendingPayloads.begin(); it != g_pendingPayloads.end(); ++it) {
+        if (*it != payload) continue;
+        g_pendingPayloads.erase(it);
+        return payload;
+    }
+    return nullptr;
+}
+
+LRESULT CALLBACK OcrCompletionWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
+    if (message == WM_SNAPLITE_OCR_COMPLETE) {
+        // 所有权从待处理表里转移过来：摘不到说明退出流程已经回收了它。
+        std::unique_ptr<OcrCompletionPayload> payload(
+            TakePendingPayload(reinterpret_cast<OcrCompletionPayload*>(lParam)));
+        if (payload && payload->callback) {
+            payload->callback(payload->result, payload->request);
+        }
+        return 0;
+    }
+    return DefWindowProcW(hwnd, message, wParam, lParam);
+}
+
+// 消息专属窗口：只负责把后台线程的结果搬回 UI 线程。
+// 契约：StartTextExtractionFromBitmapRegion 只能从 UI 线程调用，
+// 窗口因此在 UI 线程创建，回调也在 UI 线程执行。
+HWND EnsureOcrCompletionWindow() {
+    static std::mutex createMutex;
+    static HWND window = nullptr;
+    if (window != nullptr && IsWindow(window)) return window;
+
+    std::lock_guard<std::mutex> guard(createMutex);
+    if (window != nullptr && IsWindow(window)) return window;
+
+    static bool classRegistered = false;
+    if (!classRegistered) {
+        WNDCLASSEXW wc{};
+        wc.cbSize = sizeof(wc);
+        wc.lpfnWndProc = OcrCompletionWindowProc;
+        wc.hInstance = GetModuleHandleW(nullptr);
+        wc.lpszClassName = kOcrCompletionWindowClass;
+        if (RegisterClassExW(&wc) == 0 && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
+            return nullptr;
+        }
+        classRegistered = true;
+    }
+
+    window = CreateWindowExW(
+        0,
+        kOcrCompletionWindowClass,
+        L"",
+        0,
+        0, 0, 0, 0,
+        HWND_MESSAGE,
+        nullptr,
+        GetModuleHandleW(nullptr),
+        nullptr);
+    return window;
+}
+
+}  // namespace
+
+bool StartTextExtractionFromBitmapRegion(
+    HBITMAP bitmap,
+    const RECT& region,
+    HWND parent,
+    unsigned long long instanceId,
+    OcrCompletionCallback callback) {
+    if (!bitmap || !callback || !parent || !IsWindow(parent)) return false;
+
+    // 先在调用线程裁一份独立副本：后台线程不能读 UI 线程正在改写的位图。
+    HBITMAP cropped = CropBitmap(bitmap, region);
+    if (!cropped) return false;
+
+    HWND completionWindow = EnsureOcrCompletionWindow();
+    if (!completionWindow) {
+        DeleteObject(cropped);
+        return false;
+    }
+
+    OcrRequest request;
+    request.parent = parent;
+    request.instanceId = instanceId;
+    request.selection = region;
+
+    // 线程创建失败（资源耗尽）时 std::thread 会抛 std::system_error。
+    // 不接住的话就是 std::terminate —— 整个截图程序直接没了，
+    // 而这只是一次可选的后台识别。
+    // 线程创建包在 try 里，detach 必须放在 try 外面（理由见 detach 处）。
+    std::thread worker;
+    try {
+        worker = std::thread([cropped, request, completionWindow, callback]() {
+            // GDI+ 需要每个使用它的线程各自初始化。
+            ULONG_PTR gdiplusToken = 0;
+            Gdiplus::GdiplusStartupInput gdiplusInput;
+            const bool gdiplusReady =
+                Gdiplus::GdiplusStartup(&gdiplusToken, &gdiplusInput, nullptr) == Gdiplus::Ok;
+
+            auto* payload = new OcrCompletionPayload();
+            payload->request = request;
+            payload->callback = callback;
+            payload->result = RunOcrPipeline(cropped);
+
+            if (gdiplusReady) {
+                Gdiplus::GdiplusShutdown(gdiplusToken);
+            }
+
+            // 先登记再投递：消息被处理之前进程退出的话，退出流程会把
+            // 它回收掉（见 ReleasePendingOcrCompletions）。
+            RegisterPendingPayload(payload);
+            if (!PostMessageW(
+                    completionWindow,
+                    WM_SNAPLITE_OCR_COMPLETE,
+                    0,
+                    reinterpret_cast<LPARAM>(payload))) {
+                // 投递失败：没人会来处理这条消息，payload 由这里回收。
+                if (TakePendingPayload(payload)) {
+                    delete payload;
+                }
+            }
+        });
+    } catch (const std::system_error&) {
+        // 线程没起来，worker 就没跑，位图还是调用方的，在这里释放。
+        DeleteObject(cropped);
+        return false;
+    }
+    // detach 必须放在 try 外面：
+    //  - 线程一旦创建成功就已经在跑，RunOcrPipeline 会**接管并释放** cropped。
+    //    detach 抛异常时若在 catch 里再 DeleteObject(cropped)，
+    //    就是同一块位图被释放两次（double free）。
+    //  - try 作用域结束时 worker 的析构函数发现线程还 joinable，
+    //    会直接 std::terminate()——整个截图程序当场没了。
+    try {
+        worker.detach();
+    } catch (const std::system_error&) {
+        // detach 只在"线程不可 join"时抛，理论上到不了这里。
+        //
+        // 关键：**绝不能**在这里改用 join() 兜底。上一轮验收实测：
+        // join 在这种状态下会抛 invalid argument，而调用点（OCR 动作）
+        // 没有 try/catch，异常一路穿到 Win32 消息处理 → std::terminate，
+        // 整个截图程序当场没了——兜底代码自己把进程杀了。
+        //
+        // detach 抛了，说明这个 std::thread **已经不是 joinable 状态**
+        // （线程已经结束、或者它本来就不是 joinable 的），析构函数因此
+        // 不会 terminate。这里什么都不用做。
+    }
+    return true;
+}
+
+void ReleasePendingOcrCompletions() {
+    // 退出时回收还没被处理的完成消息。摘走即拥有：UI 线程随后就算
+    // 收到那条消息，也摘不到了（TakePendingPayload 返回 nullptr），
+    // 不会出现二次释放。
+    std::vector<OcrCompletionPayload*> pending;
+    {
+        std::lock_guard<std::mutex> lock(g_pendingPayloadMutex);
+        pending.swap(g_pendingPayloads);
+    }
+    for (OcrCompletionPayload* payload : pending) {
+        delete payload;
+    }
+}
+
 bool CopyUnicodeTextToClipboard(HWND owner, const std::wstring& text) {
-    if (text.empty() || !OpenClipboard(owner)) return false;
+    if (text.empty()) return false;
+    // 剪贴板可能正被别的进程占用，走带重试的入口，避免"点了复制没反应"。
+    if (!OpenClipboardWithRetry(owner)) return false;
 
     if (!EmptyClipboard()) {
         CloseClipboard();

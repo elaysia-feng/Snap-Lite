@@ -395,12 +395,24 @@ private:
 
     static ARGB ThemeArgb(BYTE alpha, BYTE red, BYTE green, BYTE blue) {
         if (red == 27 && green == 30 && blue == 35) return Pack(alpha, 38, 38, 42);
+        // GetRValue 之类的宏会做常量截断，用显式取字节避免 C4310 警告。
+        const auto channel = [](COLORREF color, int index) -> BYTE {
+            return static_cast<BYTE>((static_cast<DWORD>(color) >> (index * 8)) & 0xFF);
+        };
         if (red == 255 && green == 197 && blue == 61) {
-            return Pack(alpha, GetRValue(snaplite::ui::kAccent), GetGValue(snaplite::ui::kAccent), GetBValue(snaplite::ui::kAccent));
+            return Pack(
+                alpha,
+                channel(snaplite::ui::kAccent, 0),
+                channel(snaplite::ui::kAccent, 1),
+                channel(snaplite::ui::kAccent, 2));
         }
         if (red == 236 && green == 239 && blue == 244) return Pack(alpha, 245, 245, 247);
         if (red == 255 && green == 107 && blue == 91) {
-            return Pack(alpha, GetRValue(snaplite::ui::kDanger), GetGValue(snaplite::ui::kDanger), GetBValue(snaplite::ui::kDanger));
+            return Pack(
+                alpha,
+                channel(snaplite::ui::kDanger, 0),
+                channel(snaplite::ui::kDanger, 1),
+                channel(snaplite::ui::kDanger, 2));
         }
         return Pack(alpha, red, green, blue);
     }
@@ -552,6 +564,8 @@ void SnipWindow::UpdateArrowDrag(POINT point) {
         current.to.x == next.to.x && current.to.y == next.to.y) return;
     arrowDragChanged_ = true;
     arrows_[selectedArrow_] = next;
+    // 拖动中途就会改变合成图的像素，这里不走 BeginEdit，必须单独计数。
+    ++contentRevision_;
     InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
@@ -563,6 +577,9 @@ void SnipWindow::FinishArrowDrag(bool cancel) {
         arrows_[selectedArrow_] = arrowDragOrigin_;
         const bool changed = moved.from.x != arrowDragOrigin_.from.x || moved.from.y != arrowDragOrigin_.from.y ||
             moved.to.x != arrowDragOrigin_.to.x || moved.to.y != arrowDragOrigin_.to.y;
+        // 取消拖动会把标注还原成拖动前的位置。合成图缓存键必须跟着变，
+        // 否则用户取消拖动后读到的仍是"拖动到一半"的旧图。
+        ++contentRevision_;
         // 松开时再提交历史，取消或拖回原位不会吞掉重做记录。
         if (!cancel && changed) {
             BeginEdit();
@@ -585,18 +602,30 @@ void SnipWindow::EraseArrows(POINT from, POINT to) {
         }
     }
     selectedArrow_ = -1;
+    // 橡皮会移除几何标注对象，合成图缓存键必须跟着变。
+    ++contentRevision_;
 }
 
 bool SnipWindow::UiHasSelection() const {
     detail::gAnnotationColor = annotationColor_;
     detail::gTextSizePt = textSizePt_;
     switch (tool_) {
-    case Tool::Rectangle: detail::gActiveToolIndex = 0; break;
-    case Tool::Arrow: detail::gActiveToolIndex = 1; break;
-    case Tool::Pen: detail::gActiveToolIndex = 2; break;
-    case Tool::Mosaic: detail::gActiveToolIndex = 3; break;
-    case Tool::Text: detail::gActiveToolIndex = 4; break;
-    default: detail::gActiveToolIndex = -1; break;
+    case Tool::Rectangle:
+        detail::gActiveToolIndex = static_cast<int>(UiToolIndex::Rectangle);
+        break;
+    case Tool::Arrow:
+        detail::gActiveToolIndex = static_cast<int>(UiToolIndex::Arrow);
+        break;
+    case Tool::Pen:
+        detail::gActiveToolIndex = static_cast<int>(UiToolIndex::Pen);
+        break;
+    case Tool::Mosaic:
+        detail::gActiveToolIndex = static_cast<int>(UiToolIndex::Mosaic);
+        break;
+    case Tool::Text:
+        detail::gActiveToolIndex = static_cast<int>(UiToolIndex::Text);
+        break;
+    default: detail::gActiveToolIndex = static_cast<int>(UiToolIndex::None); break;
     }
     return selected_;
 }
@@ -606,35 +635,39 @@ RECT SnipWindow::UiLegacyToolbarRect() const { return ToolbarRect(); }
 
 int SnipWindow::UiActiveTool() const {
     switch (tool_) {
-    case Tool::Rectangle: return 0;
-    case Tool::Arrow: return 1;
-    case Tool::Pen: return 2;
-    case Tool::Mosaic: return 3;
-    case Tool::Text: return 4;
-    default: return -1;
+    case Tool::Rectangle: return static_cast<int>(UiToolIndex::Rectangle);
+    case Tool::Arrow: return static_cast<int>(UiToolIndex::Arrow);
+    case Tool::Pen: return static_cast<int>(UiToolIndex::Pen);
+    case Tool::Mosaic: return static_cast<int>(UiToolIndex::Mosaic);
+    case Tool::Text: return static_cast<int>(UiToolIndex::Text);
+    default: return static_cast<int>(UiToolIndex::None);
     }
 }
 
 void SnipWindow::UiSetTool(int toolIndex) {
-    switch (toolIndex) {
-    case 0: tool_ = Tool::Rectangle; break;
-    case 1: tool_ = Tool::Arrow; break;
-    case 2: tool_ = Tool::Pen; break;
-    case 3: tool_ = Tool::Mosaic; break;
-    case 4: tool_ = Tool::Text; break;
+    switch (static_cast<UiToolIndex>(toolIndex)) {
+    case UiToolIndex::Rectangle: tool_ = Tool::Rectangle; break;
+    case UiToolIndex::Arrow: tool_ = Tool::Arrow; break;
+    case UiToolIndex::Pen: tool_ = Tool::Pen; break;
+    case UiToolIndex::Mosaic: tool_ = Tool::Mosaic; break;
+    case UiToolIndex::Text: tool_ = Tool::Text; break;
     default: tool_ = Tool::None; break;
     }
     if (selectedArrow_ >= 0 && tool_ != Tool::None && arrows_[selectedArrow_].tool != tool_) {
         selectedArrow_ = -1;
     }
-    detail::gActiveToolIndex = toolIndex >= 0 && toolIndex <= 4 ? toolIndex : -1;
+    const bool isValidTool =
+        toolIndex >= static_cast<int>(UiToolIndex::Rectangle) &&
+        toolIndex <= static_cast<int>(UiToolIndex::Text);
+    detail::gActiveToolIndex =
+        isValidTool ? toolIndex : static_cast<int>(UiToolIndex::None);
     InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
 int SnipWindow::UiShapeKind() const { return detail::gShapeKind; }
 void SnipWindow::UiSetShapeKind(int kind) {
     detail::gShapeKind = std::clamp(kind, 0, 7);
-    UiSetTool(0);
+    UiSetTool(static_cast<int>(UiToolIndex::Rectangle));
     UpdateSelectedAnnotationStyle();
 }
 int SnipWindow::UiShapeFillMode() const { return detail::gShapeFillMode; }
@@ -646,7 +679,7 @@ void SnipWindow::UiSetShapeFillMode(int mode) {
 int SnipWindow::UiArrowKind() const { return detail::gArrowKind; }
 void SnipWindow::UiSetArrowKind(int kind) {
     detail::gArrowKind = std::clamp(kind, 0, 6);
-    UiSetTool(1);
+    UiSetTool(static_cast<int>(UiToolIndex::Arrow));
     UpdateSelectedAnnotationStyle();
 }
 int SnipWindow::UiStrokeWidth() const { return detail::gStrokeWidth; }
@@ -794,6 +827,33 @@ HBITMAP SnipWindow::UiCaptureBitmap() const {
         if (arrowComposite_) { DeleteObject(arrowComposite_); arrowComposite_ = nullptr; }
         return capture_;
     }
+
+    // 合成图（capture_ + 箭头）缓存：文字标注每敲一个键都会重绘画布背景，
+    // OCR / 复制 / 保存也会取它。每次都整屏拷贝（4K 约 33MB）代价很高。
+    // 缓存键覆盖了所有会改变像素的路径：
+    //   editRevision_    —— 所有 BeginEdit 驱动的改动（画笔/马赛克/橡皮/新增或
+    //                       移动几何标注/改样式）
+    //   contentRevision_ —— 不经过 BeginEdit 的改动：撤销/重做、拖动中途、
+    //                       拖动取消还原、逐段写入的画笔/马赛克笔画、橡皮擦除
+    //   selection        —— 箭头按选区裁剪，选区变了合成结果就不同
+    //
+    // 另有一道兜底：笔画或拖动进行中一律不复用缓存。绘制过程中的像素是
+    // "半成品"，任何在绘制期间重建的合成图都不该被当成最终结果缓存下来。
+    const RECT selection = NormalizedSelection();
+    const bool interactionInProgress = drawing_ || arrowDragPart_ != 0;
+    const bool cacheValid =
+        !interactionInProgress &&
+        arrowComposite_ != nullptr &&
+        compositeEditRevision_ == editRevision_ &&
+        compositeContentRevision_ == contentRevision_ &&
+        compositeSelection_.left == selection.left &&
+        compositeSelection_.top == selection.top &&
+        compositeSelection_.right == selection.right &&
+        compositeSelection_.bottom == selection.bottom;
+    if (cacheValid) {
+        return arrowComposite_;
+    }
+
     // 复用整屏位图，但每次刷新像素，避免拖动或撤销后显示旧图。
     if (!arrowComposite_) arrowComposite_ = CloneBitmap(capture_);
     HDC dc = arrowComposite_ ? CreateCompatibleDC(nullptr) : nullptr;
@@ -808,6 +868,10 @@ HBITMAP SnipWindow::UiCaptureBitmap() const {
     DeleteDC(source);
     SelectObject(dc, old);
     DeleteDC(dc);
+
+    compositeEditRevision_ = editRevision_;
+    compositeContentRevision_ = contentRevision_;
+    compositeSelection_ = selection;
     return arrowComposite_;
 }
 

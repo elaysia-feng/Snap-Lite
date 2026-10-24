@@ -2,6 +2,14 @@
   #define MyAppVersion "0.0.0"
 #endif
 
+; Inno 的 VersionInfoVersion 只接受"最多 4 个点分数字"，预发布后缀
+; (1.6.0-rc.1) 会让安装包在最后一步编译失败——那时 exe 已经构建好、
+; CI 时间和 token 都花光了。带后缀的版本继续用在 AppVersion、输出文件名
+; 和 ProductVersion 这些字符串字段上，VersionInfoVersion 单独用纯数字。
+#ifndef MyAppVersionInfo
+  #define MyAppVersionInfo "0.0.0.0"
+#endif
+
 #define MyAppName "Snap-Lite"
 #define MyAppPublisher "Elias"
 #define MyAppExeName "SnapLite.exe"
@@ -29,7 +37,7 @@ PrivilegesRequired=admin
 CloseApplications=yes
 RestartApplications=no
 AppMutex=Local\SnapLiteSingleInstance
-VersionInfoVersion={#MyAppVersion}
+VersionInfoVersion={#MyAppVersionInfo}
 VersionInfoProductName={#MyAppName}
 VersionInfoProductVersion={#MyAppVersion}
 VersionInfoDescription=Snap-Lite Windows Installer
@@ -45,4 +53,4 @@ Name: "{group}\Snap-Lite"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}
 Name: "{autodesktop}\Snap-Lite"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "启动 Snap-Lite"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#MyAppExeName}"; Description: "启动 Snap-Lite"; Flags: nowait postinstall
