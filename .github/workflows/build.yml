@@ -30,6 +30,13 @@ jobs:
           if (Test-Path .github/workflows/release-beta.yml) { throw 'Beta source-mutation release workflow must not ship.' }
           if (Test-Path scripts/rapidocr_worker.py) { throw 'RapidOCR companion source must not ship in the lightweight build.' }
           if (Test-Path src/ocr_rapid.cpp) { throw 'RapidOCR launcher source must not ship in the lightweight build.' }
+          # Legacy OCR implementations were superseded by ocr_v2.cpp / the
+          # generated ocr_result_panel_v2.cpp. Keeping them around means two
+          # same-named implementations and edits land in the file that is
+          # never compiled.
+          if (Test-Path src/ocr.cpp) { throw 'Legacy OCR implementation returned.' }
+          if (Test-Path src/ocr_result_panel.cpp) { throw 'Legacy OCR result panel returned.' }
+          if (Test-Path src/ocr_winrt_compat.h) { throw 'Unused WinRT compat header returned.' }
 
       - name: Configure
         run: cmake -S . -B build -A x64 -DSNAPLITE_BUILD_INTERACTION_TESTS=ON
@@ -39,6 +46,13 @@ jobs:
 
       - name: Verify embedded app icon
         run: python scripts/check_pe_icon.py build/Release/SnapLite.exe
+
+      # ctest 现在覆盖四件事：原生交互测试、延时覆盖层运行时测试、
+      # 生成管线的源码级守卫、生成产物内容校验。本地
+      # `scripts/build_local.ps1 -Tests` 走的是同一套，CI 与本地不会再
+      # 出现"CI 绿、本地也绿、产物却是错的"这种组合。
+      - name: Run tests
+        run: ctest --test-dir build -C Release --output-on-failure
 
       - name: Upload executable
         uses: actions/upload-artifact@v4

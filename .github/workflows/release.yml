@@ -6,6 +6,12 @@ on:
     paths:
       - '.release/**'
   workflow_dispatch:
+    inputs:
+      force_rebuild:
+        description: 'Force replacing the assets of an already published release. The published binaries will no longer match the commit the tag points at, and the SHA256SUMS will change.'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -33,39 +39,130 @@ jobs:
         id: version
         shell: pwsh
         run: |
+          # 这一步里任何没接住的错误都必须让 job 变红。
+          #
+          # PowerShell 默认 $ErrorActionPreference = Continue：一条
+          # 非终止错误（比如对 $null 调 .Trim()）只会被记进错误流，
+          # 脚本**继续往下跑**。resolver 的结果没接住时，$releaseVersion
+          # 会保留旧值，流程照样往下走，最后拿旧 tag 配 --clobber
+          # 覆盖已发布的产物（第 13 轮验收的 pwsh 仿真实测）。
+          $ErrorActionPreference = 'Stop'
           $cmake = Get-Content CMakeLists.txt -Raw
           if ($cmake -notmatch 'project\(SnapLite VERSION ([0-9]+\.[0-9]+\.[0-9]+)') {
             throw 'Could not read SnapLite version from CMakeLists.txt'
           }
           $baseVersion = $Matches[1]
-          $releaseVersion = $baseVersion
+          # 不预置成项目版本号：解析结果没拿到就必须失败。
+          # 预置成 $baseVersion 就是一个放大器——解析那一步一旦没
+          # 拦住，这里会安静地保留旧版本号，后面照常发布。
+          $releaseVersion = ''
 
           if ('${{ github.event_name }}' -eq 'push') {
             $before = '${{ github.event.before }}'
             $sha = '${{ github.sha }}'
-            $changed = git diff --name-only $before $sha | Where-Object { $_ -like '.release/*' } | Select-Object -Last 1
-            if ($changed) {
-              $name = [System.IO.Path]::GetFileNameWithoutExtension($changed)
-              if ($name -match '^v(.+)$') {
-                $releaseVersion = $Matches[1]
-              }
+            # 只认**新增或改名**的文件：
+            #  - 被删的必须排除：`--name-only` 会把被删的文件也算进来，
+            #    按路径字节序取最后一个可能选中一个已经被删掉的文件——
+            #    拿到的版本号是旧的，甚至会用旧 tag 重新发布并覆盖已发布 release 的产物。
+            #  - 改名也必须算：只认 `A` 时，一次 `git mv` 改名在 diff 里是 `R100`，
+            #    `--diff-filter=A` 对它输出**空列表**，版本解析于是"没有候选"。
+            $changedFile = Join-Path $env:RUNNER_TEMP 'changed-files.txt'
+            # core.quotepath=false：git 默认把非 ASCII 路径加引号并转义成
+            # 八进制（".release/\350\257\264..."），这种路径匹配不上
+            # "发布说明文件"，会被静默跳过，最后报成"没有候选"。
+            git -c core.quotepath=false diff --name-only --diff-filter=AR $before $sha |
+              Out-File -FilePath $changedFile -Encoding utf8
+            # diff 失败时（比如 before 指向一个不存在的 commit）列表会是空的，
+            # 后面会被报成"没有发布说明文件"——真正的原因被埋掉了。
+            if ($LASTEXITCODE -ne 0) {
+              throw "Failed to list the changed files between $before and $sha"
             }
+            # 版本解析规则放在 scripts/resolve_release_version.py 里，
+            # 可以用 Python 单测覆盖输入矩阵，不用在 YAML 里手写正则。
+            # 脚本在"没有新增/改名的发布说明文件"时会**响亮失败**：
+            # 静默回落到项目版本号，会让"只改了旧说明文件"的提交也触发一次
+            # 旧 tag 的 --clobber 重发，把已发布的产物覆盖掉。
+            $resolved = & python scripts/resolve_release_version.py `
+              --base-version $baseVersion --changed-files $changedFile
+            if ($LASTEXITCODE -ne 0) {
+              throw 'Failed to resolve the release version'
+            }
+            # 退出码是 0 但一个字节都没输出：一样要失败。
+            # 不能靠下一行的 .Trim() 去撞 null——那条路在
+            # $ErrorActionPreference = Continue 下只是一条非终止错误，
+            # 脚本会带着 $releaseVersion = '' 继续往下走。
+            if (-not $resolved) {
+              throw 'The release version resolver produced no output'
+            }
+            $releaseVersion = ($resolved | Select-Object -Last 1).Trim()
+          } else {
+            # 手动触发：没有"新增说明文件"这回事，直接按项目版本发布。
+            # 显式给一个空列表文件，不走标准输入——在交互式终端里读 stdin
+            # 会一直等用户敲回车。
+            #
+            # 风险：这条路径恒用 --allow-base-fallback（= 项目版本号）。
+            # 如果这个版本已经发布过，后面的 `gh release upload --clobber`
+            # 会**静默覆盖**已发布的产物。所以"tag 已存在且指向别的 commit"
+            # 时默认直接失败，必须显式勾选 force_rebuild 才放行
+            # （见 "Ensure immutable release tag" 那一步）。
+            $emptyFile = Join-Path $env:RUNNER_TEMP 'no-changed-files.txt'
+            New-Item -ItemType File -Force -Path $emptyFile | Out-Null
+            $resolved = & python scripts/resolve_release_version.py `
+              --base-version $baseVersion --changed-files $emptyFile --allow-base-fallback
+            if ($LASTEXITCODE -ne 0) {
+              throw 'Failed to resolve the release version'
+            }
+            if (-not $resolved) {
+              throw 'The release version resolver produced no output'
+            }
+            $releaseVersion = ($resolved | Select-Object -Last 1).Trim()
           }
 
-          if (-not $releaseVersion.StartsWith($baseVersion)) {
-            throw "Release version $releaseVersion must start with project version $baseVersion"
+          # 两条路径都必须真的给出版本号。解析结果没接住却继续往下走时，
+          # 这里会拦住——绝不"退回项目版本号"发布。
+          if ([string]::IsNullOrWhiteSpace($releaseVersion)) {
+            throw 'The release version is empty'
+          }
+
+          # 版本号必须与项目版本同一条版本线。按**数字分量**比较，既不是
+          # 字符串前缀、也不是字符串相等：
+          #  - "1.60.0" 以 "1.6.0" 开头，但主版本分量已经变了；
+          #  - "1.06.0" 与 "1.6.0" 数值上就是同一个版本。
+          # 口径必须与 scripts/resolve_release_version.py 一致（那边按分量比），
+          # 否则同一件事两层给出不同结论：resolver 判成同一条线，工作流却
+          # 按字符串当成不同线而抛错（上一轮验收实测）。
+          $releaseNumeric = ($releaseVersion -split '-')[0]
+          $baseNumeric = ($baseVersion -split '-')[0]
+          $releaseParts = @($releaseNumeric.Split('.') | ForEach-Object { [int]$_ })
+          $baseParts = @($baseNumeric.Split('.') | ForEach-Object { [int]$_ })
+          if (($releaseParts -join '.') -ne ($baseParts -join '.')) {
+            throw "Release version $releaseVersion must be on the same release line as project version $baseVersion"
+          }
+
+          # Inno 的 VersionInfoVersion 只接受点分数字，预发布后缀会让
+          # 安装包编译失败。
+          $numericVersion = ($releaseVersion -split '-')[0]
+          if ($numericVersion -notmatch '^\d+\.\d+\.\d+$') {
+            throw "Cannot derive a numeric version from $releaseVersion"
           }
 
           $prerelease = $releaseVersion.Contains('-')
           "version=$releaseVersion" >> $env:GITHUB_OUTPUT
+          "numeric_version=$numericVersion" >> $env:GITHUB_OUTPUT
           "tag=v$releaseVersion" >> $env:GITHUB_OUTPUT
           "prerelease=$($prerelease.ToString().ToLower())" >> $env:GITHUB_OUTPUT
 
       - name: Configure
-        run: cmake -S . -B build -A x64
+        run: cmake -S . -B build -A x64 -DSNAPLITE_BUILD_INTERACTION_TESTS=ON
 
       - name: Build Release
         run: cmake --build build --config Release
+
+      # 发布前必须跑一遍测试。测试红会**挡住**发布：这一步和后面的打包、
+      # 发布在同一个 job 里，ctest 非零退出就会跳过后续步骤。
+      # 这正是想要的——发出去的版本必须是测过的。
+      - name: Run tests
+        run: ctest --test-dir build -C Release --output-on-failure
 
       - name: Validate embedded app icon
         run: python scripts/check_pe_icon.py build/Release/SnapLite.exe
@@ -92,12 +189,13 @@ jobs:
         shell: pwsh
         env:
           VERSION: ${{ steps.version.outputs.version }}
+          NUMERIC_VERSION: ${{ steps.version.outputs.numeric_version }}
         run: |
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
           if (-not (Test-Path $iscc)) {
             throw "Inno Setup compiler not found: $iscc"
           }
-          & $iscc "/DMyAppVersion=$env:VERSION" "installer\SnapLite.iss"
+          & $iscc "/DMyAppVersion=$env:VERSION" "/DMyAppVersionInfo=$env:NUMERIC_VERSION" "installer\SnapLite.iss"
           if ($LASTEXITCODE -ne 0) { throw 'Inno Setup compilation failed.' }
 
           $installer = "dist/SnapLite-Setup-$env:VERSION.exe"
@@ -125,10 +223,24 @@ jobs:
         shell: pwsh
         env:
           TAG: ${{ steps.version.outputs.tag }}
+          FORCE_REBUILD: ${{ inputs.force_rebuild }}
         run: |
           git fetch --tags --force
+          if ($LASTEXITCODE -ne 0) { throw "Failed to fetch tags" }
           $existing = git rev-parse -q --verify "refs/tags/$env:TAG"
           if ($LASTEXITCODE -eq 0 -and $existing) {
+            # 产物是按**当前 commit** 构建的，而 tag 是不可变的。
+            # tag 指向别的 commit 时，release 里的二进制与它挂着的 tag
+            # 就对不上了（SHA256SUMS 也跟着变）——必须拦住。
+            #
+            # 指向同一个 commit 时是"重跑同一个构建"，产物一致，放行。
+            $tagCommit = git rev-list -n 1 "$env:TAG"
+            if ($tagCommit -ne $env:GITHUB_SHA) {
+              if ($env:FORCE_REBUILD -ne 'true') {
+                throw "Tag $env:TAG already points at $tagCommit, but this build is $env:GITHUB_SHA. Re-run with force_rebuild=true to replace the published assets with ones built from a different commit."
+              }
+              Write-Host "FORCE_REBUILD is set: replacing the assets of $env:TAG (tag commit $tagCommit, build commit $env:GITHUB_SHA)."
+            }
             Write-Host "Tag $env:TAG already exists at $existing; keeping the immutable tag and continuing release recovery."
           } else {
             git tag "$env:TAG" "$env:GITHUB_SHA"

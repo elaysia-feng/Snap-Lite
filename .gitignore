@@ -1,5 +1,6 @@
 .vs/
 build/
+build*/
 out/
 CMakeFiles/
 CMakeCache.txt
@@ -10,3 +11,14 @@ cmake_install.cmake
 *.pdb
 *.ilk
 *.exe
+dist/
+package/
+.tmp-*/
+tmp-*/
+extracted_icon.png
+compile_commands.json
+__pycache__/
+*.pyc
+.omc/state/
+.omc/sessions/
+build-*.log
