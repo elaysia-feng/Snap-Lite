@@ -385,7 +385,7 @@ UpdateDownloadResult DownloadVerifiedUpdate(const std::wstring& version) {
     const std::wstring rawBase = L"https://raw.githubusercontent.com/elaysia-feng/Snap-Lite/" + tag;
     const std::wstring releaseBase = L"https://github.com/elaysia-feng/Snap-Lite/releases/download/" + tag;
 
-    const auto notesResponse = GetUrl(rawBase + L"/.release/" + tag + L".md", kMetadataLimit);
+    const auto notesResponse = GetUrl(rawBase + L"/.release/" + tag + L".txt", kMetadataLimit);
     if (!notesResponse || notesResponse->status != 200) {
         return FailedDownload(L"读取更新说明失败，请稍后重试");
     }

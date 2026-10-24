@@ -6,9 +6,10 @@
 #include <algorithm>
 #include <commctrl.h>
 #include <cstring>
+#include <objidl.h>
+#include <propidl.h>
 #include <gdiplus.h>
 #include <memory>
-#include <objidl.h>
 #include <string>
 
 namespace snaplite {
