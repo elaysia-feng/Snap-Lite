@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(SnapLite VERSION 1.7.2 LANGUAGES CXX RC)
+project(SnapLite VERSION 1.7.3 LANGUAGES CXX RC)
 
 # 部分中文 Windows 环境下，CMake 对 MSVC /showIncludes 前缀的探测会解码错误，
 # Ninja 随后无法记录头文件依赖，改头文件时可能跳过依赖它的 C++ 编译单元。
