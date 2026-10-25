@@ -288,48 +288,6 @@ inline FunctionSheetState& FunctionSheet() {
 inline bool DrawFunctionSprite(HDC dc, const RECT& rect, int index) {
     if (!dc || index < 0 || index >= 16) return false;
 
-    if (index == 14) {
-        const int width = std::max(1L, rect.right - rect.left);
-        const int height = std::max(1L, rect.bottom - rect.top);
-        const int side = std::max(1, std::min(width, height) - 2);
-        const int left = rect.left + (width - side) / 2;
-        const int top = rect.top + (height - side) / 2;
-        const RECT mascot{left, top, left + side, top + side};
-        constexpr Girl kEraserMascot = Girl::Ritsu;
-
-        // 橡皮擦与精灵图使用相同的头像绘制尺寸，角标复用基础橡皮擦图形。
-        DrawChibi(dc, mascot, kEraserMascot);
-
-        const int badgeSide = std::clamp(height / 2 - 2, 18, 20);
-        const int centerY = (rect.top + rect.bottom) / 2;
-        const RECT badge{
-            rect.right - badgeSide - 3,
-            centerY - badgeSide / 2,
-            rect.right - 3,
-            centerY + badgeSide / 2};
-        const COLORREF accent = Accent(kEraserMascot);
-        {
-            Gdiplus::Graphics graphics(dc);
-            graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
-            const Gdiplus::RectF badgeBox(
-                static_cast<float>(badge.left), static_cast<float>(badge.top),
-                static_cast<float>(badge.right - badge.left),
-                static_cast<float>(badge.bottom - badge.top));
-            FillSoftRoundRect(graphics, badgeBox, 7.0f, ToColor(accent, 24));
-            Gdiplus::GraphicsPath path;
-            AddRoundRectPath(path, badgeBox, 7.0f);
-            Gdiplus::Pen border(ToColor(accent, 118), 1.0f);
-            graphics.DrawPath(&border, &path);
-        }
-
-        RECT glyph = badge;
-        const COLORREF previousTextColor = SetTextColor(dc, accent);
-        DrawBaseTextOrIcon(dc, L"橡皮", 2, &glyph,
-                           DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-        SetTextColor(dc, previousTextColor);
-        return true;
-    }
-
     FunctionSheetState& sheet = FunctionSheet();
     if (!sheet.bitmap) return false;
 
