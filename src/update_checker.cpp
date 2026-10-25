@@ -357,13 +357,24 @@ UpdateCheckResult CheckLatestRelease() {
     constexpr wchar_t kLatestReleaseUrl[] =
         L"https://api.github.com/repos/elaysia-feng/Snap-Lite/releases/latest";
     const auto response = GetUrl(kLatestReleaseUrl, kMetadataLimit);
-    if (!response || response->status != 200) return {};
+    if (!response) {
+        return {false, {}, L"无法连接 GitHub。请检查网络、代理或防火墙后重试。"};
+    }
+    if (response->status != 200) {
+        return {
+            false,
+            {},
+            L"GitHub 返回 HTTP " + std::to_wstring(response->status) + L"。请稍后重试。"};
+    }
 
     const auto tag = ExtractTagName(response->body);
-    if (!tag) return {};
+    if (!tag) return {false, {}, L"GitHub 返回的发布信息无法识别。"};
     std::vector<BYTE> tagBytes(tag->begin(), tag->end());
     const auto version = Utf8ToWide(tagBytes);
-    if (!version || !CompareReleaseVersions(*version, SNAP_LITE_VERSION)) return {};
+    if (!version) return {false, {}, L"GitHub 返回的发布数据编码无效。"};
+    if (!CompareReleaseVersions(*version, SNAP_LITE_VERSION)) {
+        return {false, {}, L"GitHub 返回的版本号无法识别。"};
+    }
 
     UpdateCheckResult result;
     result.succeeded = true;

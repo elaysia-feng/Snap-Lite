@@ -332,6 +332,7 @@ void ActivateButton(HWND hwnd, ToastState* state, HitTarget target) {
         state->status = UpdateStatusToastState::Checking;
         state->detail = L"正在连接 GitHub 查询最新版本，请稍候。";
         g_suppressResultAfterDismiss = false;
+        LayoutToast(hwnd, state);
         InvalidateRect(hwnd, nullptr, FALSE);
         PostMessageW(
             state->owner,
@@ -343,6 +344,7 @@ void ActivateButton(HWND hwnd, ToastState* state, HitTarget target) {
 
     state->status = UpdateStatusToastState::Downloading;
     state->detail = L"正在下载并验证安装包。";
+    LayoutToast(hwnd, state);
     InvalidateRect(hwnd, nullptr, FALSE);
     PostMessageW(
         state->owner,
@@ -528,6 +530,7 @@ void ShowUpdateStatusToast(
             state->detail = detail;
             state->hovered = HitTarget::None;
             state->pressed = HitTarget::None;
+            LayoutToast(g_toast, state);
             InvalidateRect(g_toast, nullptr, FALSE);
             SetWindowPos(g_toast, HWND_TOPMOST, 0, 0, 0, 0,
                          SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);

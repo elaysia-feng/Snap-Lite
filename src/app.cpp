@@ -1043,9 +1043,12 @@ LRESULT App::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
         updateCheckInProgress_ = false;
         if (!result || !result->succeeded) {
             if (updateCheckWasManual_) {
+                const std::wstring error = result && !result->error.empty()
+                    ? result->error
+                    : L"检查更新失败，请稍后重试。";
                 ShowUpdateStatusToast(
                     hwnd_, UpdateStatusToastState::CheckFailed, SNAP_LITE_VERSION,
-                    {}, L"连接 GitHub 失败。请确认网络后重新检查。");
+                    {}, error);
             }
             return 0;
         }
@@ -1055,7 +1058,9 @@ LRESULT App::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
             if (updateCheckWasManual_) {
                 ShowUpdateStatusToast(
                     hwnd_, UpdateStatusToastState::CheckFailed, SNAP_LITE_VERSION,
-                    {}, L"GitHub 返回的版本号无法识别。");
+                    {}, result->error.empty()
+                            ? L"GitHub 返回的版本号无法识别。"
+                            : result->error);
             }
             return 0;
         }

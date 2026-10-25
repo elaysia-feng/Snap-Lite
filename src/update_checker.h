@@ -8,6 +8,7 @@ namespace snaplite {
 struct UpdateCheckResult {
     bool succeeded{};
     std::wstring latestVersion;
+    std::wstring error;
 };
 
 struct UpdateDownloadResult {
