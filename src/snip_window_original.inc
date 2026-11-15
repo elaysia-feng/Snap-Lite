@@ -24,8 +24,7 @@ constexpr wchar_t kSnipClass[] = L"SnapLiteSnipWindow";
 //      desktops and glares on dark ones; one dark tone reads on both.
 //   2. Every hairline is two-tone - a dark stroke outside, a bright stroke
 //      inside - so no edge can vanish into whatever is underneath it.
-// Amber is reserved for chrome (selection frame, active tool). Annotation ink
-// belongs to the user and stays in its own colour, so the two never collide.
+// 选区边框和活动工具使用所选主题色；标注墨水保留用户自选色，避免主题切换改掉已编辑内容。
 // ---------------------------------------------------------------------------
 constexpr COLORREF kInk = RGB(236, 239, 244);
 
@@ -35,9 +34,15 @@ constexpr BYTE kDimIdle = 66;       // lighter scrim before a selection exists
 Gdiplus::Color Chrome(BYTE alpha = 242) { return {alpha, 27, 30, 35}; }
 Gdiplus::Color ChromeLine() { return {56, 255, 255, 255}; }   // bright half of a hairline
 Gdiplus::Color ChromeShade() { return {110, 0, 0, 0}; }       // dark half of a hairline
-Gdiplus::Color Accent(BYTE alpha = 255) { return {alpha, 255, 197, 61}; }
+Gdiplus::Color Accent(BYTE alpha = 255) {
+    const COLORREF color = ui::kAccent;
+    return {alpha, GetRValue(color), GetGValue(color), GetBValue(color)};
+}
 Gdiplus::Color Ink(BYTE alpha = 255) { return {alpha, 236, 239, 244}; }
-Gdiplus::Color Danger() { return {255, 255, 107, 91}; }
+Gdiplus::Color Danger() {
+    const COLORREF color = ui::kDanger;
+    return {255, GetRValue(color), GetGValue(color), GetBValue(color)};
+}
 
 constexpr int kHandleRadius = 4;
 constexpr int kToolbarButton = 36;

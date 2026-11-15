@@ -10,6 +10,7 @@
 #include "update_version.h"
 #include "update_notes_dialog.h"
 #include "update_status_toast.h"
+#include "ui_theme.h"
 
 #include <commdlg.h>
 #include <shellapi.h>
@@ -55,9 +56,65 @@ constexpr UINT CMD_DELAY_3 = 1009;
 constexpr UINT CMD_DELAY_5 = 1010;
 constexpr UINT CMD_DELAY_10 = 1011;
 constexpr UINT CMD_AUTO_UPDATE = 1012;
+constexpr UINT CMD_THEME_BASE = 1100;
 
 constexpr wchar_t kRunKey[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 constexpr wchar_t kRunValue[] = L"Snap-Lite";
+constexpr wchar_t kThemeSettingsKey[] = L"Software\\Snap-Lite";
+constexpr wchar_t kThemeSettingValue[] = L"UiTheme";
+
+ui::ThemeId ReadUiTheme() {
+    DWORD value = 0;
+    DWORD bytes = sizeof(value);
+    const LONG result = RegGetValueW(
+        HKEY_CURRENT_USER,
+        kThemeSettingsKey,
+        kThemeSettingValue,
+        RRF_RT_REG_DWORD,
+        nullptr,
+        &value,
+        &bytes);
+    if (result != ERROR_SUCCESS || !ui::IsValidThemeValue(value)) {
+        return ui::ThemeId::KOn;
+    }
+    return static_cast<ui::ThemeId>(value);
+}
+
+bool SaveUiTheme(ui::ThemeId theme) {
+    HKEY key{};
+    if (RegCreateKeyExW(
+            HKEY_CURRENT_USER,
+            kThemeSettingsKey,
+            0,
+            nullptr,
+            0,
+            KEY_SET_VALUE,
+            nullptr,
+            &key,
+            nullptr) != ERROR_SUCCESS) {
+        return false;
+    }
+
+    const DWORD value = static_cast<DWORD>(theme);
+    const LONG result = RegSetValueExW(
+        key,
+        kThemeSettingValue,
+        0,
+        REG_DWORD,
+        reinterpret_cast<const BYTE*>(&value),
+        sizeof(value));
+    RegCloseKey(key);
+    return result == ERROR_SUCCESS;
+}
+
+BOOL CALLBACK InvalidateThemeWindow(HWND hwnd, LPARAM) {
+    RedrawWindow(hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_UPDATENOW);
+    return TRUE;
+}
+
+void InvalidateCurrentThreadWindows() {
+    EnumThreadWindows(GetCurrentThreadId(), InvalidateThemeWindow, 0);
+}
 
 // 读回进程**实际**的 DPI 感知状态。
 //
@@ -391,6 +448,7 @@ App::~App() {
 }
 
 bool App::Initialize() {
+    ui::SetTheme(ReadUiTheme());
     // 必须在创建任何窗口之前设置，否则系统会按虚拟化 DPI 处理它们。
     dpiAware_ = EnablePerMonitorDpiAwareness();
 
@@ -596,6 +654,9 @@ void App::ShowNotice(const wchar_t* message) {
 
 void App::ShowShortcutHelp() {
     std::wstring text;
+    text += L"当前 UI 主题：";
+    text += ui::ThemeName(ui::CurrentThemeId());
+    text += L"\n\n";
     text += L"全局快捷键\n";
     text += snipHotkeyRegistered_
         ? L"  F1             选区截图\n"
@@ -787,6 +848,26 @@ void App::ShowTrayMenu() {
     }
     AppendMenuW(menu, MF_STRING, CMD_PIN, pinLabel.c_str());
     AppendMenuW(menu, MF_STRING, CMD_FULLSCREEN, L"全屏截图\tCtrl+Shift+F");
+    HMENU themeMenu = CreatePopupMenu();
+    if (themeMenu) {
+        for (std::size_t index = 0; index < ui::kThemeCount; ++index) {
+            const auto theme = static_cast<ui::ThemeId>(index);
+            const UINT flags = MF_STRING |
+                (theme == ui::CurrentThemeId() ? MF_CHECKED : MF_UNCHECKED);
+            AppendMenuW(
+                themeMenu,
+                flags,
+                CMD_THEME_BASE + static_cast<UINT>(index),
+                ui::ThemeName(theme));
+        }
+        if (!AppendMenuW(
+                menu,
+                MF_POPUP,
+                reinterpret_cast<UINT_PTR>(themeMenu),
+                L"UI 主题")) {
+            DestroyMenu(themeMenu);
+        }
+    }
     HMENU delayMenu = CreatePopupMenu();
     if (delayMenu) {
         AppendMenuW(delayMenu, MF_STRING, CMD_DELAY_3, L"3 秒后截图");
@@ -993,8 +1074,26 @@ LRESULT App::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
         }
         return 0;
 
-    case WM_COMMAND:
-        switch (LOWORD(wParam)) {
+    case WM_COMMAND: {
+        const UINT command = LOWORD(wParam);
+        const UINT firstThemeCommand = CMD_THEME_BASE;
+        const UINT afterLastThemeCommand = CMD_THEME_BASE + static_cast<UINT>(ui::kThemeCount);
+        if (command >= firstThemeCommand && command < afterLastThemeCommand) {
+            const auto theme = static_cast<ui::ThemeId>(command - firstThemeCommand);
+            ui::SetTheme(theme);
+            const bool saved = SaveUiTheme(theme);
+            InvalidateCurrentThreadWindows();
+
+            std::wstring notice = L"UI 主题已切换：";
+            notice += ui::ThemeName(theme);
+            if (!saved) {
+                notice += L"（本次已切换，但设置未能保存）";
+            }
+            ShowNotice(notice.c_str());
+            return 0;
+        }
+
+        switch (command) {
         case CMD_SNIP:
             StartSnip();
             return 0;
@@ -1056,6 +1155,7 @@ LRESULT App::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
             break;
         }
         break;
+    }
 
     case WM_SNAPLITE_UPDATE_TOAST_ACTION:
         if (static_cast<UpdateStatusToastAction>(wParam) == UpdateStatusToastAction::Check) {

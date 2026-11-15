@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(SnapLite VERSION 1.7.5 LANGUAGES CXX RC)
+project(SnapLite VERSION 1.7.6 LANGUAGES CXX RC)
 
 # 部分中文 Windows 环境下，CMake 对 MSVC /showIncludes 前缀的探测会解码错误，
 # Ninja 随后无法记录头文件依赖，改头文件时可能跳过依赖它的 C++ 编译单元。
@@ -36,6 +36,13 @@ set(SNAP_LITE_GENERATION_INPUTS
     src/window_bounds_fix.h
     resources/SnapLite.ico
     resources/toolbar_function_mascots.png
+    resources/themes/elaina_toolbar.png
+    resources/themes/rei_toolbar.png
+    resources/themes/asuka_toolbar.png
+    resources/themes/genshin_toolbar.png
+    resources/themes/zzz_toolbar.png
+    resources/themes/honkai3_toolbar.png
+    resources/themes/wuthering_toolbar.png
 )
 foreach(snaplite_generation_input IN LISTS SNAP_LITE_GENERATION_INPUTS)
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
@@ -120,9 +127,8 @@ if(NOT SNAP_LITE_TOOLBAR_THEME_RESULT EQUAL 0)
     message(FATAL_ERROR "Failed to apply shared toolbar theme")
 endif()
 
-# All custom popup surfaces share one visual language. System-owned file
-# pickers remain native Windows dialogs, but Snap-Lite-owned controls use the
-# same cream/pink palette, corner radii, typography, and interaction colors.
+# 所有自绘弹窗读取当前选择的 UI 主题。系统文件选择器仍使用 Windows 原生对话框，
+# Snap-Lite 自有控件共用所选配色、圆角、字体和交互状态。
 set(SNAPLITE_UI_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated_ui")
 execute_process(
     COMMAND "${Python3_EXECUTABLE}"

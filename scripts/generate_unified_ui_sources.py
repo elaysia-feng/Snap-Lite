@@ -6,6 +6,20 @@ from pathlib import Path
 
 
 def replace_once(text: str, old: str, new: str, label: str) -> str:
+    """替换唯一匹配的源码锚点。
+
+    Args:
+        text: 原始源码文本。
+        old: 必须恰好出现一次的旧片段。
+        new: 用于替换的新片段。
+        label: 锚点名称，用于构建失败提示。
+
+    Returns:
+        替换后的源码文本。
+
+    Raises:
+        RuntimeError: 旧片段缺失或出现多次时抛出。
+    """
     count = text.count(old)
     if count != 1:
         raise RuntimeError(f"{label}: expected exactly one match, got {count}")
@@ -13,14 +27,35 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
 
 
 def replace_or_keep(text: str, old: str, new: str, label: str) -> str:
+    """若新片段尚不存在则替换一次，否则保留已处理文本。
+
+    Args:
+        text: 原始源码文本。
+        old: 尚未处理时应替换的旧片段。
+        new: 目标源码片段。
+        label: 锚点名称，用于构建失败提示。
+
+    Returns:
+        替换后的源码文本，或原样返回已处理文本。
+    """
     if new in text:
         return text
     return replace_once(text, old, new, label)
 
 
 def patch_pin(source: Path, target: Path) -> None:
+    """为贴图设置窗口生成共享主题版本。
+
+    Args:
+        source: 项目中的贴图窗口源文件。
+        target: 构建目录中的生成源文件目标路径。
+
+    Raises:
+        RuntimeError: 预期源码锚点缺失或重复时抛出。
+    """
     text = source.read_text(encoding="utf-8")
 
+    # 1. 引入共享主题并调整贴图菜单尺寸。
     text = replace_or_keep(
         text,
         '#include "capture.h"\n',
@@ -34,6 +69,7 @@ def patch_pin(source: Path, target: Path) -> None:
         "pin menu dimensions",
     )
 
+    # 2. 定位并替换贴图菜单布局函数。
     # 布局块用正则定位，但必须命中且只命中一次：
     # 上游一旦重命名或重排 SliderRect/MenuRowRect，静默匹配 0 次会让贴图菜单
     # 回退旧布局且构建全绿，这里改成响亮失败。
@@ -76,6 +112,7 @@ RECT MenuRowRect(int row) {
         count=1,
     )
 
+    # 3. 重写绘制函数，使背景、文字、边框和操作状态使用当前主题。
     paint_start = text.find('void PaintPinMenu(HWND hwnd, PinMenuState* state) {')
     paint_end = text.find('LRESULT CALLBACK PinMenuWindowProc', paint_start)
     if paint_start < 0 or paint_end < 0:
@@ -210,6 +247,7 @@ RECT MenuRowRect(int row) {
 '''
     text = text[:paint_start] + paint + text[paint_end:]
 
+    # 4. 调整圆角和窗口阴影，再输出构建文件。
     text = replace_once(
         text,
         'HRGN region = CreateRoundRectRgn(0, 0, kMenuWidth + 1, kMenuHeight + 1, 18, 18);',
@@ -228,7 +266,17 @@ RECT MenuRowRect(int row) {
 
 
 def patch_ocr_panel(source: Path, target: Path) -> None:
+    """为 OCR 结果面板生成读取运行时主题的源码。
+
+    Args:
+        source: OCR 结果面板基础源码。
+        target: 构建目录中的生成源文件目标路径。
+
+    Raises:
+        RuntimeError: 预期源码锚点缺失或重复时抛出。
+    """
     text = source.read_text(encoding="utf-8")
+    # 1. 引入共享主题，并将固定颜色改为指向当前主题的引用。
     text = replace_once(
         text,
         '#include "ocr.h"\n',
@@ -245,16 +293,17 @@ constexpr COLORREF kText = RGB(57, 49, 55);
 constexpr COLORREF kMutedText = RGB(137, 119, 128);
 constexpr COLORREF kSecondaryBg = RGB(255, 252, 253);
 constexpr COLORREF kSecondaryPressed = RGB(250, 239, 243);'''
-    new_colors = '''constexpr COLORREF kPanelBg = ui::kSurface;
-constexpr COLORREF kCardBg = ui::kCard;
-constexpr COLORREF kBorder = ui::kBorder;
-constexpr COLORREF kAccent = ui::kAccent;
-constexpr COLORREF kAccentPressed = ui::kAccentStrong;
-constexpr COLORREF kText = ui::kText;
-constexpr COLORREF kMutedText = ui::kMutedText;
-constexpr COLORREF kSecondaryBg = ui::kCream;
-constexpr COLORREF kSecondaryPressed = ui::kPressed;'''
+    new_colors = '''const COLORREF& kPanelBg = ui::kSurface;
+const COLORREF& kCardBg = ui::kCard;
+const COLORREF& kBorder = ui::kBorder;
+const COLORREF& kAccent = ui::kAccent;
+const COLORREF& kAccentPressed = ui::kAccentStrong;
+const COLORREF& kText = ui::kText;
+const COLORREF& kMutedText = ui::kMutedText;
+const COLORREF& kSecondaryBg = ui::kCream;
+const COLORREF& kSecondaryPressed = ui::kPressed;'''
     text = replace_once(text, old_colors, new_colors, "OCR shared palette")
+    # 2. 保持角标形状统一，并保留选区对应显示器的定位方式。
     text = replace_or_keep(
         text,
         "    const RECT dotRect{18, 18, 28, 28};\n"
@@ -273,11 +322,17 @@ constexpr COLORREF kSecondaryPressed = ui::kPressed;'''
         "OCR selection monitor",
     )
 
+    # 3. 写入生成文件。
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(text, encoding="utf-8", newline="\n")
 
 
 def main() -> int:
+    """生成贴图设置窗口和 OCR 结果面板的主题源码。
+
+    Returns:
+        int: 命令行退出码。
+    """
     if len(sys.argv) != 3:
         print("usage: generate_unified_ui_sources.py <source-root> <output-root>", file=sys.stderr)
         return 2

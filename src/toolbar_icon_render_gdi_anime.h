@@ -26,6 +26,9 @@ namespace anime_skin {
 enum class Girl : int { Yui = 0, Mio, Mugi, Ritsu, Azusa };
 
 inline COLORREF Accent(Girl girl) {
+    if (snaplite::ui::CurrentThemeId() != snaplite::ui::ThemeId::KOn) {
+        return snaplite::ui::kAccent;
+    }
     switch (girl) {
     case Girl::Yui:   return RGB(235, 119, 132);
     case Girl::Mio:   return RGB(118, 127, 168);
@@ -242,27 +245,41 @@ struct FunctionSheetState {
 
 inline FunctionSheetState& FunctionSheet() {
     // App 会在退出前关闭 GDI+，缓存保持到进程结束，避免 Bitmap 在关闭后析构。
-    static FunctionSheetState* state = new FunctionSheetState();
-    if (state->attempted) return *state;
-    state->attempted = true;
+    static auto* states = new std::array<FunctionSheetState, snaplite::ui::kThemeCount>();
+    const auto index = static_cast<size_t>(snaplite::ui::CurrentThemeId());
+    FunctionSheetState& state = (*states)[index < states->size() ? index : 0];
+    if (state.attempted) return state;
+    state.attempted = true;
+
+    int resourceId = IDR_TOOLBAR_FUNCTION_MASCOTS;
+    switch (snaplite::ui::CurrentThemeId()) {
+    case snaplite::ui::ThemeId::WitchJourney: resourceId = IDR_THEME_ELAINA_TOOLBAR; break;
+    case snaplite::ui::ThemeId::ReiAyanami: resourceId = IDR_THEME_REI_TOOLBAR; break;
+    case snaplite::ui::ThemeId::Asuka: resourceId = IDR_THEME_ASUKA_TOOLBAR; break;
+    case snaplite::ui::ThemeId::Genshin: resourceId = IDR_THEME_GENSHIN_TOOLBAR; break;
+    case snaplite::ui::ThemeId::ZenlessZoneZero: resourceId = IDR_THEME_ZZZ_TOOLBAR; break;
+    case snaplite::ui::ThemeId::HonkaiImpact3: resourceId = IDR_THEME_HONKAI3_TOOLBAR; break;
+    case snaplite::ui::ThemeId::WutheringWaves: resourceId = IDR_THEME_WUTHERING_TOOLBAR; break;
+    default: break;
+    }
 
     const HRSRC resource = FindResourceW(
         nullptr,
-        MAKEINTRESOURCEW(IDR_TOOLBAR_FUNCTION_MASCOTS),
+        MAKEINTRESOURCEW(resourceId),
         MAKEINTRESOURCEW(10));
-    if (!resource) return *state;
+    if (!resource) return state;
 
     const HGLOBAL loaded = LoadResource(nullptr, resource);
     const DWORD size = SizeofResource(nullptr, resource);
     const void* source = loaded ? LockResource(loaded) : nullptr;
-    if (!source || size == 0) return *state;
+    if (!source || size == 0) return state;
 
     const HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, size);
-    if (!memory) return *state;
+    if (!memory) return state;
     void* destination = GlobalLock(memory);
     if (!destination) {
         GlobalFree(memory);
-        return *state;
+        return state;
     }
     std::memcpy(destination, source, size);
     GlobalUnlock(memory);
@@ -270,19 +287,19 @@ inline FunctionSheetState& FunctionSheet() {
     IStream* stream = nullptr;
     if (FAILED(CreateStreamOnHGlobal(memory, TRUE, &stream))) {
         GlobalFree(memory);
-        return *state;
+        return state;
     }
 
     auto bitmap = std::make_unique<Gdiplus::Bitmap>(stream, FALSE);
     if (!bitmap || bitmap->GetLastStatus() != Gdiplus::Ok) {
         if (bitmap) bitmap.reset();
         stream->Release();
-        return *state;
+        return state;
     }
 
-    state->stream = stream;
-    state->bitmap = std::move(bitmap);
-    return *state;
+    state.stream = stream;
+    state.bitmap = std::move(bitmap);
+    return state;
 }
 
 inline bool DrawFunctionSprite(HDC dc, const RECT& rect, int index) {
