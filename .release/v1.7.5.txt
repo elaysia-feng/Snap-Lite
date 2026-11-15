@@ -1,0 +1,5 @@
+Snap-Lite v1.7.5
+
+新增 Ctrl+Shift+S 选区截图快捷键，保留 F1 快捷键。
+
+Windows 11 x64。

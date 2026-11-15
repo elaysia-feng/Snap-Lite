@@ -41,6 +41,7 @@ constexpr int HOTKEY_SNIP = 1;
 constexpr int HOTKEY_PIN = 2;
 constexpr int HOTKEY_FULLSCREEN = 3;
 constexpr int HOTKEY_PIN_FALLBACK = 4;
+constexpr int HOTKEY_SNIP_FALLBACK = 5;
 
 constexpr UINT CMD_SNIP = 1001;
 constexpr UINT CMD_FULLSCREEN = 1002;
@@ -450,15 +451,16 @@ bool App::Initialize() {
         return false;
     }
 
-    const bool snipHotkeyRegistered =
+    snipHotkeyRegistered_ =
         RegisterHotKey(hwnd_, HOTKEY_SNIP, MOD_NOREPEAT, VK_F1) != FALSE;
+    snipFallbackHotkeyRegistered_ = RegisterHotKey(
+        hwnd_, HOTKEY_SNIP_FALLBACK, MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT, 'S') != FALSE;
     pinHotkeyRegistered_ =
         RegisterHotKey(hwnd_, HOTKEY_PIN, MOD_NOREPEAT, VK_F3) != FALSE;
     const bool fullscreenHotkeyRegistered =
         RegisterHotKey(hwnd_, HOTKEY_FULLSCREEN, MOD_CONTROL | MOD_SHIFT | MOD_NOREPEAT, 'F') != FALSE;
     pinFallbackHotkeyRegistered_ = !pinHotkeyRegistered_ &&
         RegisterHotKey(hwnd_, HOTKEY_PIN_FALLBACK, MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, 'P') != FALSE;
-    snipHotkeyRegistered_ = snipHotkeyRegistered;
     fullscreenHotkeyRegistered_ = fullscreenHotkeyRegistered;
 
     AddTrayIcon();
@@ -470,8 +472,12 @@ bool App::Initialize() {
             ShowNotice(L"F3 热键注册失败，可右键托盘图标选择“贴图”");
         }
     }
-    if (!snipHotkeyRegistered) {
-        ShowNotice(L"F1 截图热键注册失败，可能被其他程序占用");
+    if (!snipHotkeyRegistered_ && !snipFallbackHotkeyRegistered_) {
+        ShowNotice(L"F1 与 Ctrl+Shift+S 选区截图热键均注册失败，请检查快捷键说明");
+    } else if (!snipHotkeyRegistered_) {
+        ShowNotice(L"F1 热键注册失败，可使用 Ctrl+Shift+S 进行选区截图");
+    } else if (!snipFallbackHotkeyRegistered_) {
+        ShowNotice(L"Ctrl+Shift+S 选区截图热键注册失败，可能被其他程序占用");
     }
     if (!fullscreenHotkeyRegistered) {
         ShowNotice(L"Ctrl+Shift+F 全屏截图热键注册失败，可能被其他程序占用");
@@ -504,12 +510,15 @@ void App::Shutdown() {
 
     if (hwnd_) {
         UnregisterHotKey(hwnd_, HOTKEY_SNIP);
+        UnregisterHotKey(hwnd_, HOTKEY_SNIP_FALLBACK);
         UnregisterHotKey(hwnd_, HOTKEY_PIN);
         UnregisterHotKey(hwnd_, HOTKEY_FULLSCREEN);
         UnregisterHotKey(hwnd_, HOTKEY_PIN_FALLBACK);
     }
     pinHotkeyRegistered_ = false;
     pinFallbackHotkeyRegistered_ = false;
+    snipHotkeyRegistered_ = false;
+    snipFallbackHotkeyRegistered_ = false;
 
     // 退出时可能还有 OCR 识别在后台跑，它来不及删掉自己落盘的临时 PNG。
     // 这里顺手清一遍，避免临时目录越积越多。
@@ -549,9 +558,26 @@ void App::AddTrayIcon() {
     tray_.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
     tray_.uCallbackMessage = WM_TRAYICON;
     tray_.hIcon = LoadAppIcon(instance_);
+    std::wstring snipShortcut;
+    if (snipHotkeyRegistered_) {
+        snipShortcut = L"F1";
+    }
+    if (snipFallbackHotkeyRegistered_) {
+        if (!snipShortcut.empty()) {
+            snipShortcut += L"/";
+        }
+        snipShortcut += L"Ctrl+Shift+S";
+    }
+    if (snipShortcut.empty()) {
+        snipShortcut = L"托盘菜单";
+    }
     const wchar_t* pinShortcut = pinFallbackHotkeyRegistered_ ? L"Ctrl+Alt+P"
         : pinHotkeyRegistered_ ? L"F3" : L"托盘菜单";
-    swprintf_s(tray_.szTip, L"Snap-Lite · F1 截图 · %s 贴图", pinShortcut);
+    swprintf_s(
+        tray_.szTip,
+        L"Snap-Lite · %s 选区截图 · %s 贴图",
+        snipShortcut.c_str(),
+        pinShortcut);
     Shell_NotifyIconW(NIM_ADD, &tray_);
 }
 
@@ -572,8 +598,11 @@ void App::ShowShortcutHelp() {
     std::wstring text;
     text += L"全局快捷键\n";
     text += snipHotkeyRegistered_
-        ? L"  F1             截图\n"
-        : L"  F1             截图（注册失败，可能被其他程序占用）\n";
+        ? L"  F1             选区截图\n"
+        : L"  F1             选区截图（注册失败，可能被其他程序占用）\n";
+    text += snipFallbackHotkeyRegistered_
+        ? L"  Ctrl+Shift+S   选区截图备用键\n"
+        : L"  Ctrl+Shift+S   选区截图备用键（注册失败，可能被其他程序占用）\n";
     text += fullscreenHotkeyRegistered_
         ? L"  Ctrl+Shift+F   全屏截图\n"
         : L"  Ctrl+Shift+F   全屏截图（注册失败，可能被其他程序占用）\n";
@@ -736,7 +765,20 @@ void App::ShowTrayMenu() {
         return;
     }
 
-    AppendMenuW(menu, MF_STRING, CMD_SNIP, L"截图\tF1");
+    std::wstring snipLabel = L"选区截图";
+    if (snipHotkeyRegistered_ || snipFallbackHotkeyRegistered_) {
+        snipLabel += L'\t';
+    }
+    if (snipHotkeyRegistered_) {
+        snipLabel += L"F1";
+    }
+    if (snipFallbackHotkeyRegistered_) {
+        if (snipHotkeyRegistered_) {
+            snipLabel += L" / ";
+        }
+        snipLabel += L"Ctrl+Shift+S";
+    }
+    AppendMenuW(menu, MF_STRING, CMD_SNIP, snipLabel.c_str());
     std::wstring pinLabel = L"贴图\t";
     if (pinFallbackHotkeyRegistered_) {
         pinLabel += L"Ctrl+Alt+P";
@@ -934,7 +976,7 @@ void App::CommitCapture(HBITMAP bitmap) {
 LRESULT App::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
     switch (message) {
     case WM_HOTKEY:
-        if (wParam == HOTKEY_SNIP) {
+        if (wParam == HOTKEY_SNIP || wParam == HOTKEY_SNIP_FALLBACK) {
             StartSnip();
         } else if (wParam == HOTKEY_PIN || wParam == HOTKEY_PIN_FALLBACK) {
             PinClipboard();

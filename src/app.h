@@ -52,6 +52,7 @@ private:
     bool pinHotkeyRegistered_{};
     bool pinFallbackHotkeyRegistered_{};
     bool snipHotkeyRegistered_{};
+    bool snipFallbackHotkeyRegistered_{};
     bool fullscreenHotkeyRegistered_{};
     std::thread updateWorker_;
     std::mutex updateMutex_;

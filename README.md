@@ -8,7 +8,7 @@ Windows 11 x64 原生截图与贴图工具，使用 C++ 和 Win32 实现。支�
 
 | 操作 | 快捷键或方式 |
 | --- | --- |
-| 开始截图 | `F1` |
+| 选区截图 | `F1` 或 `Ctrl + Shift + S` |
 | 延时截图（3 / 5 / 10 秒） | 托盘菜单「延时截图」 |
 | 全屏截图 | `Ctrl + Shift + F` |
 | 将剪贴板图片贴到桌面 | `F3` |
@@ -112,5 +112,5 @@ python scripts/verify_generated_sources.py build
 发布版本号解析（纯函数，可单测）：
 
 ```powershell
-python scripts/resolve_release_version.py --base-version 1.7.4
+python scripts/resolve_release_version.py --base-version 1.7.5
 ```
