@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(SnapLite VERSION 1.7.7 LANGUAGES CXX RC)
+project(SnapLite VERSION 1.7.8 LANGUAGES CXX RC)
 
 # 部分中文 Windows 环境下，CMake 对 MSVC /showIncludes 前缀的探测会解码错误，
 # Ninja 随后无法记录头文件依赖，改头文件时可能跳过依赖它的 C++ 编译单元。
@@ -43,6 +43,8 @@ set(SNAP_LITE_GENERATION_INPUTS
     resources/themes/zzz_toolbar.png
     resources/themes/honkai3_toolbar.png
     resources/themes/wuthering_toolbar.png
+    resources/themes/star_rail_toolbar.png
+    resources/themes/yuru_camp_toolbar.png
 )
 foreach(snaplite_generation_input IN LISTS SNAP_LITE_GENERATION_INPUTS)
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS

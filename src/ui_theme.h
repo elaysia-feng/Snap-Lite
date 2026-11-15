@@ -19,6 +19,8 @@ enum class ThemeId : std::uint32_t {
     ZenlessZoneZero,
     HonkaiImpact3,
     WutheringWaves,
+    HonkaiStarRail,
+    YuruCamp,
 };
 
 struct ThemePalette {
@@ -41,7 +43,7 @@ struct ThemePalette {
     COLORREF dangerHover;
 };
 
-inline constexpr std::array<ThemePalette, 8> kThemePalettes{{
+inline constexpr std::array<ThemePalette, 10> kThemePalettes{{
     {
         L"轻音少女",
         RGB(255, 248, 250), RGB(255, 250, 248), RGB(255, 255, 255),
@@ -112,6 +114,24 @@ inline constexpr std::array<ThemePalette, 8> kThemePalettes{{
         RGB(43, 100, 108), RGB(32, 83, 90), RGB(38, 52, 55),
         RGB(111, 132, 135), RGB(78, 104, 108), RGB(225, 239, 238),
         RGB(207, 229, 227), RGB(207, 223, 222), RGB(201, 75, 83),
+        RGB(255, 237, 239),
+    },
+    {
+        L"崩坏：星穹铁道",
+        RGB(244, 246, 252), RGB(251, 250, 248), RGB(255, 255, 255),
+        RGB(211, 218, 235), RGB(123, 140, 195), RGB(91, 108, 166),
+        RGB(70, 85, 136), RGB(54, 67, 116), RGB(43, 47, 62),
+        RGB(124, 130, 149), RGB(91, 98, 119), RGB(231, 236, 248),
+        RGB(213, 221, 240), RGB(213, 220, 234), RGB(201, 75, 83),
+        RGB(255, 237, 239),
+    },
+    {
+        L"摇曳露营",
+        RGB(245, 249, 242), RGB(255, 251, 244), RGB(255, 255, 255),
+        RGB(218, 228, 211), RGB(132, 166, 119), RGB(99, 137, 90),
+        RGB(77, 113, 70), RGB(61, 94, 55), RGB(49, 57, 47),
+        RGB(121, 133, 112), RGB(91, 103, 83), RGB(234, 243, 226),
+        RGB(220, 234, 211), RGB(217, 228, 210), RGB(201, 75, 83),
         RGB(255, 237, 239),
     },
 }};

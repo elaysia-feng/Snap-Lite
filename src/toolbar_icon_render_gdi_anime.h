@@ -260,6 +260,8 @@ inline FunctionSheetState& FunctionSheet() {
     case snaplite::ui::ThemeId::ZenlessZoneZero: resourceId = IDR_THEME_ZZZ_TOOLBAR; break;
     case snaplite::ui::ThemeId::HonkaiImpact3: resourceId = IDR_THEME_HONKAI3_TOOLBAR; break;
     case snaplite::ui::ThemeId::WutheringWaves: resourceId = IDR_THEME_WUTHERING_TOOLBAR; break;
+    case snaplite::ui::ThemeId::HonkaiStarRail: resourceId = IDR_THEME_STAR_RAIL_TOOLBAR; break;
+    case snaplite::ui::ThemeId::YuruCamp: resourceId = IDR_THEME_YURU_CAMP_TOOLBAR; break;
     default: break;
     }
 
