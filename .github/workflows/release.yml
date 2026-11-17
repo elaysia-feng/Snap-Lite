@@ -124,6 +124,11 @@ jobs:
             throw 'The release version is empty'
           }
 
+          $updaterNotesPath = Join-Path '.release' "v$releaseVersion.txt"
+          if (-not (Test-Path -LiteralPath $updaterNotesPath -PathType Leaf)) {
+            throw "Updater release notes file is missing: $updaterNotesPath"
+          }
+
           # 版本号必须与项目版本同一条版本线。按**数字分量**比较，既不是
           # 字符串前缀、也不是字符串相等：
           #  - "1.60.0" 以 "1.6.0" 开头，但主版本分量已经变了；
