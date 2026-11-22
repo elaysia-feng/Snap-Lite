@@ -2,6 +2,8 @@
 
 #include <windows.h>
 
+#include <string>
+
 namespace snaplite {
 
 // 贴图结果。必须区分"剪贴板被占用"和"剪贴板里没有图片"：两者的处理方式
@@ -52,6 +54,8 @@ private:
     int bitmapHeight_{};
     double zoom_{1.0};
     BYTE opacity_{255};
+    std::wstring hudText_{};
+    ULONGLONG hudExpireTick_{0};
 };
 
 }  // namespace snaplite

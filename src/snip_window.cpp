@@ -119,6 +119,28 @@ void DrawArrowHeadSmooth(
     if (length < 0.01) return;
 
     const double angle = std::atan2(dy, dx);
+    const Gdiplus::Color ink = AnnotationInk(color);
+
+    if (filled) {
+        constexpr double spread = 0.43; // 约 24.6 度，修长锐利
+        const double backDist = static_cast<double>(size) * 0.73;
+        const Gdiplus::PointF head[4] = {
+            tip,
+            {static_cast<float>(tip.X - size * std::cos(angle - spread)),
+             static_cast<float>(tip.Y - size * std::sin(angle - spread))},
+            {static_cast<float>(tip.X - backDist * std::cos(angle)),
+             static_cast<float>(tip.Y - backDist * std::sin(angle))},
+            {static_cast<float>(tip.X - size * std::cos(angle + spread)),
+             static_cast<float>(tip.Y - size * std::sin(angle + spread))},
+        };
+        Gdiplus::SolidBrush brush(ink);
+        graphics.FillPolygon(&brush, head, 4);
+        Gdiplus::Pen headPen(ink, 1.15f);
+        headPen.SetLineJoin(Gdiplus::LineJoinRound);
+        graphics.DrawPolygon(&headPen, head, 4);
+        return;
+    }
+
     constexpr double spread = 0.55;
     const Gdiplus::PointF head[3] = {
         tip,
@@ -127,14 +149,6 @@ void DrawArrowHeadSmooth(
         {static_cast<float>(tip.X - size * std::cos(angle + spread)),
          static_cast<float>(tip.Y - size * std::sin(angle + spread))},
     };
-    const Gdiplus::Color ink = AnnotationInk(color);
-
-    if (filled) {
-        Gdiplus::SolidBrush brush(ink);
-        graphics.FillPolygon(&brush, head, 3);
-        return;
-    }
-
     Gdiplus::Pen pen(ink, std::max(1.0f, strokeWidth));
     pen.SetStartCap(Gdiplus::LineCapRound);
     pen.SetEndCap(Gdiplus::LineCapRound);
@@ -162,74 +176,124 @@ bool AdvancedArrow(HDC dc, POINT from, POINT to, const POINT* hit = nullptr, int
         static_cast<float>(from.x), static_cast<float>(from.y));
     const Gdiplus::PointF end(
         static_cast<float>(to.x), static_cast<float>(to.y));
-    Gdiplus::GraphicsPath shaft;
-    Gdiplus::PointF tailForEnd = start;
     const bool filledHead = kind != 1;
-    const float headSize = kind == 2 ? 22.0f : std::max(13.0f, 12.0f + width);
+    const float hitHeadSize = kind == 2 ? 22.0f : std::max(13.0f, 12.0f + width);
+    const float headSize = kind == 2
+        ? std::max(22.0f, 14.0f + width * 1.45f)
+        : std::max(14.0f, 11.5f + width * 1.35f);
 
-    switch (kind) {
-    case 4: {
+    Gdiplus::PointF tailForEnd = start;
+    Gdiplus::PointF bezierC1{};
+    Gdiplus::PointF bezierC2{};
+    if (kind == 4) {
         const double dx = static_cast<double>(to.x - from.x);
         const double dy = static_cast<double>(to.y - from.y);
-        const double len = std::max(
-            1.0, std::hypot(dx, dy));
+        const double len = std::max(1.0, std::hypot(dx, dy));
         const double nx = -dy / len;
         const double ny = dx / len;
         const double bend = std::min(70.0, len * 0.22);
-        const Gdiplus::PointF control1(
+        bezierC1 = {
             static_cast<float>(from.x + dx / 3.0 + nx * bend),
-            static_cast<float>(from.y + dy / 3.0 + ny * bend));
-        const Gdiplus::PointF control2(
+            static_cast<float>(from.y + dy / 3.0 + ny * bend)};
+        bezierC2 = {
             static_cast<float>(from.x + dx * 2.0 / 3.0 + nx * bend),
-            static_cast<float>(from.y + dy * 2.0 / 3.0 + ny * bend));
-        shaft.AddBezier(start, control1, control2, end);
-        tailForEnd = control2;
-        break;
-    }
-    case 5: {
+            static_cast<float>(from.y + dy * 2.0 / 3.0 + ny * bend)};
+        tailForEnd = bezierC2;
+    } else if (kind == 5) {
         const float middleX = (static_cast<float>(from.x) + static_cast<float>(to.x)) / 2.0f;
-        const Gdiplus::PointF points[4] = {
-            start,
-            {middleX, start.Y},
-            {middleX, end.Y},
-            end,
-        };
-        for (size_t i = 1; i < sizeof(points) / sizeof(points[0]); ++i) {
-            shaft.AddLine(points[i - 1], points[i]);
-        }
-        tailForEnd = points[2];
-        break;
-    }
-    case 6: {
+        tailForEnd = {middleX, end.Y};
+    } else if (kind == 6) {
         const float stepX = static_cast<float>(from.x) +
             static_cast<float>(to.x - from.x) / 3.0f;
-        const Gdiplus::PointF points[4] = {
-            start,
-            {stepX, start.Y},
-            {stepX, end.Y},
-            end,
-        };
-        for (size_t i = 1; i < sizeof(points) / sizeof(points[0]); ++i) {
-            shaft.AddLine(points[i - 1], points[i]);
+        tailForEnd = {stepX, end.Y};
+    }
+
+    const auto appendPath = [&](Gdiplus::GraphicsPath& path,
+                                Gdiplus::PointF pathStart,
+                                Gdiplus::PointF pathEnd) {
+        if (kind == 4) {
+            path.AddBezier(pathStart, bezierC1, bezierC2, pathEnd);
+        } else if (kind == 5 || kind == 6) {
+            const Gdiplus::PointF points[4] = {
+                pathStart,
+                {tailForEnd.X, pathStart.Y},
+                tailForEnd,
+                pathEnd,
+            };
+            for (size_t i = 1; i < sizeof(points) / sizeof(points[0]); ++i) {
+                path.AddLine(points[i - 1], points[i]);
+            }
+        } else {
+            path.AddLine(pathStart, pathEnd);
         }
-        tailForEnd = points[2];
-        break;
-    }
-    default:
-        shaft.AddLine(start, end);
-        break;
-    }
+    };
 
     const Gdiplus::Color ink = AnnotationInk(gAnnotationColor);
     if (hit) {
+        Gdiplus::GraphicsPath hitShaft;
+        appendPath(hitShaft, start, end);
         Gdiplus::Pen hitPen(ink, std::max(width, static_cast<float>(tolerance * 2)));
         hitPen.SetLineJoin(Gdiplus::LineJoinRound);
         // 命中使用实际曲线和折线路径，箭头尖端另加宽容范围。
-        return shaft.IsOutlineVisible(static_cast<INT>(hit->x), static_cast<INT>(hit->y), &hitPen) ||
-            std::hypot(static_cast<double>(hit->x - to.x), static_cast<double>(hit->y - to.y)) <= headSize + tolerance / 2;
+        return hitShaft.IsOutlineVisible(static_cast<INT>(hit->x), static_cast<INT>(hit->y), &hitPen) ||
+            std::hypot(static_cast<double>(hit->x - to.x), static_cast<double>(hit->y - to.y)) <= hitHeadSize + tolerance / 2;
     }
+
+    const auto insetPoint = [](Gdiplus::PointF tip, Gdiplus::PointF tail, float wantedInset) -> Gdiplus::PointF {
+        const double dx = static_cast<double>(tip.X - tail.X);
+        const double dy = static_cast<double>(tip.Y - tail.Y);
+        const double segLen = std::hypot(dx, dy);
+        if (segLen < 0.5) return tip;
+        const float actualInset = std::min(static_cast<float>(segLen * 0.48), wantedInset);
+        return {
+            static_cast<float>(tip.X - (dx / segLen) * actualInset),
+            static_cast<float>(tip.Y - (dy / segLen) * actualInset),
+        };
+    };
+
+    const float endInset = filledHead ? headSize * 0.62f : width * 0.35f;
+    const Gdiplus::PointF drawnEnd = insetPoint(end, tailForEnd, endInset);
+    const double totalLen = std::hypot(
+        static_cast<double>(end.X - start.X),
+        static_cast<double>(end.Y - start.Y));
+
+    if ((kind == 0 || kind == 2) && totalLen > static_cast<double>(headSize) * 0.85) {
+        const double ux = static_cast<double>(end.X - start.X) / totalLen;
+        const double uy = static_cast<double>(end.Y - start.Y) / totalLen;
+        const float nx = static_cast<float>(-uy);
+        const float ny = static_cast<float>(ux);
+        const float startHalf = std::max(1.2f, width * 0.34f);
+        const float endHalf = std::max(
+            width * 0.58f,
+            std::min(width * 0.88f, headSize * 0.19f));
+        const Gdiplus::PointF quad[4] = {
+            {start.X + nx * startHalf, start.Y + ny * startHalf},
+            {drawnEnd.X + nx * endHalf, drawnEnd.Y + ny * endHalf},
+            {drawnEnd.X - nx * endHalf, drawnEnd.Y - ny * endHalf},
+            {start.X - nx * startHalf, start.Y - ny * startHalf},
+        };
+        Gdiplus::SolidBrush shaftBrush(ink);
+        graphics.FillEllipse(
+            &shaftBrush,
+            start.X - startHalf,
+            start.Y - startHalf,
+            startHalf * 2.0f,
+            startHalf * 2.0f);
+        graphics.FillPolygon(&shaftBrush, quad, 4);
+        Gdiplus::Pen edgePen(ink, 1.0f);
+        edgePen.SetLineJoin(Gdiplus::LineJoinRound);
+        graphics.DrawPolygon(&edgePen, quad, 4);
+        DrawArrowHeadSmooth(graphics, end, tailForEnd, gAnnotationColor, headSize, width, filledHead);
+        return true;
+    }
+
+    const Gdiplus::PointF drawnStart =
+        kind == 3 ? insetPoint(start, end, headSize * 0.62f) : start;
+    Gdiplus::GraphicsPath shaft;
+    appendPath(shaft, drawnStart, drawnEnd);
+
     Gdiplus::Pen pen(ink, width);
-    // 箭杆会延伸到箭头尖端；圆形端帽会越过尖端形成多余的小点。
+    // 箭杆向内缩进到燕尾箭头凹槽内，平端帽确保不越过尖端两侧。
     pen.SetStartCap(kind == 3 ? Gdiplus::LineCapFlat : Gdiplus::LineCapRound);
     pen.SetEndCap(Gdiplus::LineCapFlat);
     pen.SetLineJoin(Gdiplus::LineJoinRound);

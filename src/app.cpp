@@ -444,7 +444,7 @@ void TrimWorkingSet() {
 
 constexpr wchar_t kShortcutHelpClass[] = L"SnapLiteShortcutHelpDialog";
 constexpr int kShortcutHelpWidth = 760;
-constexpr int kShortcutHelpHeight = 468;
+constexpr int kShortcutHelpHeight = 520;
 
 struct ShortcutRow {
     std::wstring keys;
@@ -459,8 +459,22 @@ struct ShortcutSection {
 
 enum class ShortcutHit { None, Close, Ok };
 
+constexpr std::array<LPCWSTR, ui::kThemeCount> kThemeShortNames{{
+    L"轻音少女",
+    L"伊蕾娜",
+    L"绫波丽",
+    L"明日香",
+    L"原神",
+    L"绝区零",
+    L"崩坏3",
+    L"鸣潮",
+    L"星穹铁道",
+    L"摇曳露营",
+}};
+
 struct ShortcutHelpState {
     std::vector<ShortcutSection> sections;
+    std::array<RECT, ui::kThemeCount> themeRects{};
     UINT dpi{96};
     HFONT titleFont{};
     HFONT sectionFont{};
@@ -471,6 +485,8 @@ struct ShortcutHelpState {
     RECT okRect{};
     ShortcutHit hovered{ShortcutHit::None};
     ShortcutHit pressed{ShortcutHit::None};
+    int hoveredTheme{-1};
+    int pressedTheme{-1};
     bool trackingMouse{false};
 };
 
@@ -520,6 +536,43 @@ void LayoutShortcutHelp(HWND hwnd, ShortcutHelpState* state) {
         height - ScaleHelp(state, 18) - okH,
         width - margin,
         height - ScaleHelp(state, 18)};
+
+    const int barLeft = margin;
+    const int barRight = width - margin;
+    const int gap = ScaleHelp(state, 5);
+    const int pillTop = ScaleHelp(state, 64);
+    const int pillBottom = ScaleHelp(state, 92);
+    std::array<int, ui::kThemeCount> rawWidths{};
+    int totalRawWidth = 0;
+    HDC measureDc = GetDC(hwnd);
+    const HGDIOBJ oldFont = (measureDc && state->smallFont) ? SelectObject(measureDc, state->smallFont) : nullptr;
+    const int dotPad = ScaleHelp(state, 20);
+    for (std::size_t i = 0; i < ui::kThemeCount; ++i) {
+        SIZE sz{};
+        if (measureDc) {
+            GetTextExtentPoint32W(measureDc, kThemeShortNames[i], static_cast<int>(wcslen(kThemeShortNames[i])), &sz);
+        } else {
+            sz.cx = static_cast<LONG>(wcslen(kThemeShortNames[i]) * ScaleHelp(state, 11));
+        }
+        rawWidths[i] = static_cast<int>(sz.cx) + dotPad;
+        totalRawWidth += rawWidths[i];
+    }
+    if (measureDc) {
+        if (oldFont) SelectObject(measureDc, oldFont);
+        ReleaseDC(hwnd, measureDc);
+    }
+
+    const int availableW = std::max(1, barRight - barLeft - gap * static_cast<int>(ui::kThemeCount - 1));
+    int cursorX = barLeft;
+    for (std::size_t i = 0; i < ui::kThemeCount; ++i) {
+        const int remainingGapW = barRight - cursorX - gap * static_cast<int>(ui::kThemeCount - 1 - i);
+        const int w = (i + 1 == ui::kThemeCount)
+            ? std::max(ScaleHelp(state, 40), remainingGapW)
+            : std::max(ScaleHelp(state, 40), MulDiv(rawWidths[i], availableW, std::max(1, totalRawWidth)));
+        state->themeRects[i] = {cursorX, pillTop, std::min(barRight, cursorX + w), pillBottom};
+        cursorX += w + gap;
+    }
+
     ui::SetRoundedWindowRegion(hwnd, ScaleHelp(state, 18));
 }
 
@@ -530,13 +583,112 @@ ShortcutHit HitTestShortcutHelp(const ShortcutHelpState* state, POINT pt) {
     return ShortcutHit::None;
 }
 
+int HitTestThemePill(const ShortcutHelpState* state, POINT pt) {
+    if (!state) return -1;
+    for (std::size_t i = 0; i < ui::kThemeCount; ++i) {
+        if (PtInRect(&state->themeRects[i], pt)) {
+            return static_cast<int>(i);
+        }
+    }
+    return -1;
+}
+
+struct KeycapToken {
+    bool isKey{true};
+    std::wstring text;
+};
+
+std::vector<KeycapToken> SplitShortcutTokens(const std::wstring& keys) {
+    std::vector<KeycapToken> tokens;
+    const auto pushKey = [&](const std::wstring& raw) {
+        std::size_t first = raw.find_first_not_of(L' ');
+        if (first == std::wstring::npos) return;
+        std::size_t last = raw.find_last_not_of(L' ');
+        tokens.push_back({true, raw.substr(first, last - first + 1)});
+    };
+
+    if (keys.find(L'+') == std::wstring::npos && keys.find(L'/') == std::wstring::npos) {
+        std::size_t pos = 0;
+        while (pos < keys.size()) {
+            const std::size_t start = keys.find_first_not_of(L' ', pos);
+            if (start == std::wstring::npos) break;
+            const std::size_t end = keys.find_first_of(L' ', start);
+            if (end == std::wstring::npos) {
+                tokens.push_back({true, keys.substr(start)});
+                break;
+            }
+            tokens.push_back({true, keys.substr(start, end - start)});
+            pos = end + 1;
+        }
+        return tokens;
+    }
+
+    std::wstring current;
+    for (wchar_t ch : keys) {
+        if (ch == L'+' || ch == L'/') {
+            pushKey(current);
+            current.clear();
+            tokens.push_back({false, std::wstring(1, ch)});
+        } else {
+            current.push_back(ch);
+        }
+    }
+    pushKey(current);
+    return tokens;
+}
+
+int DrawShortcutKeycaps(
+    HDC dc,
+    const ShortcutHelpState* state,
+    int leftX,
+    int rowTop,
+    int rowHeight,
+    const ShortcutRow& row) {
+    const std::vector<KeycapToken> tokens = SplitShortcutTokens(row.keys);
+    const int capHeight = ScaleHelp(state, 22);
+    const int capTop = rowTop + (rowHeight - capHeight) / 2;
+    const int radius = ScaleHelp(state, 5);
+    const int keyPadX = ScaleHelp(state, 12);
+    const int minKeyW = ScaleHelp(state, 22);
+    const int keyGap = ScaleHelp(state, 3);
+    const COLORREF capFill = row.warning ? ui::kDangerHover : ui::kCream;
+    const COLORREF capBorder = row.warning ? ui::kDanger : ui::kBorder;
+    const COLORREF capShadow = row.warning
+        ? ui::BlendRatio(ui::kDanger, ui::kCard, 1, 2)
+        : ui::BlendRatio(ui::kBorder, ui::kSurface, 2, 1);
+    const COLORREF capInk = row.warning ? ui::kDanger : ui::kAccentAction;
+
+    int x = leftX;
+    for (const KeycapToken& token : tokens) {
+        if (state->keyFont) SelectObject(dc, state->keyFont);
+        SIZE sz{};
+        GetTextExtentPoint32W(dc, token.text.c_str(), static_cast<int>(token.text.size()), &sz);
+        if (!token.isKey) {
+            const int sepW = static_cast<int>(sz.cx) + ScaleHelp(state, 6);
+            RECT sepRect{x, rowTop, x + sepW, rowTop + rowHeight};
+            SetTextColor(dc, ui::kMutedText);
+            DrawTextW(dc, token.text.c_str(), -1, &sepRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            x += sepW;
+            continue;
+        }
+        const int capW = std::max(minKeyW, static_cast<int>(sz.cx) + keyPadX);
+        RECT keyRect{x, capTop, x + capW, capTop + capHeight};
+        ui::DrawKeycap(dc, keyRect, radius, capFill, capBorder, capShadow);
+        RECT labelRect{keyRect.left, keyRect.top, keyRect.right, std::max<LONG>(keyRect.top + 2, keyRect.bottom - 2)};
+        SetTextColor(dc, capInk);
+        DrawTextW(dc, token.text.c_str(), -1, &labelRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        x += capW + keyGap;
+    }
+    return x;
+}
+
 void DrawShortcutSectionCard(
     HDC dc,
     const ShortcutHelpState* state,
     const RECT& cardRect,
     const ShortcutSection& section,
     int rowHeight) {
-    ui::FillRoundRect(dc, cardRect, ScaleHelp(state, 12), ui::kCard, ui::kBorder);
+    ui::DrawElevatedCard(dc, cardRect, ScaleHelp(state, 14));
 
     const int padX = ScaleHelp(state, 14);
     const int titleTop = cardRect.top + ScaleHelp(state, 10);
@@ -554,38 +706,31 @@ void DrawShortcutSectionCard(
     DrawTextW(dc, section.title.c_str(), -1, &titleRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
     int rowTop = titleBottom + ScaleHelp(state, 6);
-    const int maxKeyWidth = ScaleHelp(state, 126);
-    for (const ShortcutRow& row : section.rows) {
-        if (state->keyFont) SelectObject(dc, state->keyFont);
-        SIZE keySize{};
-        GetTextExtentPoint32W(dc, row.keys.c_str(), static_cast<int>(row.keys.size()), &keySize);
-        const int capWidth = std::clamp(
-            static_cast<int>(keySize.cx) + ScaleHelp(state, 16),
-            ScaleHelp(state, 44),
-            maxKeyWidth);
-        const int capHeight = ScaleHelp(state, 22);
-        const int capTop = rowTop + (rowHeight - capHeight) / 2;
-        RECT keyRect{
-            cardRect.left + padX,
-            capTop,
-            cardRect.left + padX + capWidth,
-            capTop + capHeight};
-        const COLORREF capFill = row.warning ? ui::kDangerHover : ui::kCream;
-        const COLORREF capBorder = row.warning ? ui::kDanger : ui::kBorder;
-        ui::FillRoundRect(dc, keyRect, ScaleHelp(state, 6), capFill, capBorder);
-        SetTextColor(dc, row.warning ? ui::kDanger : ui::kAccentAction);
-        DrawTextW(dc, row.keys.c_str(), -1, &keyRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    const COLORREF dividerColor = ui::BlendRatio(ui::kBorder, ui::kCard, 1, 2);
+    HPEN rowDivider = CreatePen(PS_SOLID, 1, dividerColor);
+    const int alignedDescLeft = cardRect.left + padX + ScaleHelp(state, 134);
+    for (std::size_t idx = 0; idx < section.rows.size(); ++idx) {
+        const ShortcutRow& row = section.rows[idx];
+        const int keyEndX = DrawShortcutKeycaps(dc, state, cardRect.left + padX, rowTop, rowHeight, row);
 
         if (state->bodyFont) SelectObject(dc, state->bodyFont);
         SetTextColor(dc, row.warning ? ui::kDanger : ui::kText);
         RECT descRect{
-            keyRect.right + ScaleHelp(state, 10),
+            std::max(alignedDescLeft, keyEndX + ScaleHelp(state, 8)),
             rowTop,
             cardRect.right - padX,
             rowTop + rowHeight};
         DrawTextW(dc, row.desc.c_str(), -1, &descRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+
+        if (rowDivider && idx + 1 < section.rows.size()) {
+            const HGDIOBJ oldPen = SelectObject(dc, rowDivider);
+            MoveToEx(dc, cardRect.left + padX, rowTop + rowHeight, nullptr);
+            LineTo(dc, cardRect.right - padX, rowTop + rowHeight);
+            SelectObject(dc, oldPen);
+        }
         rowTop += rowHeight;
     }
+    if (rowDivider) DeleteObject(rowDivider);
 
     if (oldFont) SelectObject(dc, oldFont);
 }
@@ -602,17 +747,6 @@ void PaintShortcutHelp(HWND hwnd, ShortcutHelpState* state) {
     GetClientRect(hwnd, &client);
     ui::FillSolid(dc, client, ui::kSurface);
 
-    HPEN outline = CreatePen(PS_SOLID, 1, ui::kBorder);
-    if (outline) {
-        const HGDIOBJ oldPen = SelectObject(dc, outline);
-        const HGDIOBJ oldBrush = SelectObject(dc, GetStockObject(HOLLOW_BRUSH));
-        const int radius = ScaleHelp(state, 18);
-        RoundRect(dc, 0, 0, client.right, client.bottom, radius, radius);
-        SelectObject(dc, oldBrush);
-        SelectObject(dc, oldPen);
-        DeleteObject(outline);
-    }
-
     SetBkMode(dc, TRANSPARENT);
     const int margin = ScaleHelp(state, 22);
     const int dotSize = ScaleHelp(state, 12);
@@ -621,7 +755,7 @@ void PaintShortcutHelp(HWND hwnd, ShortcutHelpState* state) {
 
     const HGDIOBJ oldFont = state->titleFont ? SelectObject(dc, state->titleFont) : nullptr;
     SetTextColor(dc, ui::kText);
-    constexpr wchar_t kHeading[] = L"Snap-Lite 快捷键指南";
+    constexpr wchar_t kHeading[] = L"Snap-Lite 快捷键与主题指南";
     SIZE headingSize{};
     GetTextExtentPoint32W(dc, kHeading, static_cast<int>(wcslen(kHeading)), &headingSize);
     const int titleLeft = brandDot.right + ScaleHelp(state, 10);
@@ -659,16 +793,49 @@ void PaintShortcutHelp(HWND hwnd, ShortcutHelpState* state) {
         DeleteObject(closePen);
     }
 
-    HPEN divider = CreatePen(PS_SOLID, 1, ui::kBorder);
-    if (divider) {
-        const HGDIOBJ oldPen = SelectObject(dc, divider);
-        MoveToEx(dc, margin, ScaleHelp(state, 62), nullptr);
-        LineTo(dc, client.right - margin, ScaleHelp(state, 62));
+    HPEN topDivider = CreatePen(PS_SOLID, 1, ui::BlendRatio(ui::kBorder, ui::kSurface, 3, 2));
+    if (topDivider) {
+        const HGDIOBJ oldPen = SelectObject(dc, topDivider);
+        MoveToEx(dc, margin, ScaleHelp(state, 56), nullptr);
+        LineTo(dc, client.right - margin, ScaleHelp(state, 56));
         SelectObject(dc, oldPen);
-        DeleteObject(divider);
+        DeleteObject(topDivider);
     }
 
-    const int cardsTop = ScaleHelp(state, 74);
+    if (state->smallFont) SelectObject(dc, state->smallFont);
+    const std::size_t currentIndex = static_cast<std::size_t>(ui::CurrentThemeId());
+    const int swatchDiameter = ScaleHelp(state, 7);
+    const int swatchLeftPad = ScaleHelp(state, 7);
+    for (std::size_t i = 0; i < ui::kThemeCount; ++i) {
+        const RECT& pill = state->themeRects[i];
+        const bool active = (i == currentIndex);
+        const bool hovered = (state->hoveredTheme == static_cast<int>(i));
+        const bool pressed = (state->pressedTheme == static_cast<int>(i));
+        const COLORREF fill = active
+            ? ui::kAccentAction
+            : (pressed ? ui::kPressed : (hovered ? ui::kHover : ui::kCard));
+        const COLORREF border = active
+            ? ui::kAccentAction
+            : (hovered ? ui::kAccentStrong : ui::BlendRatio(ui::kBorder, ui::kSurface, 4, 1));
+        ui::FillRoundRect(dc, pill, ScaleHelp(state, 13), fill, border);
+
+        const int dotY = (pill.top + pill.bottom - swatchDiameter) / 2;
+        RECT swatchRect{
+            pill.left + swatchLeftPad,
+            dotY,
+            pill.left + swatchLeftPad + swatchDiameter,
+            dotY + swatchDiameter};
+        const COLORREF swatchColor = active
+            ? RGB(255, 255, 255)
+            : ui::kThemePalettes[i].accentStrong;
+        ui::FillRoundRect(dc, swatchRect, swatchDiameter, swatchColor, swatchColor);
+
+        SetTextColor(dc, active ? RGB(255, 255, 255) : ui::kText);
+        RECT labelRect{swatchRect.right + ScaleHelp(state, 4), pill.top, pill.right - ScaleHelp(state, 4), pill.bottom};
+        DrawTextW(dc, kThemeShortNames[i], -1, &labelRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
+
+    const int cardsTop = ScaleHelp(state, 104);
     const int cardsBottom = state->okRect.top - ScaleHelp(state, 14);
     const int colGap = ScaleHelp(state, 16);
     const int rowGap = ScaleHelp(state, 12);
@@ -679,15 +846,15 @@ void PaintShortcutHelp(HWND hwnd, ShortcutHelpState* state) {
         RECT card0{margin, cardsTop, margin + colWidth, cardsTop + leftHeight};
         RECT card1{margin, card0.bottom + rowGap, margin + colWidth, cardsBottom};
         RECT card2{margin + colWidth + colGap, cardsTop, client.right - margin, cardsBottom};
-        DrawShortcutSectionCard(dc, state, card0, state->sections[0], ScaleHelp(state, 28));
-        DrawShortcutSectionCard(dc, state, card1, state->sections[1], ScaleHelp(state, 28));
-        DrawShortcutSectionCard(dc, state, card2, state->sections[2], ScaleHelp(state, 34));
+        DrawShortcutSectionCard(dc, state, card0, state->sections[0], ScaleHelp(state, 30));
+        DrawShortcutSectionCard(dc, state, card1, state->sections[1], ScaleHelp(state, 30));
+        DrawShortcutSectionCard(dc, state, card2, state->sections[2], ScaleHelp(state, 36));
     }
 
     if (state->smallFont) SelectObject(dc, state->smallFont);
     SetTextColor(dc, ui::kMutedText);
     RECT footerHint{margin, state->okRect.top, state->okRect.left - ScaleHelp(state, 12), state->okRect.bottom};
-    DrawTextW(dc, L"可在托盘右键菜单「UI 主题」中随时切换外观配色", -1, &footerHint,
+    DrawTextW(dc, L"点击上方主题胶囊可实时切换配色 · 托盘右键「UI 主题」同步生效", -1, &footerHint,
               DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 
     const bool okPressed = state->pressed == ShortcutHit::Ok;
@@ -752,7 +919,7 @@ LRESULT CALLBACK ShortcutHelpProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM
         if (hit != HTCLIENT) return hit;
         POINT pt{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
         ScreenToClient(hwnd, &pt);
-        if (pt.y < ScaleHelp(state, 62) && HitTestShortcutHelp(state, pt) == ShortcutHit::None) {
+        if (pt.y < ScaleHelp(state, 56) && HitTestShortcutHelp(state, pt) == ShortcutHit::None) {
             return HTCAPTION;
         }
         return HTCLIENT;
@@ -763,9 +930,12 @@ LRESULT CALLBACK ShortcutHelpProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM
             TRACKMOUSEEVENT tme{sizeof(tme), TME_LEAVE, hwnd, 0};
             state->trackingMouse = TrackMouseEvent(&tme) != FALSE;
         }
-        const ShortcutHit hit = HitTestShortcutHelp(state, {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)});
-        if (state->hovered != hit) {
+        const POINT pt{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+        const ShortcutHit hit = HitTestShortcutHelp(state, pt);
+        const int hitTheme = hit == ShortcutHit::None ? HitTestThemePill(state, pt) : -1;
+        if (state->hovered != hit || state->hoveredTheme != hitTheme) {
             state->hovered = hit;
+            state->hoveredTheme = hitTheme;
             InvalidateRect(hwnd, nullptr, FALSE);
         }
         return 0;
@@ -773,17 +943,21 @@ LRESULT CALLBACK ShortcutHelpProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM
     case WM_MOUSELEAVE:
         if (state) {
             state->trackingMouse = false;
-            if (state->hovered != ShortcutHit::None) {
+            if (state->hovered != ShortcutHit::None || state->hoveredTheme != -1) {
                 state->hovered = ShortcutHit::None;
+                state->hoveredTheme = -1;
                 InvalidateRect(hwnd, nullptr, FALSE);
             }
         }
         return 0;
     case WM_LBUTTONDOWN:
         if (state) {
-            const ShortcutHit hit = HitTestShortcutHelp(state, {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)});
-            if (hit != ShortcutHit::None) {
+            const POINT pt{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+            const ShortcutHit hit = HitTestShortcutHelp(state, pt);
+            const int hitTheme = hit == ShortcutHit::None ? HitTestThemePill(state, pt) : -1;
+            if (hit != ShortcutHit::None || hitTheme >= 0) {
                 state->pressed = hit;
+                state->pressedTheme = hitTheme;
                 SetCapture(hwnd);
                 InvalidateRect(hwnd, nullptr, FALSE);
             }
@@ -791,19 +965,32 @@ LRESULT CALLBACK ShortcutHelpProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM
         return 0;
     case WM_LBUTTONUP:
         if (state) {
+            const POINT pt{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
             const ShortcutHit wasPressed = state->pressed;
-            const ShortcutHit released = HitTestShortcutHelp(state, {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)});
+            const int wasPressedTheme = state->pressedTheme;
+            const ShortcutHit released = HitTestShortcutHelp(state, pt);
+            const int releasedTheme = released == ShortcutHit::None ? HitTestThemePill(state, pt) : -1;
             state->pressed = ShortcutHit::None;
+            state->pressedTheme = -1;
             if (GetCapture() == hwnd) ReleaseCapture();
-            InvalidateRect(hwnd, nullptr, FALSE);
             if (wasPressed != ShortcutHit::None && wasPressed == released) {
                 DestroyWindow(hwnd);
+                return 0;
             }
+            if (wasPressedTheme >= 0 && wasPressedTheme == releasedTheme &&
+                static_cast<std::size_t>(releasedTheme) < ui::kThemeCount) {
+                const auto nextTheme = static_cast<ui::ThemeId>(releasedTheme);
+                ui::SetTheme(nextTheme);
+                SaveUiTheme(nextTheme);
+                InvalidateCurrentThreadWindows();
+            }
+            InvalidateRect(hwnd, nullptr, FALSE);
         }
         return 0;
     case WM_CAPTURECHANGED:
-        if (state && state->pressed != ShortcutHit::None) {
+        if (state && (state->pressed != ShortcutHit::None || state->pressedTheme != -1)) {
             state->pressed = ShortcutHit::None;
+            state->pressedTheme = -1;
             InvalidateRect(hwnd, nullptr, FALSE);
         }
         return 0;
@@ -812,7 +999,8 @@ LRESULT CALLBACK ShortcutHelpProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM
             POINT cursor{};
             GetCursorPos(&cursor);
             ScreenToClient(hwnd, &cursor);
-            if (HitTestShortcutHelp(state, cursor) != ShortcutHit::None) {
+            if (HitTestShortcutHelp(state, cursor) != ShortcutHit::None ||
+                HitTestThemePill(state, cursor) >= 0) {
                 SetCursor(LoadCursorW(nullptr, IDC_HAND));
                 return TRUE;
             }

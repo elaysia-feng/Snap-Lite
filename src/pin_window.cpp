@@ -2,7 +2,6 @@
 
 #include "capture.h"
 #include "ui_theme.h"
-#include "ui_theme.h"
 
 #include <commdlg.h>
 #include <gdiplus.h>
@@ -16,6 +15,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <limits>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -33,6 +33,7 @@ constexpr UINT WM_PIN_MENU_CLOSED = WM_APP + 105;
 constexpr int kMenuWidth = 244;
 constexpr int kMenuHeight = 196;
 constexpr BYTE kMinOpacity = 26;
+constexpr UINT_PTR kPinHudTimerId = 1;
 constexpr SIZE_T kMaxClipboardPayloadBytes = 512ull * 1024ull * 1024ull;
 
 DWORD gPendingClipboardSequence = 0;
@@ -889,7 +890,14 @@ void PinWindow::ResizeForZoom() {
 void PinWindow::AdjustZoom(int wheelDelta) {
     zoom_ *= wheelDelta > 0 ? 1.1 : (1.0 / 1.1);
     zoom_ = std::clamp(zoom_, 0.1, 8.0);
+    wchar_t buf[32]{};
+    swprintf_s(buf, L"缩放 %d%%", static_cast<int>(zoom_ * 100.0 + 0.5));
+    hudText_ = buf;
+    hudExpireTick_ = GetTickCount64() + 900ull;
     ResizeForZoom();
+    if (hwnd_) {
+        SetTimer(hwnd_, kPinHudTimerId, 900, nullptr);
+    }
 }
 
 void PinWindow::SetOpacity(BYTE opacity) {
@@ -902,6 +910,15 @@ void PinWindow::SetOpacity(BYTE opacity) {
 void PinWindow::AdjustOpacity(int wheelDelta) {
     const int next = static_cast<int>(opacity_) + (wheelDelta > 0 ? 13 : -13);
     SetOpacity(static_cast<BYTE>(std::clamp(next, static_cast<int>(kMinOpacity), 255)));
+    const int percent = (static_cast<int>(opacity_) * 100 + 127) / 255;
+    wchar_t buf[32]{};
+    swprintf_s(buf, L"透明度 %d%%", percent);
+    hudText_ = buf;
+    hudExpireTick_ = GetTickCount64() + 900ull;
+    if (hwnd_) {
+        SetTimer(hwnd_, kPinHudTimerId, 900, nullptr);
+        InvalidateRect(hwnd_, nullptr, FALSE);
+    }
 }
 
 void PinWindow::ShowContextMenu() {
@@ -999,10 +1016,80 @@ LRESULT PinWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
                     DeleteObject(borderPen);
                 }
             }
+            if (!hudText_.empty() && GetTickCount64() < hudExpireTick_ && width >= 64 && height >= 38) {
+                const UINT dpi = hwnd_ ? GetDpiForWindow(hwnd_) : 96;
+                const UINT safeDpi = dpi ? dpi : 96;
+                HFONT hudFont = ui::MakeFont(safeDpi, 9, FW_SEMIBOLD);
+                if (hudFont) {
+                    const HGDIOBJ oldHudFont = SelectObject(dc, hudFont);
+                    SIZE sz{};
+                    GetTextExtentPoint32W(dc, hudText_.c_str(), static_cast<int>(hudText_.size()), &sz);
+                    const int margin = MulDiv(10, static_cast<int>(safeDpi), 96);
+                    const int padX = MulDiv(10, static_cast<int>(safeDpi), 96);
+                    const int pillH = std::min(height - margin * 2, MulDiv(24, static_cast<int>(safeDpi), 96));
+                    const int pillW = std::min(width - margin * 2, static_cast<int>(sz.cx) + padX * 2);
+                    if (pillW >= 36 && pillH >= 18) {
+                        const RECT hudRect{margin, margin, margin + pillW, margin + pillH};
+                        {
+                            Gdiplus::Graphics graphics(dc);
+                            graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+                            const float r = static_cast<float>(pillH) * 0.45f;
+                            const float d = r * 2.0f;
+                            const Gdiplus::RectF box(
+                                static_cast<float>(hudRect.left),
+                                static_cast<float>(hudRect.top),
+                                static_cast<float>(pillW),
+                                static_cast<float>(pillH));
+                            Gdiplus::GraphicsPath path;
+                            path.AddArc(box.X, box.Y, d, d, 180.0f, 90.0f);
+                            path.AddArc(box.GetRight() - d, box.Y, d, d, 270.0f, 90.0f);
+                            path.AddArc(box.GetRight() - d, box.GetBottom() - d, d, d, 0.0f, 90.0f);
+                            path.AddArc(box.X, box.GetBottom() - d, d, d, 90.0f, 90.0f);
+                            path.CloseFigure();
+                            Gdiplus::SolidBrush pillFill(Gdiplus::Color(214, 24, 28, 34));
+                            graphics.FillPath(&pillFill, &path);
+                            Gdiplus::Pen pillBorder(Gdiplus::Color(80, 255, 255, 255), 1.0f);
+                            graphics.DrawPath(&pillBorder, &path);
+                        }
+                        SelectObject(dc, hudFont);
+                        SetBkMode(dc, TRANSPARENT);
+                        SetTextColor(dc, RGB(246, 248, 252));
+                        DrawTextW(dc, hudText_.c_str(), -1, const_cast<RECT*>(&hudRect),
+                                  DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                    }
+                    SelectObject(dc, oldHudFont);
+                    DeleteObject(hudFont);
+                }
+            }
         }
         EndPaint(hwnd_, &ps);
         return 0;
     }
+
+    case WM_TIMER:
+        if (wParam == kPinHudTimerId) {
+            KillTimer(hwnd_, kPinHudTimerId);
+            hudExpireTick_ = 0;
+            hudText_.clear();
+            InvalidateRect(hwnd_, nullptr, FALSE);
+            return 0;
+        }
+        break;
+
+    case WM_KEYDOWN:
+        if (wParam == VK_ESCAPE) {
+            DestroyWindow(hwnd_);
+            return 0;
+        }
+        if ((GetKeyState(VK_CONTROL) & 0x8000) && wParam == 'C') {
+            CopyPin();
+            return 0;
+        }
+        if ((GetKeyState(VK_CONTROL) & 0x8000) && wParam == 'S') {
+            SavePinAs();
+            return 0;
+        }
+        break;
 
     case WM_MOUSEWHEEL:
         if (GetKeyState(VK_CONTROL) & 0x8000) {

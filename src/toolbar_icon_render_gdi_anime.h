@@ -441,14 +441,17 @@ inline void DrawCrispArrowHead(
     const float uy = dy / length;
     const float baseX = tip.X - ux * size;
     const float baseY = tip.Y - uy * size;
-    const float halfWidth = size * 0.52f;
-    const Gdiplus::PointF points[3] = {
+    const float notchX = tip.X - ux * (size * 0.72f);
+    const float notchY = tip.Y - uy * (size * 0.72f);
+    const float halfWidth = size * 0.48f;
+    const Gdiplus::PointF points[4] = {
         tip,
         {baseX - uy * halfWidth, baseY + ux * halfWidth},
+        {notchX, notchY},
         {baseX + uy * halfWidth, baseY - ux * halfWidth},
     };
     Gdiplus::SolidBrush brush(color);
-    graphics.FillPolygon(&brush, points, 3);
+    graphics.FillPolygon(&brush, points, 4);
 }
 
 inline void DrawCrispSecondaryArrow(HDC dc, const RECT& rect, int kind) {
@@ -463,10 +466,19 @@ inline void DrawCrispSecondaryArrow(HDC dc, const RECT& rect, int kind) {
     const Gdiplus::PointF to(right, centerY - 5.0f);
     const float lineWidth = kind == 1 ? 1.25f : kind == 2 ? 3.7f : 2.0f;
     const float headSize = kind == 1 ? 4.5f : kind == 2 ? 6.0f : 5.2f;
+    const float inset = headSize * 0.55f;
+    const auto insetTip = [inset](const Gdiplus::PointF& tip, const Gdiplus::PointF& tail) -> Gdiplus::PointF {
+        const float dx = tip.X - tail.X;
+        const float dy = tip.Y - tail.Y;
+        const float len = std::sqrt(dx * dx + dy * dy);
+        if (len < 0.5f) return tip;
+        const float d = (std::min)(len * 0.45f, inset);
+        return {tip.X - (dx / len) * d, tip.Y - (dy / len) * d};
+    };
 
     Gdiplus::Pen pen(color, lineWidth);
     pen.SetLineJoin(Gdiplus::LineJoinRound);
-    // 箭头头部会覆盖终点，平端帽可避免圆形端帽从尖端露出颗粒。
+    // 箭头头部向内缩进覆盖终点，平端帽可避免圆形端帽从尖端露出颗粒。
     pen.SetStartCap(kind == 3 ? Gdiplus::LineCapFlat : Gdiplus::LineCapRound);
     pen.SetEndCap(Gdiplus::LineCapFlat);
 
@@ -474,7 +486,7 @@ inline void DrawCrispSecondaryArrow(HDC dc, const RECT& rect, int kind) {
         const Gdiplus::PointF control1(left + 3.0f, static_cast<float>(rect.top + 5));
         const Gdiplus::PointF control2(right - 6.0f, static_cast<float>(rect.bottom - 4));
         Gdiplus::GraphicsPath path;
-        path.AddBezier(from, control1, control2, to);
+        path.AddBezier(from, control1, control2, insetTip(to, control2));
         graphics.DrawPath(&pen, &path);
         DrawCrispArrowHead(graphics, to, control2, headSize, color);
         return;
@@ -482,12 +494,16 @@ inline void DrawCrispSecondaryArrow(HDC dc, const RECT& rect, int kind) {
 
     if (kind == 5 || kind == 6) {
         Gdiplus::GraphicsPath path;
+        const Gdiplus::PointF tailEnd = kind == 5
+            ? Gdiplus::PointF(left + 7.0f, to.Y)
+            : Gdiplus::PointF(right - 7.0f, to.Y);
+        const Gdiplus::PointF drawnTo = insetTip(to, tailEnd);
         if (kind == 5) {
             const Gdiplus::PointF points[] = {
                 from,
                 {left + 7.0f, from.Y},
-                {left + 7.0f, to.Y},
-                to,
+                tailEnd,
+                drawnTo,
             };
             path.AddLine(points[0], points[1]);
             path.AddLine(points[1], points[2]);
@@ -498,22 +514,21 @@ inline void DrawCrispSecondaryArrow(HDC dc, const RECT& rect, int kind) {
                 {left + 7.0f, from.Y},
                 {left + 7.0f, centerY - 1.0f},
                 {right - 7.0f, centerY - 1.0f},
-                {right - 7.0f, to.Y},
-                to,
+                tailEnd,
+                drawnTo,
             };
             for (size_t i = 1; i < sizeof(points) / sizeof(points[0]); ++i) {
                 path.AddLine(points[i - 1], points[i]);
             }
         }
         graphics.DrawPath(&pen, &path);
-        DrawCrispArrowHead(graphics, to,
-                           kind == 5 ? Gdiplus::PointF(left + 7.0f, to.Y)
-                                     : Gdiplus::PointF(right - 7.0f, to.Y),
-                           headSize, color);
+        DrawCrispArrowHead(graphics, to, tailEnd, headSize, color);
         return;
     }
 
-    graphics.DrawLine(&pen, from, to);
+    const Gdiplus::PointF drawnFrom = kind == 3 ? insetTip(from, to) : from;
+    const Gdiplus::PointF drawnTo = insetTip(to, from);
+    graphics.DrawLine(&pen, drawnFrom, drawnTo);
     DrawCrispArrowHead(graphics, to, from, headSize, color);
     if (kind == 3) DrawCrispArrowHead(graphics, from, to, headSize, color);
 }

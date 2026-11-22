@@ -1,6 +1,9 @@
 #pragma once
 
 #include <windows.h>
+#include <dwmapi.h>
+#include <objidl.h>
+#include <gdiplus.h>
 
 #include <algorithm>
 #include <array>
@@ -46,93 +49,93 @@ struct ThemePalette {
 inline constexpr std::array<ThemePalette, 10> kThemePalettes{{
     {
         L"轻音少女",
-        RGB(255, 248, 250), RGB(255, 250, 248), RGB(255, 255, 255),
-        RGB(244, 216, 224), RGB(239, 139, 166), RGB(224, 119, 151),
-        RGB(194, 74, 115), RGB(174, 58, 96), RGB(57, 49, 55),
-        RGB(137, 119, 128), RGB(112, 94, 103), RGB(255, 239, 244),
-        RGB(250, 228, 235), RGB(237, 222, 227), RGB(201, 75, 83),
-        RGB(255, 237, 239),
+        RGB(255, 249, 251), RGB(255, 241, 245), RGB(255, 255, 255),
+        RGB(246, 218, 228), RGB(244, 114, 150), RGB(236, 72, 122),
+        RGB(220, 46, 98), RGB(190, 32, 80), RGB(36, 28, 34),
+        RGB(136, 116, 126), RGB(98, 80, 90), RGB(255, 236, 242),
+        RGB(252, 220, 231), RGB(242, 218, 226), RGB(220, 56, 72),
+        RGB(255, 235, 238),
     },
     {
         L"魔女之旅 · 伊蕾娜",
-        RGB(248, 246, 255), RGB(255, 251, 245), RGB(255, 255, 255),
-        RGB(220, 209, 238), RGB(169, 137, 207), RGB(139, 101, 183),
-        RGB(117, 77, 162), RGB(98, 62, 141), RGB(49, 42, 62),
-        RGB(135, 121, 154), RGB(104, 89, 126), RGB(243, 237, 252),
-        RGB(232, 222, 247), RGB(222, 209, 239), RGB(201, 75, 83),
-        RGB(255, 237, 239),
+        RGB(250, 248, 255), RGB(243, 238, 255), RGB(255, 255, 255),
+        RGB(224, 214, 246), RGB(155, 114, 235), RGB(132, 84, 222),
+        RGB(114, 64, 206), RGB(94, 48, 180), RGB(34, 28, 48),
+        RGB(128, 116, 152), RGB(92, 80, 118), RGB(241, 235, 255),
+        RGB(229, 218, 252), RGB(224, 214, 244), RGB(220, 56, 72),
+        RGB(255, 235, 238),
     },
     {
         L"绫波丽",
-        RGB(238, 246, 250), RGB(248, 252, 255), RGB(255, 255, 255),
-        RGB(188, 213, 226), RGB(115, 171, 203), RGB(79, 142, 180),
-        RGB(53, 112, 151), RGB(42, 91, 126), RGB(31, 47, 59),
-        RGB(105, 129, 144), RGB(76, 101, 117), RGB(225, 239, 247),
-        RGB(207, 228, 239), RGB(204, 222, 234), RGB(201, 75, 83),
-        RGB(255, 237, 239),
+        RGB(246, 251, 255), RGB(236, 246, 255), RGB(255, 255, 255),
+        RGB(206, 228, 246), RGB(56, 168, 235), RGB(24, 142, 218),
+        RGB(14, 122, 198), RGB(10, 98, 166), RGB(24, 38, 52),
+        RGB(108, 130, 148), RGB(72, 94, 114), RGB(228, 243, 254),
+        RGB(208, 232, 250), RGB(210, 228, 242), RGB(220, 56, 72),
+        RGB(255, 235, 238),
     },
     {
         L"明日香",
-        RGB(255, 246, 239), RGB(255, 251, 245), RGB(255, 255, 255),
-        RGB(246, 213, 190), RGB(239, 123, 72), RGB(220, 84, 54),
-        RGB(184, 52, 36), RGB(158, 37, 29), RGB(61, 42, 33),
-        RGB(150, 115, 95), RGB(117, 77, 58), RGB(255, 235, 220),
-        RGB(250, 218, 192), RGB(238, 210, 188), RGB(201, 75, 83),
-        RGB(255, 237, 239),
+        RGB(255, 249, 246), RGB(255, 240, 232), RGB(255, 255, 255),
+        RGB(248, 218, 202), RGB(246, 104, 62), RGB(232, 76, 36),
+        RGB(214, 56, 22), RGB(184, 42, 14), RGB(44, 28, 22),
+        RGB(146, 112, 98), RGB(110, 76, 62), RGB(255, 235, 224),
+        RGB(252, 218, 200), RGB(242, 214, 198), RGB(220, 56, 72),
+        RGB(255, 235, 238),
     },
     {
         L"原神",
-        RGB(246, 249, 253), RGB(255, 251, 245), RGB(255, 255, 255),
-        RGB(212, 220, 231), RGB(103, 157, 190), RGB(69, 124, 160),
-        RGB(54, 103, 136), RGB(38, 83, 116), RGB(45, 48, 56),
-        RGB(119, 124, 135), RGB(86, 91, 104), RGB(230, 239, 247),
-        RGB(212, 229, 240), RGB(207, 220, 230), RGB(201, 75, 83),
-        RGB(255, 237, 239),
+        RGB(247, 250, 255), RGB(238, 244, 255), RGB(255, 255, 255),
+        RGB(212, 225, 246), RGB(74, 144, 238), RGB(48, 118, 220),
+        RGB(37, 99, 205), RGB(29, 78, 176), RGB(28, 36, 52),
+        RGB(112, 124, 146), RGB(76, 88, 112), RGB(232, 241, 254),
+        RGB(214, 228, 250), RGB(214, 226, 244), RGB(220, 56, 72),
+        RGB(255, 235, 238),
     },
     {
         L"绝区零",
-        RGB(246, 247, 249), RGB(252, 251, 247), RGB(255, 255, 255),
-        RGB(202, 208, 215), RGB(49, 171, 203), RGB(27, 140, 175),
-        RGB(31, 107, 139), RGB(23, 87, 116), RGB(32, 38, 43),
-        RGB(116, 126, 133), RGB(83, 93, 101), RGB(227, 242, 247),
-        RGB(208, 233, 242), RGB(205, 222, 230), RGB(201, 75, 83),
-        RGB(255, 237, 239),
+        RGB(246, 251, 253), RGB(234, 247, 251), RGB(255, 255, 255),
+        RGB(204, 228, 236), RGB(22, 178, 212), RGB(12, 152, 188),
+        RGB(8, 132, 168), RGB(6, 108, 140), RGB(22, 34, 42),
+        RGB(106, 124, 134), RGB(70, 88, 98), RGB(226, 245, 250),
+        RGB(204, 235, 244), RGB(208, 228, 236), RGB(220, 56, 72),
+        RGB(255, 235, 238),
     },
     {
         L"崩坏3",
-        RGB(248, 246, 253), RGB(255, 250, 246), RGB(255, 255, 255),
-        RGB(225, 211, 236), RGB(174, 139, 203), RGB(145, 103, 180),
-        RGB(117, 76, 155), RGB(98, 61, 133), RGB(49, 43, 60),
-        RGB(135, 121, 151), RGB(103, 88, 122), RGB(243, 237, 250),
-        RGB(231, 221, 244), RGB(223, 211, 235), RGB(201, 75, 83),
-        RGB(255, 237, 239),
+        RGB(252, 248, 255), RGB(246, 237, 255), RGB(255, 255, 255),
+        RGB(230, 212, 246), RGB(178, 108, 232), RGB(156, 78, 216),
+        RGB(138, 58, 198), RGB(114, 44, 170), RGB(38, 28, 48),
+        RGB(134, 114, 152), RGB(98, 78, 118), RGB(244, 234, 254),
+        RGB(232, 216, 250), RGB(228, 214, 242), RGB(220, 56, 72),
+        RGB(255, 235, 238),
     },
     {
         L"鸣潮",
-        RGB(240, 247, 246), RGB(249, 251, 247), RGB(255, 255, 255),
-        RGB(206, 223, 221), RGB(81, 152, 157), RGB(53, 125, 133),
-        RGB(43, 100, 108), RGB(32, 83, 90), RGB(38, 52, 55),
-        RGB(111, 132, 135), RGB(78, 104, 108), RGB(225, 239, 238),
-        RGB(207, 229, 227), RGB(207, 223, 222), RGB(201, 75, 83),
-        RGB(255, 237, 239),
+        RGB(246, 252, 251), RGB(234, 248, 245), RGB(255, 255, 255),
+        RGB(202, 232, 226), RGB(32, 178, 166), RGB(18, 154, 142),
+        RGB(13, 134, 124), RGB(10, 110, 102), RGB(22, 38, 36),
+        RGB(104, 128, 124), RGB(68, 94, 90), RGB(224, 246, 242),
+        RGB(202, 236, 230), RGB(206, 230, 226), RGB(220, 56, 72),
+        RGB(255, 235, 238),
     },
     {
         L"崩坏：星穹铁道",
-        RGB(244, 246, 252), RGB(251, 250, 248), RGB(255, 255, 255),
-        RGB(211, 218, 235), RGB(123, 140, 195), RGB(91, 108, 166),
-        RGB(70, 85, 136), RGB(54, 67, 116), RGB(43, 47, 62),
-        RGB(124, 130, 149), RGB(91, 98, 119), RGB(231, 236, 248),
-        RGB(213, 221, 240), RGB(213, 220, 234), RGB(201, 75, 83),
-        RGB(255, 237, 239),
+        RGB(247, 248, 255), RGB(238, 240, 255), RGB(255, 255, 255),
+        RGB(214, 218, 246), RGB(99, 112, 238), RGB(79, 88, 220),
+        RGB(67, 72, 202), RGB(54, 58, 172), RGB(28, 32, 52),
+        RGB(114, 120, 148), RGB(78, 84, 114), RGB(233, 236, 254),
+        RGB(216, 221, 250), RGB(216, 220, 242), RGB(220, 56, 72),
+        RGB(255, 235, 238),
     },
     {
         L"摇曳露营",
-        RGB(245, 249, 242), RGB(255, 251, 244), RGB(255, 255, 255),
-        RGB(218, 228, 211), RGB(132, 166, 119), RGB(99, 137, 90),
-        RGB(77, 113, 70), RGB(61, 94, 55), RGB(49, 57, 47),
-        RGB(121, 133, 112), RGB(91, 103, 83), RGB(234, 243, 226),
-        RGB(220, 234, 211), RGB(217, 228, 210), RGB(201, 75, 83),
-        RGB(255, 237, 239),
+        RGB(246, 252, 248), RGB(235, 248, 240), RGB(255, 255, 255),
+        RGB(204, 232, 214), RGB(52, 178, 118), RGB(34, 154, 96),
+        RGB(22, 134, 80), RGB(16, 110, 64), RGB(24, 40, 30),
+        RGB(106, 128, 114), RGB(70, 94, 78), RGB(226, 246, 233),
+        RGB(206, 236, 218), RGB(208, 230, 216), RGB(220, 56, 72),
+        RGB(255, 235, 238),
     },
 }};
 
@@ -207,6 +210,41 @@ inline void FillRoundRect(
     int radius,
     COLORREF fill,
     COLORREF border = kBorder) {
+    if (rect.right <= rect.left || rect.bottom <= rect.top) return;
+
+    Gdiplus::Graphics graphics(dc);
+    if (graphics.GetLastStatus() == Gdiplus::Ok) {
+        const Gdiplus::RectF box(
+            static_cast<float>(rect.left) + 0.5f,
+            static_cast<float>(rect.top) + 0.5f,
+            static_cast<float>(rect.right - rect.left) - 1.0f,
+            static_cast<float>(rect.bottom - rect.top) - 1.0f);
+        const float minBoxSide = (std::min)(box.Width, box.Height);
+        if (minBoxSide >= 2.0f) {
+            graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+            graphics.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
+            const int minRectSide = (std::min)(
+                static_cast<int>(rect.right - rect.left),
+                static_cast<int>(rect.bottom - rect.top));
+            const float d = radius >= minRectSide
+                ? minBoxSide
+                : std::clamp(static_cast<float>(radius) * 1.25f, 2.0f, minBoxSide);
+            Gdiplus::GraphicsPath path;
+            path.AddArc(box.X, box.Y, d, d, 180.0f, 90.0f);
+            path.AddArc(box.GetRight() - d, box.Y, d, d, 270.0f, 90.0f);
+            path.AddArc(box.GetRight() - d, box.GetBottom() - d, d, d, 0.0f, 90.0f);
+            path.AddArc(box.X, box.GetBottom() - d, d, d, 90.0f, 90.0f);
+            path.CloseFigure();
+            const Gdiplus::Color fillColor(255, GetRValue(fill), GetGValue(fill), GetBValue(fill));
+            const Gdiplus::Color borderColor(255, GetRValue(border), GetGValue(border), GetBValue(border));
+            Gdiplus::SolidBrush brush(fillColor);
+            graphics.FillPath(&brush, &path);
+            Gdiplus::Pen pen(borderColor, 1.0f);
+            graphics.DrawPath(&pen, &path);
+            return;
+        }
+    }
+
     HBRUSH brush = CreateSolidBrush(fill);
     HPEN pen = CreatePen(PS_SOLID, 1, border);
     const HGDIOBJ oldBrush = SelectObject(dc, brush);
@@ -225,6 +263,14 @@ inline void FillSolid(HDC dc, const RECT& rect, COLORREF color) {
 }
 
 inline void SetRoundedWindowRegion(HWND hwnd, int radius) {
+    const BOOL disableTransitions = TRUE;
+    DwmSetWindowAttribute(hwnd, 3, &disableTransitions, sizeof(disableTransitions));
+    const DWORD cornerPreference = 2;  // DWMWCP_ROUND
+    if (SUCCEEDED(DwmSetWindowAttribute(hwnd, 33, &cornerPreference, sizeof(cornerPreference)))) {
+        SetWindowRgn(hwnd, nullptr, TRUE);
+        return;
+    }
+
     RECT rect{};
     GetClientRect(hwnd, &rect);
     if (rect.right <= rect.left || rect.bottom <= rect.top) return;
@@ -262,6 +308,39 @@ inline void DrawAccentBadge(HDC dc, const RECT& rect, int radius, COLORREF accen
     const COLORREF fill = BlendRatio(accentColor, kCard, 1, 5);
     const COLORREF border = BlendRatio(accentColor, kBorder, 3, 2);
     FillRoundRect(dc, rect, radius, fill, border);
+}
+
+inline void DrawElevatedCard(HDC dc, const RECT& rect, int radius) {
+    RECT s2 = rect;
+    s2.top += 2;
+    s2.bottom += 2;
+    const COLORREF shadow2 = BlendRatio(kBorder, kSurface, 1, 2);
+    FillRoundRect(dc, s2, radius, shadow2, shadow2);
+
+    RECT s1 = rect;
+    s1.top += 1;
+    s1.bottom += 1;
+    const COLORREF shadow1 = BlendRatio(kBorder, kSurface, 2, 3);
+    FillRoundRect(dc, s1, radius, shadow1, shadow1);
+
+    FillRoundRect(dc, rect, radius, kCard, BlendRatio(kBorder, kSurface, 4, 1));
+}
+
+inline void DrawKeycap(
+    HDC dc,
+    const RECT& rect,
+    int radius,
+    COLORREF fill,
+    COLORREF border,
+    COLORREF shadow) {
+    FillRoundRect(dc, rect, radius, shadow, border);
+    const RECT face{
+        rect.left,
+        rect.top,
+        rect.right,
+        (std::max)(static_cast<int>(rect.top + 2), static_cast<int>(rect.bottom - 2)),
+    };
+    FillRoundRect(dc, face, radius, fill, border);
 }
 
 }  // namespace snaplite::ui

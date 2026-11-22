@@ -168,7 +168,7 @@ RECT MenuRowRect(int row) {
               DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 
     RECT opacityCard{14, 58, kMenuWidth - 14, 119};
-    ui::FillRoundRect(dc, opacityCard, 12, ui::kCard, ui::kBorder);
+    ui::DrawElevatedCard(dc, opacityCard, 12);
 
     SelectObject(dc, bodyFont);
     SetTextColor(dc, ui::kText);
@@ -331,8 +331,11 @@ RECT MenuRowRect(int row) {
     # 4. 调整圆角和窗口阴影，再输出构建文件。
     text = replace_once(
         text,
-        'HRGN region = CreateRoundRectRgn(0, 0, kMenuWidth + 1, kMenuHeight + 1, 18, 18);',
-        'HRGN region = CreateRoundRectRgn(0, 0, kMenuWidth + 1, kMenuHeight + 1, 20, 20);',
+        '        HRGN region = CreateRoundRectRgn(0, 0, kMenuWidth + 1, kMenuHeight + 1, 18, 18);\n'
+        '        if (region && SetWindowRgn(hwnd, region, TRUE) == 0) {\n'
+        '            DeleteObject(region);\n'
+        '        }',
+        '        ui::SetRoundedWindowRegion(hwnd, 20);',
         "pin menu round region",
     )
     text = replace_once(

@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <commctrl.h>
+#include <dwmapi.h>
 #include <string>
 
 namespace snaplite {
@@ -123,6 +124,14 @@ std::wstring SelectedText(HWND edit) {
 }
 
 void SetRoundedWindowRegion(HWND hwnd) {
+    const BOOL disableTransitions = TRUE;
+    DwmSetWindowAttribute(hwnd, 3, &disableTransitions, sizeof(disableTransitions));
+    const DWORD cornerPreference = 2;  // DWMWCP_ROUND
+    if (SUCCEEDED(DwmSetWindowAttribute(hwnd, 33, &cornerPreference, sizeof(cornerPreference)))) {
+        SetWindowRgn(hwnd, nullptr, TRUE);
+        return;
+    }
+
     RECT rect{};
     GetClientRect(hwnd, &rect);
     if (rect.right <= rect.left || rect.bottom <= rect.top) return;
@@ -199,15 +208,7 @@ void LayoutPanel(HWND hwnd, PanelState* state) {
 }
 
 void DrawRoundRectFill(HDC dc, const RECT& rect, int radius, COLORREF fill, COLORREF border) {
-    HBRUSH brush = CreateSolidBrush(fill);
-    HPEN pen = CreatePen(PS_SOLID, 1, border);
-    const HGDIOBJ oldBrush = SelectObject(dc, brush);
-    const HGDIOBJ oldPen = SelectObject(dc, pen);
-    RoundRect(dc, rect.left, rect.top, rect.right, rect.bottom, radius, radius);
-    SelectObject(dc, oldPen);
-    SelectObject(dc, oldBrush);
-    DeleteObject(pen);
-    DeleteObject(brush);
+    ui::FillRoundRect(dc, rect, radius, fill, border);
 }
 
 void DrawOwnerButton(const DRAWITEMSTRUCT* draw, const PanelState* state) {

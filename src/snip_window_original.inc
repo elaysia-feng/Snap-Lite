@@ -44,6 +44,10 @@ Gdiplus::Color Danger() {
     return {255, GetRValue(color), GetGValue(color), GetBValue(color)};
 }
 
+ULONGLONG gLastColorCopyTick = 0;
+HWND gLastColorCopyHwnd = nullptr;
+constexpr UINT_PTR kColorCopyFeedbackTimerId = 2;
+
 constexpr int kHandleRadius = 4;
 constexpr int kToolbarButton = 36;
 constexpr int kToolbarHeight = 40;
@@ -469,10 +473,15 @@ void SnipWindow::PaintMagnifier(HDC dc, POINT clientPoint) {
     const int line2H = std::max(16, MulDiv(16, static_cast<int>(dpi), 96));
     const int readout = line1H + line2H + MulDiv(4, static_cast<int>(dpi), 96);
 
+    const bool recentlyCopied =
+        (gLastColorCopyHwnd == hwnd_ && gLastColorCopyTick != 0 &&
+         (GetTickCount64() - gLastColorCopyTick) < 1200ull);
+    const wchar_t* keyLabel = recentlyCopied ? L"\u2713 已复制" : L"C 复制";
+
     const HGDIOBJ oldMeasureFont = SelectObject(dc, monoFont_);
     const int hexWidth = MeasureText(dc, L"#FFFFFF");
     SelectObject(dc, uiFont_);
-    const int keyHintWidth = MeasureText(dc, L"C 复制");
+    const int keyHintWidth = MeasureText(dc, keyLabel);
     SelectObject(dc, oldMeasureFont);
 
     const int swatchSize = std::max(10, MulDiv(11, static_cast<int>(dpi), 96));
@@ -605,10 +614,16 @@ void SnipWindow::PaintMagnifier(HDC dc, POINT clientPoint) {
             static_cast<float>(keyCapRect.top),
             static_cast<float>(keyCapRect.right - keyCapRect.left),
             static_cast<float>(keyCapRect.bottom - keyCapRect.top));
-        FillRoundRect(graphics, Gdiplus::Color(220, 46, 50, 58), keyBox, 4.0f);
+        FillRoundRect(
+            graphics,
+            recentlyCopied ? Accent(230) : Gdiplus::Color(220, 46, 50, 58),
+            keyBox,
+            4.0f);
         Gdiplus::GraphicsPath keyPath;
         AddRoundRect(keyPath, keyBox, 4.0f);
-        Gdiplus::Pen keyBorder(Gdiplus::Color(85, 255, 255, 255), 1.0f);
+        Gdiplus::Pen keyBorder(
+            recentlyCopied ? Accent(255) : Gdiplus::Color(85, 255, 255, 255),
+            1.0f);
         graphics.DrawPath(&keyBorder, &keyPath);
     }
 
@@ -623,8 +638,8 @@ void SnipWindow::PaintMagnifier(HDC dc, POINT clientPoint) {
     DrawTextW(dc, text, -1, &row1, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
     SelectObject(dc, uiFont_);
-    SetTextColor(dc, RGB(205, 212, 224));
-    DrawTextW(dc, L"C 复制", -1, &keyCapRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    SetTextColor(dc, recentlyCopied ? RGB(255, 255, 255) : RGB(205, 212, 224));
+    DrawTextW(dc, keyLabel, -1, &keyCapRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
     wchar_t coordText[48]{};
     swprintf_s(coordText, L"X %ld   Y %ld", clientPoint.x + screen_.x, clientPoint.y + screen_.y);
@@ -957,12 +972,46 @@ void SnipWindow::PaintPreview(HDC dc) {
         const auto& arrow = arrows_[selectedArrow_];
         Gdiplus::Graphics g(dc);
         g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
-        Gdiplus::SolidBrush fill(Ink());
-        Gdiplus::Pen ring(Accent(), 2.0f);
+        if (arrow.tool == Tool::Rectangle) {
+            const float left = static_cast<float>((std::min)(arrow.from.x, arrow.to.x)) - 2.5f;
+            const float top = static_cast<float>((std::min)(arrow.from.y, arrow.to.y)) - 2.5f;
+            const float width = static_cast<float>(std::abs(arrow.to.x - arrow.from.x)) + 5.0f;
+            const float height = static_cast<float>(std::abs(arrow.to.y - arrow.from.y)) + 5.0f;
+            Gdiplus::Pen dashPen(Accent(155), 1.3f);
+            dashPen.SetDashStyle(Gdiplus::DashStyleDash);
+            g.DrawRectangle(&dashPen, left, top, width, height);
+        }
+        Gdiplus::SolidBrush outerShadow(Gdiplus::Color(160, 18, 22, 28));
+        Gdiplus::SolidBrush midAccent(Accent());
+        Gdiplus::SolidBrush innerCore(Gdiplus::Color(255, 255, 255, 255));
         for (POINT endpoint : {arrow.from, arrow.to}) {
-            Gdiplus::RectF box(static_cast<float>(endpoint.x - 4), static_cast<float>(endpoint.y - 4), 8.0f, 8.0f);
-            g.FillEllipse(&fill, box);
-            g.DrawEllipse(&ring, box);
+            const float x = static_cast<float>(endpoint.x);
+            const float y = static_cast<float>(endpoint.y);
+            g.FillEllipse(&outerShadow, x - 5.5f, y - 5.5f, 11.0f, 11.0f);
+            g.FillEllipse(&midAccent, x - 4.5f, y - 4.5f, 9.0f, 9.0f);
+            g.FillEllipse(&innerCore, x - 2.2f, y - 2.2f, 4.4f, 4.4f);
+        }
+    }
+    if (selected_ && !dragging_ && (tool_ == Tool::Pen || tool_ == Tool::Eraser)) {
+        POINT cursor{};
+        GetCursorPos(&cursor);
+        ScreenToClient(hwnd_, &cursor);
+        const RECT sel = NormalizedSelection();
+        if (PtInRect(&sel, cursor)) {
+            Gdiplus::Graphics g(dc);
+            g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+            const int diaInt = tool_ == Tool::Eraser
+                ? std::clamp(detail::gStrokeWidth * 4, 8, 48)
+                : (std::max)(4, detail::gStrokeWidth);
+            const float d = static_cast<float>(diaInt);
+            const float x = static_cast<float>(cursor.x) - d * 0.5f;
+            const float y = static_cast<float>(cursor.y) - d * 0.5f;
+            Gdiplus::Pen outer(Gdiplus::Color(165, 20, 24, 30), 2.2f);
+            Gdiplus::Pen inner(
+                tool_ == Tool::Eraser ? Gdiplus::Color(225, 255, 255, 255) : Accent(235),
+                1.2f);
+            g.DrawEllipse(&outer, x, y, d, d);
+            g.DrawEllipse(&inner, x, y, d, d);
         }
     }
     if (!drawing_ || (tool_ != Tool::Rectangle && tool_ != Tool::Arrow)) {
@@ -1489,6 +1538,12 @@ void SnipWindow::CopyCurrentColor() {
     wchar_t text[16]{};
     swprintf_s(text, L"#%02X%02X%02X", GetRValue(color), GetGValue(color), GetBValue(color));
     CopyTextToClipboard(owner_, text);
+    gLastColorCopyHwnd = hwnd_;
+    gLastColorCopyTick = GetTickCount64();
+    if (hwnd_) {
+        SetTimer(hwnd_, kColorCopyFeedbackTimerId, 1250, nullptr);
+        InvalidateRect(hwnd_, nullptr, FALSE);
+    }
 }
 
 LRESULT SnipWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
@@ -1535,6 +1590,9 @@ LRESULT SnipWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
         } else {
             hoverToolbar_ = -1;
             SetCursorForPoint(point);
+            if (tool_ == Tool::Pen || tool_ == Tool::Eraser) {
+                InvalidateRect(hwnd_, nullptr, FALSE);
+            }
         }
         return 0;
     }
@@ -1733,7 +1791,43 @@ LRESULT SnipWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
         }
         return 0;
 
+    case WM_TIMER:
+        if (wParam == kColorCopyFeedbackTimerId) {
+            KillTimer(hwnd_, kColorCopyFeedbackTimerId);
+            InvalidateRect(hwnd_, nullptr, FALSE);
+            return 0;
+        }
+        break;
+
+    case WM_MOUSEWHEEL: {
+        if (!selected_ || UiInteractionActive()) return 0;
+        const int delta = GET_WHEEL_DELTA_WPARAM(wParam);
+        if (delta == 0) return 0;
+        const int step = delta > 0 ? 1 : -1;
+        if (tool_ == Tool::Text) {
+            UiSetTextSize(std::clamp(textSizePt_ + step * 2, 12, 48));
+        } else {
+            UiSetStrokeWidth(std::clamp(detail::gStrokeWidth + step, 1, 12));
+        }
+        RedrawWindow(hwnd_, nullptr, nullptr, RDW_INVALIDATE | RDW_ALLCHILDREN);
+        EnumThreadWindows(
+            GetCurrentThreadId(),
+            [](HWND window, LPARAM ownerParam) -> BOOL {
+                const HWND owner = reinterpret_cast<HWND>(ownerParam);
+                if (GetWindow(window, GW_OWNER) == owner && IsWindowVisible(window)) {
+                    InvalidateRect(window, nullptr, FALSE);
+                }
+                return TRUE;
+            },
+            reinterpret_cast<LPARAM>(hwnd_));
+        return 0;
+    }
+
     case WM_NCDESTROY:
+        if (gLastColorCopyHwnd == hwnd_) {
+            gLastColorCopyHwnd = nullptr;
+            gLastColorCopyTick = 0;
+        }
         hwnd_ = nullptr;
         delete this;
         return 0;
