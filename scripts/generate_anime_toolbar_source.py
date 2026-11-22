@@ -122,9 +122,20 @@ def main() -> int:
     text = replace_once(
         text,
         "        SetWindowPos(toolbar_, HWND_TOP, x, y, kToolbarWidth, height,\n"
-        "                     SWP_NOACTIVATE | SWP_SHOWWINDOW);",
+        "                     SWP_NOACTIVATE | SWP_SHOWWINDOW);\n"
+        "        ApplyRoundedRegion();",
+        "        RECT currentScreenRect{};\n"
+        "        if (IsWindowVisible(toolbar_) && GetWindowRect(toolbar_, &currentScreenRect)) {\n"
+        "            MapWindowPoints(nullptr, parent_, reinterpret_cast<LPPOINT>(&currentScreenRect), 2);\n"
+        "            if (currentScreenRect.left == x && currentScreenRect.top == y &&\n"
+        "                (currentScreenRect.right - currentScreenRect.left) == width &&\n"
+        "                (currentScreenRect.bottom - currentScreenRect.top) == height) {\n"
+        "                return;\n"
+        "            }\n"
+        "        }\n"
         "        SetWindowPos(toolbar_, HWND_TOP, x, y, width, height,\n"
-        "                     SWP_NOACTIVATE | SWP_SHOWWINDOW);",
+        "                     SWP_NOACTIVATE | SWP_SHOWWINDOW);\n"
+        "        ApplyRoundedRegion();",
         "dynamic toolbar SetWindowPos",
     )
     text = replace_once(

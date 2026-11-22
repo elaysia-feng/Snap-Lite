@@ -120,14 +120,20 @@ RECT MenuRowRect(int row) {
 
     paint = r'''void PaintPinMenu(HWND hwnd, PinMenuState* state) {
     PAINTSTRUCT ps{};
-    HDC dc = BeginPaint(hwnd, &ps);
-    if (!state) {
+    HDC paintDc = BeginPaint(hwnd, &ps);
+    if (!paintDc || !state) {
         EndPaint(hwnd, &ps);
         return;
     }
 
     RECT client{};
     GetClientRect(hwnd, &client);
+    const int clientW = std::max<int>(1, client.right - client.left);
+    const int clientH = std::max<int>(1, client.bottom - client.top);
+    HDC memDc = CreateCompatibleDC(paintDc);
+    HBITMAP memBitmap = memDc ? CreateCompatibleBitmap(paintDc, clientW, clientH) : nullptr;
+    const HGDIOBJ oldMemBitmap = (memDc && memBitmap) ? SelectObject(memDc, memBitmap) : nullptr;
+    HDC dc = (memDc && memBitmap) ? memDc : paintDc;
     ui::FillSolid(dc, client, ui::kSurface);
 
     // Soft outer outline keeps the popup visually aligned with the OCR result
@@ -322,6 +328,12 @@ RECT MenuRowRect(int row) {
     DeleteObject(titleFont);
     DeleteObject(bodyFont);
     DeleteObject(smallFont);
+    if (dc == memDc) {
+        BitBlt(paintDc, 0, 0, clientW, clientH, memDc, 0, 0, SRCCOPY);
+    }
+    if (oldMemBitmap) SelectObject(memDc, oldMemBitmap);
+    if (memBitmap) DeleteObject(memBitmap);
+    if (memDc) DeleteDC(memDc);
     EndPaint(hwnd, &ps);
 }
 

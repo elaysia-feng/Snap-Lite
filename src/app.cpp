@@ -737,14 +737,20 @@ void DrawShortcutSectionCard(
 
 void PaintShortcutHelp(HWND hwnd, ShortcutHelpState* state) {
     PAINTSTRUCT ps{};
-    HDC dc = BeginPaint(hwnd, &ps);
-    if (!dc || !state) {
+    HDC paintDc = BeginPaint(hwnd, &ps);
+    if (!paintDc || !state) {
         EndPaint(hwnd, &ps);
         return;
     }
 
     RECT client{};
     GetClientRect(hwnd, &client);
+    const int clientW = std::max<int>(1, client.right - client.left);
+    const int clientH = std::max<int>(1, client.bottom - client.top);
+    HDC memDc = CreateCompatibleDC(paintDc);
+    HBITMAP memBitmap = memDc ? CreateCompatibleBitmap(paintDc, clientW, clientH) : nullptr;
+    const HGDIOBJ oldMemBitmap = (memDc && memBitmap) ? SelectObject(memDc, memBitmap) : nullptr;
+    HDC dc = (memDc && memBitmap) ? memDc : paintDc;
     ui::FillSolid(dc, client, ui::kSurface);
 
     SetBkMode(dc, TRANSPARENT);
@@ -868,6 +874,12 @@ void PaintShortcutHelp(HWND hwnd, ShortcutHelpState* state) {
     DrawTextW(dc, L"知道了", -1, &state->okRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
     if (oldFont) SelectObject(dc, oldFont);
+    if (dc == memDc) {
+        BitBlt(paintDc, 0, 0, clientW, clientH, memDc, 0, 0, SRCCOPY);
+    }
+    if (oldMemBitmap) SelectObject(memDc, oldMemBitmap);
+    if (memBitmap) DeleteObject(memBitmap);
+    if (memDc) DeleteDC(memDc);
     EndPaint(hwnd, &ps);
 }
 
