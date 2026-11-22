@@ -17,7 +17,9 @@
 #include <shlobj.h>
 #include <shobjidl.h>
 #include <tlhelp32.h>
+#include <windowsx.h>
 
+#include <algorithm>
 #include <cwchar>
 #include <filesystem>
 #include <mutex>
@@ -439,6 +441,434 @@ void TrimWorkingSet() {
         static_cast<SIZE_T>(-1),
         static_cast<SIZE_T>(-1));
 }
+
+constexpr wchar_t kShortcutHelpClass[] = L"SnapLiteShortcutHelpDialog";
+constexpr int kShortcutHelpWidth = 760;
+constexpr int kShortcutHelpHeight = 468;
+
+struct ShortcutRow {
+    std::wstring keys;
+    std::wstring desc;
+    bool warning{false};
+};
+
+struct ShortcutSection {
+    std::wstring title;
+    std::vector<ShortcutRow> rows;
+};
+
+enum class ShortcutHit { None, Close, Ok };
+
+struct ShortcutHelpState {
+    std::vector<ShortcutSection> sections;
+    UINT dpi{96};
+    HFONT titleFont{};
+    HFONT sectionFont{};
+    HFONT bodyFont{};
+    HFONT smallFont{};
+    HFONT keyFont{};
+    RECT closeRect{};
+    RECT okRect{};
+    ShortcutHit hovered{ShortcutHit::None};
+    ShortcutHit pressed{ShortcutHit::None};
+    bool trackingMouse{false};
+};
+
+HWND g_shortcutHelpWindow = nullptr;
+
+int ScaleHelp(const ShortcutHelpState* state, int value) {
+    const UINT dpi = state && state->dpi ? state->dpi : 96;
+    return MulDiv(value, static_cast<int>(dpi), 96);
+}
+
+void RecreateShortcutFonts(ShortcutHelpState* state) {
+    if (!state) return;
+    const HFONT oldTitle = state->titleFont;
+    const HFONT oldSection = state->sectionFont;
+    const HFONT oldBody = state->bodyFont;
+    const HFONT oldSmall = state->smallFont;
+    const HFONT oldKey = state->keyFont;
+    state->titleFont = ui::MakeFont(state->dpi, 14, FW_SEMIBOLD);
+    state->sectionFont = ui::MakeFont(state->dpi, 10, FW_SEMIBOLD);
+    state->bodyFont = ui::MakeFont(state->dpi, 9, FW_NORMAL);
+    state->smallFont = ui::MakeFont(state->dpi, 8, FW_NORMAL);
+    state->keyFont = ui::MakeFont(state->dpi, 8, FW_SEMIBOLD);
+    if (oldTitle) DeleteObject(oldTitle);
+    if (oldSection) DeleteObject(oldSection);
+    if (oldBody) DeleteObject(oldBody);
+    if (oldSmall) DeleteObject(oldSmall);
+    if (oldKey) DeleteObject(oldKey);
+}
+
+void LayoutShortcutHelp(HWND hwnd, ShortcutHelpState* state) {
+    if (!state) return;
+    RECT client{};
+    GetClientRect(hwnd, &client);
+    const int width = static_cast<int>(client.right - client.left);
+    const int height = static_cast<int>(client.bottom - client.top);
+    const int margin = ScaleHelp(state, 22);
+    const int closeSize = ScaleHelp(state, 32);
+    state->closeRect = {
+        width - margin - closeSize,
+        ScaleHelp(state, 16),
+        width - margin,
+        ScaleHelp(state, 16) + closeSize};
+    const int okW = ScaleHelp(state, 108);
+    const int okH = ScaleHelp(state, 34);
+    state->okRect = {
+        width - margin - okW,
+        height - ScaleHelp(state, 18) - okH,
+        width - margin,
+        height - ScaleHelp(state, 18)};
+    ui::SetRoundedWindowRegion(hwnd, ScaleHelp(state, 18));
+}
+
+ShortcutHit HitTestShortcutHelp(const ShortcutHelpState* state, POINT pt) {
+    if (!state) return ShortcutHit::None;
+    if (PtInRect(&state->closeRect, pt)) return ShortcutHit::Close;
+    if (PtInRect(&state->okRect, pt)) return ShortcutHit::Ok;
+    return ShortcutHit::None;
+}
+
+void DrawShortcutSectionCard(
+    HDC dc,
+    const ShortcutHelpState* state,
+    const RECT& cardRect,
+    const ShortcutSection& section,
+    int rowHeight) {
+    ui::FillRoundRect(dc, cardRect, ScaleHelp(state, 12), ui::kCard, ui::kBorder);
+
+    const int padX = ScaleHelp(state, 14);
+    const int titleTop = cardRect.top + ScaleHelp(state, 10);
+    const int titleBottom = titleTop + ScaleHelp(state, 22);
+    RECT bar{
+        cardRect.left + padX,
+        titleTop + ScaleHelp(state, 4),
+        cardRect.left + padX + ScaleHelp(state, 4),
+        titleBottom - ScaleHelp(state, 4)};
+    ui::FillRoundRect(dc, bar, ScaleHelp(state, 2), ui::kAccentStrong, ui::kAccentStrong);
+
+    const HGDIOBJ oldFont = state->sectionFont ? SelectObject(dc, state->sectionFont) : nullptr;
+    SetTextColor(dc, ui::kText);
+    RECT titleRect{bar.right + ScaleHelp(state, 8), titleTop, cardRect.right - padX, titleBottom};
+    DrawTextW(dc, section.title.c_str(), -1, &titleRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
+    int rowTop = titleBottom + ScaleHelp(state, 6);
+    const int maxKeyWidth = ScaleHelp(state, 126);
+    for (const ShortcutRow& row : section.rows) {
+        if (state->keyFont) SelectObject(dc, state->keyFont);
+        SIZE keySize{};
+        GetTextExtentPoint32W(dc, row.keys.c_str(), static_cast<int>(row.keys.size()), &keySize);
+        const int capWidth = std::clamp(
+            static_cast<int>(keySize.cx) + ScaleHelp(state, 16),
+            ScaleHelp(state, 44),
+            maxKeyWidth);
+        const int capHeight = ScaleHelp(state, 22);
+        const int capTop = rowTop + (rowHeight - capHeight) / 2;
+        RECT keyRect{
+            cardRect.left + padX,
+            capTop,
+            cardRect.left + padX + capWidth,
+            capTop + capHeight};
+        const COLORREF capFill = row.warning ? ui::kDangerHover : ui::kCream;
+        const COLORREF capBorder = row.warning ? ui::kDanger : ui::kBorder;
+        ui::FillRoundRect(dc, keyRect, ScaleHelp(state, 6), capFill, capBorder);
+        SetTextColor(dc, row.warning ? ui::kDanger : ui::kAccentAction);
+        DrawTextW(dc, row.keys.c_str(), -1, &keyRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+
+        if (state->bodyFont) SelectObject(dc, state->bodyFont);
+        SetTextColor(dc, row.warning ? ui::kDanger : ui::kText);
+        RECT descRect{
+            keyRect.right + ScaleHelp(state, 10),
+            rowTop,
+            cardRect.right - padX,
+            rowTop + rowHeight};
+        DrawTextW(dc, row.desc.c_str(), -1, &descRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        rowTop += rowHeight;
+    }
+
+    if (oldFont) SelectObject(dc, oldFont);
+}
+
+void PaintShortcutHelp(HWND hwnd, ShortcutHelpState* state) {
+    PAINTSTRUCT ps{};
+    HDC dc = BeginPaint(hwnd, &ps);
+    if (!dc || !state) {
+        EndPaint(hwnd, &ps);
+        return;
+    }
+
+    RECT client{};
+    GetClientRect(hwnd, &client);
+    ui::FillSolid(dc, client, ui::kSurface);
+
+    HPEN outline = CreatePen(PS_SOLID, 1, ui::kBorder);
+    if (outline) {
+        const HGDIOBJ oldPen = SelectObject(dc, outline);
+        const HGDIOBJ oldBrush = SelectObject(dc, GetStockObject(HOLLOW_BRUSH));
+        const int radius = ScaleHelp(state, 18);
+        RoundRect(dc, 0, 0, client.right, client.bottom, radius, radius);
+        SelectObject(dc, oldBrush);
+        SelectObject(dc, oldPen);
+        DeleteObject(outline);
+    }
+
+    SetBkMode(dc, TRANSPARENT);
+    const int margin = ScaleHelp(state, 22);
+    const int dotSize = ScaleHelp(state, 12);
+    RECT brandDot{margin, ScaleHelp(state, 26), margin + dotSize, ScaleHelp(state, 26) + dotSize};
+    ui::FillRoundRect(dc, brandDot, ScaleHelp(state, 4), ui::kAccent, ui::kAccent);
+
+    const HGDIOBJ oldFont = state->titleFont ? SelectObject(dc, state->titleFont) : nullptr;
+    SetTextColor(dc, ui::kText);
+    constexpr wchar_t kHeading[] = L"Snap-Lite 快捷键指南";
+    SIZE headingSize{};
+    GetTextExtentPoint32W(dc, kHeading, static_cast<int>(wcslen(kHeading)), &headingSize);
+    const int titleLeft = brandDot.right + ScaleHelp(state, 10);
+    RECT titleRect{titleLeft, ScaleHelp(state, 16), state->closeRect.left - ScaleHelp(state, 12), ScaleHelp(state, 48)};
+    DrawTextW(dc, kHeading, -1, &titleRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
+    if (state->smallFont) SelectObject(dc, state->smallFont);
+    const std::wstring themeTag = std::wstring(L"当前主题：") + ui::ThemeName(ui::CurrentThemeId());
+    SIZE themeSize{};
+    GetTextExtentPoint32W(dc, themeTag.c_str(), static_cast<int>(themeTag.size()), &themeSize);
+    const int badgeLeft = titleLeft + static_cast<int>(headingSize.cx) + ScaleHelp(state, 12);
+    const int badgeWidth = static_cast<int>(themeSize.cx) + ScaleHelp(state, 18);
+    if (badgeLeft + badgeWidth <= state->closeRect.left - ScaleHelp(state, 10)) {
+        const int badgeHeight = ScaleHelp(state, 24);
+        const int badgeTop = ScaleHelp(state, 20);
+        RECT badge{badgeLeft, badgeTop, badgeLeft + badgeWidth, badgeTop + badgeHeight};
+        ui::DrawAccentBadge(dc, badge, ScaleHelp(state, 11), ui::kAccentStrong);
+        SetTextColor(dc, ui::kAccentAction);
+        DrawTextW(dc, themeTag.c_str(), -1, &badge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
+
+    if (state->hovered == ShortcutHit::Close || state->pressed == ShortcutHit::Close) {
+        const COLORREF fill = state->pressed == ShortcutHit::Close ? ui::kPressed : ui::kHover;
+        ui::FillRoundRect(dc, state->closeRect, ScaleHelp(state, 9), fill, ui::kBorder);
+    }
+    HPEN closePen = CreatePen(PS_SOLID, std::max(1, ScaleHelp(state, 1)), ui::kTextSecondary);
+    if (closePen) {
+        const HGDIOBJ oldPen = SelectObject(dc, closePen);
+        const int inset = ScaleHelp(state, 10);
+        MoveToEx(dc, state->closeRect.left + inset, state->closeRect.top + inset, nullptr);
+        LineTo(dc, state->closeRect.right - inset, state->closeRect.bottom - inset);
+        MoveToEx(dc, state->closeRect.right - inset, state->closeRect.top + inset, nullptr);
+        LineTo(dc, state->closeRect.left + inset, state->closeRect.bottom - inset);
+        SelectObject(dc, oldPen);
+        DeleteObject(closePen);
+    }
+
+    HPEN divider = CreatePen(PS_SOLID, 1, ui::kBorder);
+    if (divider) {
+        const HGDIOBJ oldPen = SelectObject(dc, divider);
+        MoveToEx(dc, margin, ScaleHelp(state, 62), nullptr);
+        LineTo(dc, client.right - margin, ScaleHelp(state, 62));
+        SelectObject(dc, oldPen);
+        DeleteObject(divider);
+    }
+
+    const int cardsTop = ScaleHelp(state, 74);
+    const int cardsBottom = state->okRect.top - ScaleHelp(state, 14);
+    const int colGap = ScaleHelp(state, 16);
+    const int rowGap = ScaleHelp(state, 12);
+    const int colWidth = (client.right - margin * 2 - colGap) / 2;
+    const int leftHeight = (cardsBottom - cardsTop - rowGap) / 2;
+
+    if (state->sections.size() >= 3) {
+        RECT card0{margin, cardsTop, margin + colWidth, cardsTop + leftHeight};
+        RECT card1{margin, card0.bottom + rowGap, margin + colWidth, cardsBottom};
+        RECT card2{margin + colWidth + colGap, cardsTop, client.right - margin, cardsBottom};
+        DrawShortcutSectionCard(dc, state, card0, state->sections[0], ScaleHelp(state, 28));
+        DrawShortcutSectionCard(dc, state, card1, state->sections[1], ScaleHelp(state, 28));
+        DrawShortcutSectionCard(dc, state, card2, state->sections[2], ScaleHelp(state, 34));
+    }
+
+    if (state->smallFont) SelectObject(dc, state->smallFont);
+    SetTextColor(dc, ui::kMutedText);
+    RECT footerHint{margin, state->okRect.top, state->okRect.left - ScaleHelp(state, 12), state->okRect.bottom};
+    DrawTextW(dc, L"可在托盘右键菜单「UI 主题」中随时切换外观配色", -1, &footerHint,
+              DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+
+    const bool okPressed = state->pressed == ShortcutHit::Ok;
+    const bool okHovered = state->hovered == ShortcutHit::Ok;
+    const COLORREF okFill = okPressed
+        ? ui::kAccentActionPressed
+        : (okHovered ? ui::kAccentStrong : ui::kAccentAction);
+    ui::FillRoundRect(dc, state->okRect, ScaleHelp(state, 10), okFill, okFill);
+    if (state->sectionFont) SelectObject(dc, state->sectionFont);
+    SetTextColor(dc, RGB(255, 255, 255));
+    DrawTextW(dc, L"知道了", -1, &state->okRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+    if (oldFont) SelectObject(dc, oldFont);
+    EndPaint(hwnd, &ps);
+}
+
+LRESULT CALLBACK ShortcutHelpProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
+    auto* state = reinterpret_cast<ShortcutHelpState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+    if (message == WM_NCCREATE) {
+        auto* create = reinterpret_cast<CREATESTRUCTW*>(lParam);
+        state = static_cast<ShortcutHelpState*>(create->lpCreateParams);
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(state));
+        return TRUE;
+    }
+
+    switch (message) {
+    case WM_CREATE:
+        if (!state) return -1;
+        state->dpi = GetDpiForWindow(hwnd);
+        if (state->dpi == 0) state->dpi = 96;
+        RecreateShortcutFonts(state);
+        LayoutShortcutHelp(hwnd, state);
+        return 0;
+    case WM_ERASEBKGND:
+        return 1;
+    case WM_PAINT:
+        PaintShortcutHelp(hwnd, state);
+        return 0;
+    case WM_SIZE:
+        LayoutShortcutHelp(hwnd, state);
+        return 0;
+    case WM_DPICHANGED: {
+        if (!state) return 0;
+        state->dpi = HIWORD(wParam);
+        if (state->dpi == 0) state->dpi = 96;
+        RecreateShortcutFonts(state);
+        const auto* suggested = reinterpret_cast<const RECT*>(lParam);
+        SetWindowPos(
+            hwnd,
+            HWND_TOPMOST,
+            suggested->left,
+            suggested->top,
+            suggested->right - suggested->left,
+            suggested->bottom - suggested->top,
+            SWP_NOACTIVATE);
+        LayoutShortcutHelp(hwnd, state);
+        InvalidateRect(hwnd, nullptr, FALSE);
+        return 0;
+    }
+    case WM_NCHITTEST: {
+        const LRESULT hit = DefWindowProcW(hwnd, message, wParam, lParam);
+        if (hit != HTCLIENT) return hit;
+        POINT pt{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+        ScreenToClient(hwnd, &pt);
+        if (pt.y < ScaleHelp(state, 62) && HitTestShortcutHelp(state, pt) == ShortcutHit::None) {
+            return HTCAPTION;
+        }
+        return HTCLIENT;
+    }
+    case WM_MOUSEMOVE: {
+        if (!state) break;
+        if (!state->trackingMouse) {
+            TRACKMOUSEEVENT tme{sizeof(tme), TME_LEAVE, hwnd, 0};
+            state->trackingMouse = TrackMouseEvent(&tme) != FALSE;
+        }
+        const ShortcutHit hit = HitTestShortcutHelp(state, {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)});
+        if (state->hovered != hit) {
+            state->hovered = hit;
+            InvalidateRect(hwnd, nullptr, FALSE);
+        }
+        return 0;
+    }
+    case WM_MOUSELEAVE:
+        if (state) {
+            state->trackingMouse = false;
+            if (state->hovered != ShortcutHit::None) {
+                state->hovered = ShortcutHit::None;
+                InvalidateRect(hwnd, nullptr, FALSE);
+            }
+        }
+        return 0;
+    case WM_LBUTTONDOWN:
+        if (state) {
+            const ShortcutHit hit = HitTestShortcutHelp(state, {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)});
+            if (hit != ShortcutHit::None) {
+                state->pressed = hit;
+                SetCapture(hwnd);
+                InvalidateRect(hwnd, nullptr, FALSE);
+            }
+        }
+        return 0;
+    case WM_LBUTTONUP:
+        if (state) {
+            const ShortcutHit wasPressed = state->pressed;
+            const ShortcutHit released = HitTestShortcutHelp(state, {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)});
+            state->pressed = ShortcutHit::None;
+            if (GetCapture() == hwnd) ReleaseCapture();
+            InvalidateRect(hwnd, nullptr, FALSE);
+            if (wasPressed != ShortcutHit::None && wasPressed == released) {
+                DestroyWindow(hwnd);
+            }
+        }
+        return 0;
+    case WM_CAPTURECHANGED:
+        if (state && state->pressed != ShortcutHit::None) {
+            state->pressed = ShortcutHit::None;
+            InvalidateRect(hwnd, nullptr, FALSE);
+        }
+        return 0;
+    case WM_SETCURSOR:
+        if (state) {
+            POINT cursor{};
+            GetCursorPos(&cursor);
+            ScreenToClient(hwnd, &cursor);
+            if (HitTestShortcutHelp(state, cursor) != ShortcutHit::None) {
+                SetCursor(LoadCursorW(nullptr, IDC_HAND));
+                return TRUE;
+            }
+        }
+        break;
+    case WM_KEYDOWN:
+        if (wParam == VK_ESCAPE || wParam == VK_RETURN || wParam == VK_SPACE) {
+            DestroyWindow(hwnd);
+            return 0;
+        }
+        break;
+    case WM_CLOSE:
+        DestroyWindow(hwnd);
+        return 0;
+    case WM_NCDESTROY:
+        if (g_shortcutHelpWindow == hwnd) g_shortcutHelpWindow = nullptr;
+        if (state) {
+            if (state->titleFont) DeleteObject(state->titleFont);
+            if (state->sectionFont) DeleteObject(state->sectionFont);
+            if (state->bodyFont) DeleteObject(state->bodyFont);
+            if (state->smallFont) DeleteObject(state->smallFont);
+            if (state->keyFont) DeleteObject(state->keyFont);
+            delete state;
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+        }
+        return 0;
+    default:
+        break;
+    }
+    return DefWindowProcW(hwnd, message, wParam, lParam);
+}
+
+bool EnsureShortcutHelpClass(HINSTANCE instance) {
+    static bool attempted = false;
+    static bool registered = false;
+    if (attempted) return registered;
+    attempted = true;
+
+    WNDCLASSEXW wc{};
+    wc.cbSize = sizeof(wc);
+    wc.style = CS_HREDRAW | CS_VREDRAW | CS_DROPSHADOW;
+    wc.lpfnWndProc = ShortcutHelpProc;
+    wc.hInstance = instance;
+    wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+    wc.hbrBackground = nullptr;
+    wc.lpszClassName = kShortcutHelpClass;
+    registered = RegisterClassExW(&wc) != 0 || GetLastError() == ERROR_CLASS_ALREADY_EXISTS;
+    return registered;
+}
+
+void CloseShortcutHelpWindow() {
+    if (g_shortcutHelpWindow && IsWindow(g_shortcutHelpWindow)) {
+        DestroyWindow(g_shortcutHelpWindow);
+        g_shortcutHelpWindow = nullptr;
+    }
+}
 }
 
 App::App(HINSTANCE instance) : instance_(instance) {}
@@ -561,6 +991,7 @@ void App::Shutdown() {
         updateWorker_.join();
     }
     CloseUpdateStatusToast(hwnd_);
+    CloseShortcutHelpWindow();
 
     // 退出时先把倒计时覆盖层收掉：它是顶层窗口，不销毁的话会在进程真正
     // 结束前留在屏幕上闪一下。
@@ -653,44 +1084,141 @@ void App::ShowNotice(const wchar_t* message) {
 }
 
 void App::ShowShortcutHelp() {
+    if (g_shortcutHelpWindow && IsWindow(g_shortcutHelpWindow)) {
+        ShowWindow(g_shortcutHelpWindow, SW_SHOWNORMAL);
+        SetForegroundWindow(g_shortcutHelpWindow);
+        return;
+    }
+
+    std::vector<ShortcutSection> sections;
+    {
+        ShortcutSection global;
+        global.title = L"全局快捷键";
+        global.rows.push_back({
+            L"F1",
+            snipHotkeyRegistered_ ? L"选区截图" : L"选区截图（注册失败，可能被占用）",
+            !snipHotkeyRegistered_,
+        });
+        global.rows.push_back({
+            L"Ctrl+Shift+S",
+            snipFallbackHotkeyRegistered_ ? L"选区截图备用键" : L"选区截图备用键（注册失败）",
+            !snipFallbackHotkeyRegistered_,
+        });
+        global.rows.push_back({
+            L"Ctrl+Shift+F",
+            fullscreenHotkeyRegistered_ ? L"全屏截图" : L"全屏截图（注册失败）",
+            !fullscreenHotkeyRegistered_,
+        });
+        if (pinFallbackHotkeyRegistered_) {
+            global.rows.push_back({L"Ctrl+Alt+P", L"贴图（F3 被占用，已切换）", false});
+        } else if (pinHotkeyRegistered_) {
+            global.rows.push_back({L"F3", L"贴图到桌面", false});
+        } else {
+            global.rows.push_back({L"F3", L"贴图（注册失败，请用托盘菜单）", true});
+        }
+        sections.push_back(std::move(global));
+    }
+    {
+        ShortcutSection selection;
+        selection.title = L"选区阶段";
+        selection.rows.push_back({L"单击 / 拖动", L"选择窗口控件或自由框选", false});
+        selection.rows.push_back({L"C", L"取色（复制 HEX 色值）", false});
+        selection.rows.push_back({L"Enter", L"完成截图并复制", false});
+        selection.rows.push_back({L"Esc", L"取消截图", false});
+        sections.push_back(std::move(selection));
+    }
+    {
+        ShortcutSection annotation;
+        annotation.title = L"标注阶段";
+        annotation.rows.push_back({L"R A P E M T", L"形状 / 箭头 / 画笔 / 橡皮 / 马赛克 / 文字", false});
+        annotation.rows.push_back({L"Ctrl+Z / Y", L"撤销 / 重做上一步编辑", false});
+        annotation.rows.push_back({L"Ctrl+D", L"复制选中的标注", false});
+        annotation.rows.push_back({L"Tab / Shift+Tab", L"切换选中的标注（反向）", false});
+        annotation.rows.push_back({L"Ctrl+Home/End", L"置于最上层 / 最下层", false});
+        annotation.rows.push_back({L"Ctrl+PgUp/PgDn", L"上移一层 / 下移一层", false});
+        annotation.rows.push_back({L"方向键", L"微调 1 像素（Shift 为 10 像素）", false});
+        annotation.rows.push_back({L"Delete", L"删除选中的标注", false});
+        sections.push_back(std::move(annotation));
+    }
+
+    if (EnsureShortcutHelpClass(instance_)) {
+        auto* state = new ShortcutHelpState();
+        state->sections = sections;
+
+        POINT cursor{};
+        GetCursorPos(&cursor);
+        HMONITOR monitor = MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST);
+        MONITORINFO info{};
+        info.cbSize = sizeof(info);
+        RECT work{};
+        if (GetMonitorInfoW(monitor, &info)) {
+            work = info.rcWork;
+        } else {
+            SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0);
+        }
+
+        using GetDpiForMonitorFn = HRESULT(WINAPI*)(HMONITOR, int, UINT*, UINT*);
+        static GetDpiForMonitorFn getDpiForMonitor = []() -> GetDpiForMonitorFn {
+            HMODULE shcore = LoadLibraryW(L"shcore.dll");
+            if (!shcore) return nullptr;
+            return reinterpret_cast<GetDpiForMonitorFn>(
+                reinterpret_cast<void*>(GetProcAddress(shcore, "GetDpiForMonitor")));
+        }();
+        UINT dpi = 0;
+        if (monitor && getDpiForMonitor) {
+            UINT dpiX = 0;
+            UINT dpiY = 0;
+            if (SUCCEEDED(getDpiForMonitor(monitor, 0, &dpiX, &dpiY))) {
+                dpi = dpiX;
+            }
+        }
+        if (dpi == 0) dpi = GetDpiForSystem();
+        if (dpi == 0) dpi = 96;
+
+        const int availableW = std::max(1, static_cast<int>(work.right - work.left) - 32);
+        const int availableH = std::max(1, static_cast<int>(work.bottom - work.top) - 32);
+        const int maxDpiW = MulDiv(availableW, 96, kShortcutHelpWidth);
+        const int maxDpiH = MulDiv(availableH, 96, kShortcutHelpHeight);
+        state->dpi = static_cast<UINT>(std::max(72, std::min({static_cast<int>(dpi), maxDpiW, maxDpiH})));
+
+        const int width = ScaleHelp(state, kShortcutHelpWidth);
+        const int height = ScaleHelp(state, kShortcutHelpHeight);
+        const int x = work.left + std::max<LONG>(0, (work.right - work.left - width) / 2);
+        const int y = work.top + std::max<LONG>(0, (work.bottom - work.top - height) / 2);
+
+        HWND dialog = CreateWindowExW(
+            WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
+            kShortcutHelpClass,
+            L"Snap-Lite · 快捷键",
+            WS_POPUP,
+            x,
+            y,
+            width,
+            height,
+            hwnd_,
+            nullptr,
+            instance_,
+            state);
+        if (dialog) {
+            g_shortcutHelpWindow = dialog;
+            ShowWindow(dialog, SW_SHOWNORMAL);
+            UpdateWindow(dialog);
+            SetForegroundWindow(dialog);
+            return;
+        }
+        delete state;
+    }
+
     std::wstring text;
     text += L"当前 UI 主题：";
     text += ui::ThemeName(ui::CurrentThemeId());
-    text += L"\n\n";
-    text += L"全局快捷键\n";
-    text += snipHotkeyRegistered_
-        ? L"  F1             选区截图\n"
-        : L"  F1             选区截图（注册失败，可能被其他程序占用）\n";
-    text += snipFallbackHotkeyRegistered_
-        ? L"  Ctrl+Shift+S   选区截图备用键\n"
-        : L"  Ctrl+Shift+S   选区截图备用键（注册失败，可能被其他程序占用）\n";
-    text += fullscreenHotkeyRegistered_
-        ? L"  Ctrl+Shift+F   全屏截图\n"
-        : L"  Ctrl+Shift+F   全屏截图（注册失败，可能被其他程序占用）\n";
-    if (pinFallbackHotkeyRegistered_) {
-        text += L"  Ctrl+Alt+P     贴图（F3 被占用，已自动切换）\n";
-    } else if (pinHotkeyRegistered_) {
-        text += L"  F3             贴图\n";
-    } else {
-        text += L"  F3             贴图（注册失败，请用托盘菜单）\n";
+    text += L"\n";
+    for (const ShortcutSection& section : sections) {
+        text += L"\n" + section.title + L"\n";
+        for (const ShortcutRow& row : section.rows) {
+            text += L"  " + row.keys + L"  " + row.desc + L"\n";
+        }
     }
-
-    text += L"\n选区阶段\n";
-    text += L"  单击 / 拖动    选择窗口控件或自由框选\n";
-    text += L"  C              取色（复制 HEX）\n";
-    text += L"  Enter          完成并复制\n";
-    text += L"  Esc            取消\n";
-
-    text += L"\n标注阶段\n";
-    text += L"  R A P E M T    形状 / 箭头 / 画笔 / 橡皮 / 马赛克 / 文字\n";
-    text += L"  Ctrl+Z / Y     撤销 / 重做\n";
-    text += L"  Ctrl+D         复制选中的标注\n";
-    text += L"  Tab            切换选中的标注（Shift+Tab 反向）\n";
-    text += L"  Ctrl+Home/End  置于最上层 / 最下层\n";
-    text += L"  Ctrl+PgUp/PgDn 上移一层 / 下移一层\n";
-    text += L"  方向键         微调 1 像素（Shift 为 10 像素）\n";
-    text += L"  Delete         删除选中的标注\n";
-
     MessageBoxW(hwnd_, text.c_str(), L"Snap-Lite · 快捷键", MB_OK | MB_ICONINFORMATION);
 }
 

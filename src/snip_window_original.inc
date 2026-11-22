@@ -458,14 +458,30 @@ void SnipWindow::EnsureFonts() {
 }
 
 void SnipWindow::PaintMagnifier(HDC dc, POINT clientPoint) {
+    EnsureFonts();
+    const UINT dpi = hwnd_ ? GetDpiForWindow(hwnd_) : GetDpiForSystem();
     constexpr int sampleRadius = 6;
     constexpr int sampleSize = sampleRadius * 2 + 1;
     constexpr int zoom = 10;
     constexpr int lensSize = sampleSize * zoom;
-    constexpr int pad = 6;
-    constexpr int readout = 24;
-    constexpr int panelW = lensSize + pad * 2;
-    constexpr int panelH = lensSize + pad * 2 + readout;
+    const int pad = std::max(6, MulDiv(7, static_cast<int>(dpi), 96));
+    const int line1H = std::max(22, MulDiv(22, static_cast<int>(dpi), 96));
+    const int line2H = std::max(16, MulDiv(16, static_cast<int>(dpi), 96));
+    const int readout = line1H + line2H + MulDiv(4, static_cast<int>(dpi), 96);
+
+    const HGDIOBJ oldMeasureFont = SelectObject(dc, monoFont_);
+    const int hexWidth = MeasureText(dc, L"#FFFFFF");
+    SelectObject(dc, uiFont_);
+    const int keyHintWidth = MeasureText(dc, L"C 复制");
+    SelectObject(dc, oldMeasureFont);
+
+    const int swatchSize = std::max(10, MulDiv(11, static_cast<int>(dpi), 96));
+    const int keyCapPadX = std::max(6, MulDiv(7, static_cast<int>(dpi), 96));
+    const int keyCapW = keyHintWidth + keyCapPadX * 2;
+    const int minInfoW = swatchSize + MulDiv(8, static_cast<int>(dpi), 96) +
+                         hexWidth + MulDiv(12, static_cast<int>(dpi), 96) + keyCapW;
+    const int panelW = std::max(lensSize, minInfoW) + pad * 2;
+    const int panelH = lensSize + pad * 2 + readout;
 
     const int clientX = static_cast<int>(clientPoint.x);
     const int clientY = static_cast<int>(clientPoint.y);
@@ -491,10 +507,10 @@ void SnipWindow::PaintMagnifier(HDC dc, POINT clientPoint) {
     {
         Gdiplus::Graphics graphics(dc);
         graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
-        Plate(graphics, panel, 8.0f);
+        Plate(graphics, panel, 10.0f);
     }
 
-    const int lensX = panelX + pad;
+    const int lensX = panelX + (panelW - lensSize) / 2;
     const int lensY = panelY + pad;
     SetStretchBltMode(dc, COLORONCOLOR);
     const int sourceX = std::clamp(clientX - sampleRadius, 0, std::max(0, screen_.width - sampleSize));
@@ -526,9 +542,25 @@ void SnipWindow::PaintMagnifier(HDC dc, POINT clientPoint) {
         const float cell = static_cast<float>(sampleRadius * zoom);
         const float cellX = lensX + cell;
         const float cellY = lensY + cell;
+        const float cellCenterX = cellX + zoom * 0.5f;
+        const float cellCenterY = cellY + zoom * 0.5f;
+
+        // 十字准星辅助线：向中心采样格四周延伸，便于快速对齐边框与文字基线。
+        Gdiplus::Pen crossShade(Gdiplus::Color(110, 0, 0, 0), 2.0f);
+        Gdiplus::Pen crossGlow(Gdiplus::Color(150, 255, 255, 255), 1.0f);
+        const float crossLen = 14.0f;
+        graphics.DrawLine(&crossShade, cellX - crossLen, cellCenterY, cellX - 2.0f, cellCenterY);
+        graphics.DrawLine(&crossShade, cellX + zoom + 2.0f, cellCenterY, cellX + zoom + crossLen, cellCenterY);
+        graphics.DrawLine(&crossShade, cellCenterX, cellY - crossLen, cellCenterX, cellY - 2.0f);
+        graphics.DrawLine(&crossShade, cellCenterX, cellY + zoom + 2.0f, cellCenterX, cellY + zoom + crossLen);
+        graphics.DrawLine(&crossGlow, cellX - crossLen, cellCenterY, cellX - 2.0f, cellCenterY);
+        graphics.DrawLine(&crossGlow, cellX + zoom + 2.0f, cellCenterY, cellX + zoom + crossLen, cellCenterY);
+        graphics.DrawLine(&crossGlow, cellCenterX, cellY - crossLen, cellCenterX, cellY - 2.0f);
+        graphics.DrawLine(&crossGlow, cellCenterX, cellY + zoom + 2.0f, cellCenterX, cellY + zoom + crossLen);
+
         Gdiplus::Pen shade(ChromeShade(), 1.0f);
         graphics.DrawRectangle(&shade, cellX - 1.0f, cellY - 1.0f, zoom + 2.0f, zoom + 2.0f);
-        Gdiplus::Pen mark(Accent(), 1.0f);
+        Gdiplus::Pen mark(Accent(), 1.2f);
         graphics.DrawRectangle(&mark, cellX, cellY, static_cast<float>(zoom), static_cast<float>(zoom));
 
         Gdiplus::Pen edge(ChromeLine(), 1.0f);
@@ -536,7 +568,6 @@ void SnipWindow::PaintMagnifier(HDC dc, POINT clientPoint) {
             &edge, lensX - 1.0f, lensY - 1.0f, lensSize + 1.0f, lensSize + 1.0f);
     }
 
-    EnsureFonts();
     wchar_t text[32]{};
     if (color != CLR_INVALID) {
         swprintf_s(text, L"#%02X%02X%02X", GetRValue(color), GetGValue(color), GetBValue(color));
@@ -545,29 +576,62 @@ void SnipWindow::PaintMagnifier(HDC dc, POINT clientPoint) {
     }
 
     const int rowY = lensY + lensSize + pad;
+    const int keyCapH = std::max(18, line1H - 4);
+    RECT keyCapRect{
+        panelX + panelW - pad - keyCapW,
+        rowY + (line1H - keyCapH) / 2,
+        panelX + panelW - pad,
+        rowY + (line1H - keyCapH) / 2 + keyCapH};
+
     {
         Gdiplus::Graphics graphics(dc);
         graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+        const float swatchTop = static_cast<float>(rowY + (line1H - swatchSize) / 2);
         Gdiplus::RectF chip(
-            static_cast<float>(panelX + pad), static_cast<float>(rowY + 7), 10.0f, 10.0f);
+            static_cast<float>(panelX + pad), swatchTop,
+            static_cast<float>(swatchSize), static_cast<float>(swatchSize));
         if (color != CLR_INVALID) {
             FillRoundRect(
                 graphics,
                 Gdiplus::Color(255, GetRValue(color), GetGValue(color), GetBValue(color)),
                 chip,
-                2.0f);
+                3.0f);
         }
-        TwoToneRoundRect(graphics, ChromeLine(), chip, 2.0f);
+        TwoToneRoundRect(graphics, ChromeLine(), chip, 3.0f);
+
+        // 右侧按键提示胶囊
+        Gdiplus::RectF keyBox(
+            static_cast<float>(keyCapRect.left),
+            static_cast<float>(keyCapRect.top),
+            static_cast<float>(keyCapRect.right - keyCapRect.left),
+            static_cast<float>(keyCapRect.bottom - keyCapRect.top));
+        FillRoundRect(graphics, Gdiplus::Color(220, 46, 50, 58), keyBox, 4.0f);
+        Gdiplus::GraphicsPath keyPath;
+        AddRoundRect(keyPath, keyBox, 4.0f);
+        Gdiplus::Pen keyBorder(Gdiplus::Color(85, 255, 255, 255), 1.0f);
+        graphics.DrawPath(&keyBorder, &keyPath);
     }
 
-    RECT row{panelX + pad + 16, rowY, panelX + panelW - pad, rowY + readout};
+    RECT row1{
+        panelX + pad + swatchSize + MulDiv(7, static_cast<int>(dpi), 96),
+        rowY,
+        keyCapRect.left - MulDiv(6, static_cast<int>(dpi), 96),
+        rowY + line1H};
     SetBkMode(dc, TRANSPARENT);
     const HGDIOBJ oldFont = SelectObject(dc, monoFont_);
     SetTextColor(dc, kInk);
-    DrawTextW(dc, text, -1, &row, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    DrawTextW(dc, text, -1, &row1, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
     SelectObject(dc, uiFont_);
-    SetTextColor(dc, RGB(146, 152, 164));
-    DrawTextW(dc, L"C 复制", -1, &row, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+    SetTextColor(dc, RGB(205, 212, 224));
+    DrawTextW(dc, L"C 复制", -1, &keyCapRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+    wchar_t coordText[48]{};
+    swprintf_s(coordText, L"X %ld   Y %ld", clientPoint.x + screen_.x, clientPoint.y + screen_.y);
+    RECT row2{panelX + pad, rowY + line1H + 1, panelX + panelW - pad, rowY + line1H + 1 + line2H};
+    SelectObject(dc, monoFont_);
+    SetTextColor(dc, RGB(154, 162, 176));
+    DrawTextW(dc, coordText, -1, &row2, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     SelectObject(dc, oldFont);
 }
 
@@ -576,6 +640,7 @@ void SnipWindow::PaintSelection(HDC dc) {
         return;
     }
 
+    const UINT dpi = hwnd_ ? GetDpiForWindow(hwnd_) : GetDpiForSystem();
     const RECT r = NormalizedSelection();
     {
         Gdiplus::Graphics graphics(dc);
@@ -608,9 +673,10 @@ void SnipWindow::PaintSelection(HDC dc) {
         Gdiplus::Pen frame(Accent(), 1.0f);
         graphics.DrawRectangle(&frame, left, top, width - 1.0f, height - 1.0f);
 
-        // Small squared handles read as tooling marks rather than UI bubbles,
-        // and they cover less of the pixels being selected.
+        // 精细控制柄：暗色外框 + 主题色底衬 + 中心白色高光点，在深浅壁纸上都清晰可读。
         graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+        const float handleRadius = static_cast<float>(
+            std::clamp(MulDiv(kHandleRadius + 1, static_cast<int>(dpi), 96), 4, 7));
         const LONG cx = (r.left + r.right) / 2;
         const LONG cy = (r.top + r.bottom) / 2;
         const POINT handles[8] = {
@@ -618,17 +684,24 @@ void SnipWindow::PaintSelection(HDC dc) {
             {r.right, r.bottom}, {cx, r.bottom}, {r.left, r.bottom}, {r.left, cy},
         };
         Gdiplus::SolidBrush handleFill(Accent());
-        Gdiplus::Pen handleRing(ChromeShade(), 1.0f);
+        Gdiplus::Pen handleRing(ChromeShade(), 1.2f);
+        Gdiplus::SolidBrush centerGlow(Gdiplus::Color(240, 255, 255, 255));
         Gdiplus::GraphicsPath path;
         for (const POINT handle : handles) {
             Gdiplus::RectF box(
-                static_cast<float>(handle.x - kHandleRadius),
-                static_cast<float>(handle.y - kHandleRadius),
-                kHandleRadius * 2.0f,
-                kHandleRadius * 2.0f);
-            AddRoundRect(path, box, 1.5f);
+                static_cast<float>(handle.x) - handleRadius,
+                static_cast<float>(handle.y) - handleRadius,
+                handleRadius * 2.0f,
+                handleRadius * 2.0f);
+            AddRoundRect(path, box, 2.0f);
             graphics.FillPath(&handleFill, &path);
             graphics.DrawPath(&handleRing, &path);
+            graphics.FillEllipse(
+                &centerGlow,
+                static_cast<float>(handle.x) - 1.6f,
+                static_cast<float>(handle.y) - 1.6f,
+                3.2f,
+                3.2f);
         }
     }
 
@@ -638,8 +711,8 @@ void SnipWindow::PaintSelection(HDC dc) {
 
     SetBkMode(dc, TRANSPARENT);
     const HGDIOBJ oldFont = SelectObject(dc, monoFont_);
-    constexpr int badgeHeight = 24;
-    const int badgeWidth = MeasureText(dc, sizeText) + 26;
+    const int badgeHeight = std::max(24, MulDiv(26, static_cast<int>(dpi), 96));
+    const int badgeWidth = MeasureText(dc, sizeText) + MulDiv(30, static_cast<int>(dpi), 96);
 
     RECT badge{r.left, r.top - badgeHeight - 8, r.left + badgeWidth, r.top - 8};
     if (badge.top < 6) {
@@ -660,24 +733,26 @@ void SnipWindow::PaintSelection(HDC dc) {
         badge.right += shift;
     }
 
+    const int accentLeftPad = std::max(8, MulDiv(9, static_cast<int>(dpi), 96));
+    const float accentWidth = 3.5f;
+    const float accentHeight = static_cast<float>(std::max(10, badgeHeight - 12));
     {
         Gdiplus::Graphics graphics(dc);
         graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
-        Plate(graphics, badge, 6.0f);
-        Gdiplus::SolidBrush accent(Accent());
-        graphics.FillRectangle(
-            &accent,
-            static_cast<float>(badge.left + 9),
-            static_cast<float>((badge.top + badge.bottom) / 2 - 2),
-            4.0f,
-            4.0f);
+        Plate(graphics, badge, 7.0f);
+        Gdiplus::RectF accentBar(
+            static_cast<float>(badge.left + accentLeftPad),
+            static_cast<float>(badge.top) + (static_cast<float>(badgeHeight) - accentHeight) / 2.0f,
+            accentWidth,
+            accentHeight);
+        FillRoundRect(graphics, Accent(), accentBar, 1.75f);
     }
 
     // Re-select after the GDI+ scope: a Graphics object may leave the DC's
     // font, pen and brush in an implementation-defined state.
     SelectObject(dc, monoFont_);
     SetBkMode(dc, TRANSPARENT);
-    RECT badgeText{badge.left + 19, badge.top, badge.right - 7, badge.bottom};
+    RECT badgeText{badge.left + accentLeftPad + 9, badge.top, badge.right - 8, badge.bottom};
     SetTextColor(dc, kInk);
     DrawTextW(dc, sizeText, -1, &badgeText, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     SelectObject(dc, oldFont);
@@ -685,20 +760,33 @@ void SnipWindow::PaintSelection(HDC dc) {
 
 void SnipWindow::PaintHint(HDC dc) {
     EnsureFonts();
-    static constexpr wchar_t kHint[] = L"单击窗口 / 控件     拖动自由选择     C 取色     Esc 取消";
+    const UINT dpi = hwnd_ ? GetDpiForWindow(hwnd_) : GetDpiForSystem();
+    static constexpr wchar_t kHint[] = L"单击选窗口  ·  拖动框选  ·  C 取色  ·  Esc 取消";
 
     SetBkMode(dc, TRANSPARENT);
     const HGDIOBJ oldFont = SelectObject(dc, uiFont_);
-    RECT plate{18, 18, 18 + MeasureText(dc, kHint) + 30, 18 + 32};
+    const int plateH = std::max(32, MulDiv(34, static_cast<int>(dpi), 96));
+    const int padLeft = std::max(24, MulDiv(26, static_cast<int>(dpi), 96));
+    const int padRight = std::max(16, MulDiv(18, static_cast<int>(dpi), 96));
+    RECT plate{18, 18, 18 + MeasureText(dc, kHint) + padLeft + padRight, 18 + plateH};
     {
         Gdiplus::Graphics graphics(dc);
         graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
-        Plate(graphics, plate, 8.0f);
+        Plate(graphics, plate, 9.0f);
+        const float dotSize = static_cast<float>(std::max(6, MulDiv(7, static_cast<int>(dpi), 96)));
+        Gdiplus::SolidBrush dotBrush(Accent());
+        graphics.FillEllipse(
+            &dotBrush,
+            static_cast<float>(plate.left + 12),
+            static_cast<float>(plate.top + plate.bottom) / 2.0f - dotSize / 2.0f,
+            dotSize,
+            dotSize);
     }
     SelectObject(dc, uiFont_);
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, kInk);
-    DrawTextW(dc, kHint, -1, &plate, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    RECT hintTextRect{plate.left + padLeft, plate.top, plate.right - padRight, plate.bottom};
+    DrawTextW(dc, kHint, -1, &hintTextRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     SelectObject(dc, oldFont);
 }
 

@@ -2,6 +2,7 @@
 
 #include "capture.h"
 #include "ui_theme.h"
+#include "ui_theme.h"
 
 #include <commdlg.h>
 #include <gdiplus.h>
@@ -680,7 +681,7 @@ bool PinWindow::Register(HINSTANCE instance) {
     wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
     wc.hbrBackground = static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
     wc.lpszClassName = kPinClass;
-    wc.style = CS_DBLCLKS;
+    wc.style = CS_DBLCLKS | CS_DROPSHADOW;
     const bool pinRegistered = RegisterClassExW(&wc) != 0 || GetLastError() == ERROR_CLASS_ALREADY_EXISTS;
 
     WNDCLASSEXW menuClass{};
@@ -985,6 +986,17 @@ LRESULT PinWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
                     BitBlt(dc, 0, 0, width, height, memory, 0, 0, SRCCOPY);
                     SelectObject(memory, old);
                     DeleteDC(memory);
+                }
+            }
+            if (width >= 2 && height >= 2) {
+                HPEN borderPen = CreatePen(PS_SOLID, 1, ui::kAccentStrong);
+                if (borderPen) {
+                    const HGDIOBJ oldBrush = SelectObject(dc, GetStockObject(NULL_BRUSH));
+                    const HGDIOBJ oldPen = SelectObject(dc, borderPen);
+                    Rectangle(dc, 0, 0, width, height);
+                    SelectObject(dc, oldPen);
+                    SelectObject(dc, oldBrush);
+                    DeleteObject(borderPen);
                 }
             }
         }

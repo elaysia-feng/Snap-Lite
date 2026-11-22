@@ -219,14 +219,45 @@ void PaintToast(HWND hwnd, ToastState* state) {
     ui::FillRoundRect(dc, client, Scale(state, kToastRadius), ui::kSurface, ui::kBorder);
 
     const int margin = Scale(state, 18);
-    RECT titleRect{margin, Scale(state, 12), client.right - Scale(state, 52), Scale(state, 34)};
+    RECT brandDot{margin, Scale(state, 19), margin + Scale(state, 10), Scale(state, 29)};
+    ui::FillRoundRect(dc, brandDot, Scale(state, 4), ui::kAccent, ui::kAccent);
+
+    const std::wstring version = L"v" + state->currentVersion;
+    int versionLeft = state->closeRect.left - Scale(state, 8);
+    if (state && state->bodyFont) {
+        const HGDIOBJ oldMeasureFont = SelectObject(dc, state->bodyFont);
+        SIZE versionSize{};
+        GetTextExtentPoint32W(dc, version.c_str(), static_cast<int>(version.size()), &versionSize);
+        SelectObject(dc, oldMeasureFont);
+        const int pillWidth = static_cast<int>(versionSize.cx) + Scale(state, 14);
+        const int pillHeight = Scale(state, 20);
+        const int pillTop = Scale(state, 15);
+        versionLeft = std::max(margin + Scale(state, 128), state->closeRect.left - Scale(state, 8) - pillWidth);
+        RECT versionPill{versionLeft, pillTop, versionLeft + pillWidth, pillTop + pillHeight};
+        if (versionPill.right <= state->closeRect.left - Scale(state, 6)) {
+            ui::FillRoundRect(dc, versionPill, Scale(state, 10), ui::kCream, ui::kBorder);
+            DrawTextLine(
+                dc,
+                state->bodyFont,
+                ui::kTextSecondary,
+                version,
+                versionPill,
+                DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        }
+    }
+
+    RECT titleRect{
+        brandDot.right + Scale(state, 8),
+        Scale(state, 13),
+        versionLeft - Scale(state, 8),
+        Scale(state, 36)};
     DrawTextLine(
         dc,
         state ? state->titleFont : nullptr,
         ui::kText,
         L"Snap-Lite 自动更新",
         titleRect,
-        DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 
     if (state && state->hovered == HitTarget::Close) {
         ui::FillRoundRect(dc, state->closeRect, Scale(state, 8), ui::kHover, ui::kHover);
@@ -245,29 +276,32 @@ void PaintToast(HWND hwnd, ToastState* state) {
         DeleteObject(closePen);
     }
 
-    const std::wstring version = L"当前版本 v" + state->currentVersion;
-    RECT versionRect{margin, Scale(state, 38), client.right - margin, Scale(state, 56)};
-    DrawTextLine(
-        dc,
-        state ? state->bodyFont : nullptr,
-        ui::kTextSecondary,
-        version,
-        versionRect,
-        DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-
     HPEN divider = CreatePen(PS_SOLID, 1, ui::kBorder);
     if (divider) {
         const HGDIOBJ previousPen = SelectObject(dc, divider);
-        MoveToEx(dc, margin, Scale(state, 62), nullptr);
-        LineTo(dc, client.right - margin, Scale(state, 62));
+        MoveToEx(dc, margin, Scale(state, 48), nullptr);
+        LineTo(dc, client.right - margin, Scale(state, 48));
         SelectObject(dc, previousPen);
         DeleteObject(divider);
     }
 
+    const COLORREF statusColor = StatusColor(state->status);
     const int dotSize = Scale(state, 8);
-    const int dotLeft = margin;
-    const int dotTop = Scale(state, 76);
-    HBRUSH dot = CreateSolidBrush(StatusColor(state->status));
+    const int haloSize = Scale(state, 14);
+    const int dotLeft = margin + (haloSize - dotSize) / 2;
+    const int dotTop = Scale(state, 67);
+    const int haloLeft = margin;
+    const int haloTop = dotTop - (haloSize - dotSize) / 2;
+    HBRUSH halo = CreateSolidBrush(ui::BlendRatio(statusColor, ui::kSurface, 1, 3));
+    if (halo) {
+        const HGDIOBJ previousBrush = SelectObject(dc, halo);
+        const HGDIOBJ previousPen = SelectObject(dc, GetStockObject(NULL_PEN));
+        Ellipse(dc, haloLeft, haloTop, haloLeft + haloSize, haloTop + haloSize);
+        SelectObject(dc, previousPen);
+        SelectObject(dc, previousBrush);
+        DeleteObject(halo);
+    }
+    HBRUSH dot = CreateSolidBrush(statusColor);
     if (dot) {
         const HGDIOBJ previousBrush = SelectObject(dc, dot);
         const HGDIOBJ previousPen = SelectObject(dc, GetStockObject(NULL_PEN));
@@ -278,17 +312,17 @@ void PaintToast(HWND hwnd, ToastState* state) {
     }
 
     RECT statusRect{
-        margin + Scale(state, 16),
-        Scale(state, 68),
+        margin + Scale(state, 20),
+        Scale(state, 59),
         client.right - margin,
-        Scale(state, 91)};
+        Scale(state, 83)};
     const std::wstring statusTitle = StatusTitle(state);
     DrawTextLine(dc, state->statusFont, ui::kText, statusTitle,
                  statusRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 
     RECT detailRect{
         margin,
-        Scale(state, 96),
+        Scale(state, 88),
         client.right - margin,
         state->secondaryRect.top - Scale(state, 8)};
     const std::wstring detail = StatusDetail(state);

@@ -13,8 +13,9 @@ constexpr wchar_t kPanelClass[] = L"SnapLiteOcrResultPanelV2";
 constexpr int kButtonCopySelected = 101;
 constexpr int kButtonCopyAll = 102;
 constexpr int kButtonCloseTop = 104;
-constexpr int kPanelWidth = 430;
-constexpr int kPanelHeight = 380;
+constexpr UINT_PTR kCopiedTimerId = 1;
+constexpr int kPanelWidth = 440;
+constexpr int kPanelHeight = 390;
 constexpr int kHeaderHeight = 76;
 constexpr int kCornerRadius = 18;
 
@@ -39,9 +40,19 @@ struct PanelState {
     HBRUSH editBrush{};
     std::wstring text;
     RECT editFrame{};
+    UINT dpi{96};
+    int copiedButton{0};
 };
 
 HWND g_activePanel = nullptr;
+
+int Scale(UINT dpi, int value) {
+    return MulDiv(value, static_cast<int>(dpi ? dpi : 96), 96);
+}
+
+int Scale(const PanelState* state, int value) {
+    return Scale(state ? state->dpi : 96, value);
+}
 
 int CountVisualLines(const std::wstring& text) {
     if (text.empty()) return 0;
@@ -50,6 +61,14 @@ int CountVisualLines(const std::wstring& text) {
         if (ch == L'\n') ++lines;
     }
     return lines;
+}
+
+int CountVisibleChars(const std::wstring& text) {
+    int count = 0;
+    for (wchar_t ch : text) {
+        if (ch != L'\r' && ch != L'\n') ++count;
+    }
+    return count;
 }
 
 void ApplyFont(HWND control, HFONT font) {
@@ -108,13 +127,15 @@ void SetRoundedWindowRegion(HWND hwnd) {
     GetClientRect(hwnd, &rect);
     if (rect.right <= rect.left || rect.bottom <= rect.top) return;
 
+    const UINT dpi = GetDpiForWindow(hwnd);
+    const int radius = Scale(dpi ? dpi : 96, kCornerRadius);
     HRGN region = CreateRoundRectRgn(
         0,
         0,
         rect.right - rect.left + 1,
         rect.bottom - rect.top + 1,
-        kCornerRadius,
-        kCornerRadius);
+        radius,
+        radius);
     if (region) {
         // SetWindowRgn 成功后区域的所有权交给系统；失败时必须自己释放，
         // 否则每次调用都会泄漏一个 HRGN。
@@ -124,15 +145,17 @@ void SetRoundedWindowRegion(HWND hwnd) {
     }
 }
 
-void SetEditFormattingRect(HWND edit) {
+void SetEditFormattingRect(HWND edit, const PanelState* state) {
     if (!edit) return;
     RECT client{};
     GetClientRect(edit, &client);
+    const int padX = Scale(state, 12);
+    const int padY = Scale(state, 10);
     RECT format{
-        12,
-        10,
-        std::max(13L, client.right - 12),
-        std::max(11L, client.bottom - 10),
+        padX,
+        padY,
+        std::max<LONG>(padX + 1, client.right - padX),
+        std::max<LONG>(padY + 1, client.bottom - padY),
     };
     SendMessageW(edit, EM_SETRECT, 0, reinterpret_cast<LPARAM>(&format));
 }
@@ -142,18 +165,19 @@ void LayoutPanel(HWND hwnd, PanelState* state) {
 
     RECT client{};
     GetClientRect(hwnd, &client);
-    const int width = std::max(320, static_cast<int>(client.right - client.left));
-    const int height = std::max(260, static_cast<int>(client.bottom - client.top));
-    const int pad = 18;
-    const int buttonHeight = 36;
-    const int buttonGap = 10;
-    const int buttonWidth = 112;
+    const int width = std::max(Scale(state, 320), static_cast<int>(client.right - client.left));
+    const int height = std::max(Scale(state, 260), static_cast<int>(client.bottom - client.top));
+    const int pad = Scale(state, 18);
+    const int buttonHeight = Scale(state, 36);
+    const int buttonGap = Scale(state, 10);
+    const int buttonWidth = Scale(state, 112);
+    const int closeSize = Scale(state, 32);
 
-    MoveWindow(state->closeTop, width - 50, 12, 32, 32, TRUE);
+    MoveWindow(state->closeTop, width - pad - closeSize, Scale(state, 12), closeSize, closeSize, TRUE);
 
     const int buttonsTop = height - pad - buttonHeight;
-    const int editTop = kHeaderHeight;
-    const int editHeight = std::max(100, buttonsTop - editTop - 14);
+    const int editTop = Scale(state, kHeaderHeight);
+    const int editHeight = std::max(Scale(state, 100), buttonsTop - editTop - Scale(state, 14));
     state->editFrame = {pad, editTop, width - pad, editTop + editHeight};
 
     MoveWindow(
@@ -163,7 +187,7 @@ void LayoutPanel(HWND hwnd, PanelState* state) {
         state->editFrame.right - state->editFrame.left - 2,
         state->editFrame.bottom - state->editFrame.top - 2,
         TRUE);
-    SetEditFormattingRect(state->edit);
+    SetEditFormattingRect(state->edit, state);
 
     int x = width - pad - buttonWidth;
     MoveWindow(state->copyAll, x, buttonsTop, buttonWidth, buttonHeight, TRUE);
@@ -186,12 +210,34 @@ void DrawRoundRectFill(HDC dc, const RECT& rect, int radius, COLORREF fill, COLO
     DeleteObject(brush);
 }
 
-void DrawOwnerButton(const DRAWITEMSTRUCT* draw) {
+void DrawOwnerButton(const DRAWITEMSTRUCT* draw, const PanelState* state) {
     if (!draw) return;
 
     RECT rect = draw->rcItem;
     const bool pressed = (draw->itemState & ODS_SELECTED) != 0;
+    const bool hovered = (draw->itemState & ODS_HOTLIGHT) != 0;
     const bool disabled = (draw->itemState & ODS_DISABLED) != 0;
+
+    if (draw->CtlID == kButtonCloseTop) {
+        const COLORREF fill = pressed ? ui::kPressed : (hovered ? ui::kHover : kPanelBg);
+        const COLORREF border = hovered || pressed ? kBorder : fill;
+        DrawRoundRectFill(draw->hDC, rect, Scale(state, 9), fill, border);
+        const int inset = Scale(state, 10);
+        HPEN crossPen = CreatePen(
+            PS_SOLID,
+            std::max(1, Scale(state, 1)),
+            ui::kTextSecondary);
+        if (crossPen) {
+            const HGDIOBJ oldPen = SelectObject(draw->hDC, crossPen);
+            MoveToEx(draw->hDC, rect.left + inset, rect.top + inset, nullptr);
+            LineTo(draw->hDC, rect.right - inset, rect.bottom - inset);
+            MoveToEx(draw->hDC, rect.right - inset, rect.top + inset, nullptr);
+            LineTo(draw->hDC, rect.left + inset, rect.bottom - inset);
+            SelectObject(draw->hDC, oldPen);
+            DeleteObject(crossPen);
+        }
+        return;
+    }
 
     wchar_t text[64]{};
     GetWindowTextW(draw->hwndItem, text, static_cast<int>(std::size(text)));
@@ -201,26 +247,30 @@ void DrawOwnerButton(const DRAWITEMSTRUCT* draw) {
     COLORREF textColor = kText;
 
     if (draw->CtlID == kButtonCopyAll) {
-        fill = pressed ? ui::kAccentActionPressed : ui::kAccentAction;
+        fill = pressed
+            ? ui::kAccentActionPressed
+            : (hovered ? ui::Blend(ui::kAccentAction, ui::kAccentStrong) : ui::kAccentAction);
         border = fill;
         textColor = RGB(255, 255, 255);
-    } else if (draw->CtlID == kButtonCloseTop) {
-        fill = pressed ? RGB(245, 224, 230) : kPanelBg;
-        border = fill;
-        textColor = ui::kTextSecondary;
     } else if (pressed) {
         fill = kSecondaryPressed;
+        border = ui::kAccentStrong;
+    } else if (hovered) {
+        fill = ui::kHover;
+        border = ui::kAccent;
     }
 
     if (disabled) {
-        textColor = RGB(180, 170, 175);
+        textColor = kMutedText;
     }
 
-    DrawRoundRectFill(draw->hDC, rect, 10, fill, border);
+    DrawRoundRectFill(draw->hDC, rect, Scale(state, 10), fill, border);
 
+    const HGDIOBJ oldFont = state && state->bodyFont ? SelectObject(draw->hDC, state->bodyFont) : nullptr;
     SetBkMode(draw->hDC, TRANSPARENT);
     SetTextColor(draw->hDC, textColor);
     DrawTextW(draw->hDC, text, -1, &rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    if (oldFont) SelectObject(draw->hDC, oldFont);
 }
 
 void PaintPanel(HWND hwnd, PanelState* state) {
@@ -234,56 +284,127 @@ void PaintPanel(HWND hwnd, PanelState* state) {
     FillRect(dc, &client, background);
     DeleteObject(background);
 
+    const int cornerRadius = Scale(state, kCornerRadius);
     HPEN outline = CreatePen(PS_SOLID, 1, kBorder);
     HBRUSH hollow = static_cast<HBRUSH>(GetStockObject(HOLLOW_BRUSH));
     const HGDIOBJ oldPen = SelectObject(dc, outline);
     const HGDIOBJ oldBrush = SelectObject(dc, hollow);
-    RoundRect(dc, 0, 0, client.right, client.bottom, kCornerRadius, kCornerRadius);
+    RoundRect(dc, 0, 0, client.right, client.bottom, cornerRadius, cornerRadius);
     SelectObject(dc, oldBrush);
     SelectObject(dc, oldPen);
     DeleteObject(outline);
 
-    const RECT dotRect{18, 18, 28, 28};
-    ui::FillRoundRect(dc, dotRect, 4, kAccent, kAccent);
+    const int pad = Scale(state, 18);
+    const RECT dotRect{
+        pad,
+        Scale(state, 18),
+        pad + Scale(state, 10),
+        Scale(state, 28)};
+    ui::FillRoundRect(dc, dotRect, Scale(state, 4), kAccent, kAccent);
 
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, kText);
-    if (state && state->titleFont) SelectObject(dc, state->titleFont);
-    RECT titleRect{36, 10, client.right - 58, 38};
+    const HGDIOBJ oldFont = state && state->titleFont ? SelectObject(dc, state->titleFont) : nullptr;
+    RECT titleRect{
+        dotRect.right + Scale(state, 8),
+        Scale(state, 10),
+        client.right - Scale(state, 58),
+        Scale(state, 38)};
     DrawTextW(dc, L"文字识别结果", -1, &titleRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
+    int countBadgeLeft = static_cast<int>(client.right) - pad - Scale(state, 106);
+    if (state) {
+        if (state->smallFont) SelectObject(dc, state->smallFont);
+        const std::wstring statsText =
+            std::to_wstring(CountVisualLines(state->text)) + L" 行 · " +
+            std::to_wstring(CountVisibleChars(state->text)) + L" 字";
+        SIZE statsSize{};
+        GetTextExtentPoint32W(dc, statsText.c_str(), static_cast<int>(statsText.size()), &statsSize);
+        const int badgeRight = static_cast<int>(client.right) - pad;
+        const int badgeWidth = std::max(Scale(state, 86), static_cast<int>(statsSize.cx) + Scale(state, 18));
+        countBadgeLeft = badgeRight - badgeWidth;
+        RECT countBadge{countBadgeLeft, Scale(state, 46), badgeRight, Scale(state, 68)};
+        DrawRoundRectFill(dc, countBadge, Scale(state, 11), ui::kCream, kBorder);
+        SetTextColor(dc, ui::kAccentAction);
+        DrawTextW(dc, statsText.c_str(), -1, &countBadge, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    }
 
     SetTextColor(dc, ui::kTextSecondary);
     if (state && state->smallFont) SelectObject(dc, state->smallFont);
-    const int countBadgeRight = static_cast<int>(client.right) - 18;
-    const int countBadgeLeft = countBadgeRight - 68;
-    RECT subtitleRect{18, 46, countBadgeLeft - 8, 68};
+    RECT subtitleRect{pad, Scale(state, 46), countBadgeLeft - Scale(state, 8), Scale(state, 68)};
     const std::wstring subtitle = L"保留换行 · 可拖选并复制";
     DrawTextW(dc, subtitle.c_str(), -1, &subtitleRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 
-    if (state) {
-        RECT countBadge{countBadgeLeft, 46, countBadgeRight, 68};
-        DrawRoundRectFill(dc, countBadge, 10, RGB(255, 238, 243), kBorder);
-        SetTextColor(dc, ui::kTextSecondary);
-        const std::wstring lineCount = std::to_wstring(CountVisualLines(state->text)) + L" 行";
-        DrawTextW(dc, lineCount.c_str(), -1, &countBadge, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-    }
-
-    HPEN divider = CreatePen(PS_SOLID, 1, RGB(246, 226, 231));
+    const int headerHeight = Scale(state, kHeaderHeight);
+    HPEN divider = CreatePen(PS_SOLID, 1, kBorder);
     if (divider) {
         const HGDIOBJ dividerPreviousPen = SelectObject(dc, divider);
         const HGDIOBJ dividerPreviousBrush = SelectObject(dc, GetStockObject(NULL_BRUSH));
-        MoveToEx(dc, 16, kHeaderHeight - 1, nullptr);
-        LineTo(dc, client.right - 16, kHeaderHeight - 1);
+        MoveToEx(dc, Scale(state, 16), headerHeight - 1, nullptr);
+        LineTo(dc, client.right - Scale(state, 16), headerHeight - 1);
         SelectObject(dc, dividerPreviousBrush);
         SelectObject(dc, dividerPreviousPen);
         DeleteObject(divider);
     }
 
     if (state) {
-        DrawRoundRectFill(dc, state->editFrame, 12, kCardBg, kBorder);
+        DrawRoundRectFill(dc, state->editFrame, Scale(state, 12), kCardBg, kBorder);
+        SetTextColor(dc, kMutedText);
+        if (state->smallFont) SelectObject(dc, state->smallFont);
+        RECT footerHint{
+            pad,
+            client.bottom - pad - Scale(state, 36),
+            client.right - pad - Scale(state, 112) * 2 - Scale(state, 20),
+            client.bottom - pad};
+        if (footerHint.right > footerHint.left) {
+            DrawTextW(dc, L"按 Esc 关闭", -1, &footerHint, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        }
     }
 
+    if (oldFont) SelectObject(dc, oldFont);
     EndPaint(hwnd, &paint);
+}
+
+void RecreatePanelFonts(HWND hwnd, PanelState* state) {
+    if (!state) return;
+    const HFONT oldTitle = state->titleFont;
+    const HFONT oldBody = state->bodyFont;
+    const HFONT oldSmall = state->smallFont;
+    const int dpi = static_cast<int>(state->dpi ? state->dpi : 96);
+    const HFONT newTitle = CreateFontW(
+        -MulDiv(14, dpi, 72), 0, 0, 0, FW_SEMIBOLD,
+        FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_TT_PRECIS,
+        CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+        DEFAULT_PITCH | FF_DONTCARE, L"Microsoft YaHei UI");
+    const HFONT newBody = CreateFontW(
+        -MulDiv(11, dpi, 72), 0, 0, 0, FW_NORMAL,
+        FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_TT_PRECIS,
+        CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+        DEFAULT_PITCH | FF_DONTCARE, L"Microsoft YaHei UI");
+    const HFONT newSmall = CreateFontW(
+        -MulDiv(9, dpi, 72), 0, 0, 0, FW_NORMAL,
+        FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_TT_PRECIS,
+        CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+        DEFAULT_PITCH | FF_DONTCARE, L"Microsoft YaHei UI");
+    state->titleFont = newTitle ? newTitle : oldTitle;
+    state->bodyFont = newBody ? newBody : oldBody;
+    state->smallFont = newSmall ? newSmall : oldSmall;
+    ApplyFont(state->edit, state->bodyFont);
+    ApplyFont(state->copySelected, state->bodyFont);
+    ApplyFont(state->copyAll, state->bodyFont);
+    ApplyFont(state->closeTop, state->titleFont);
+    if (newTitle && oldTitle) DeleteObject(oldTitle);
+    if (newBody && oldBody) DeleteObject(oldBody);
+    if (newSmall && oldSmall) DeleteObject(oldSmall);
+    InvalidateRect(hwnd, nullptr, TRUE);
+}
+
+void MarkCopiedFeedback(HWND hwnd, PanelState* state, int buttonId) {
+    if (!state) return;
+    state->copiedButton = buttonId;
+    SetWindowTextW(state->copySelected, buttonId == 1 ? L"✓ 已复制" : L"复制选中");
+    SetWindowTextW(state->copyAll, buttonId == 2 ? L"✓ 已复制" : L"复制全部");
+    SetTimer(hwnd, kCopiedTimerId, 1500, nullptr);
 }
 
 LRESULT CALLBACK PanelProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
@@ -299,22 +420,8 @@ LRESULT CALLBACK PanelProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
     case WM_CREATE: {
         if (!state) return -1;
 
-        const UINT dpi = GetDpiForWindow(hwnd);
-        state->titleFont = CreateFontW(
-            -MulDiv(14, static_cast<int>(dpi), 72), 0, 0, 0, FW_SEMIBOLD,
-            FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_TT_PRECIS,
-            CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-            DEFAULT_PITCH | FF_DONTCARE, L"Microsoft YaHei UI");
-        state->bodyFont = CreateFontW(
-            -MulDiv(11, static_cast<int>(dpi), 72), 0, 0, 0, FW_NORMAL,
-            FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_TT_PRECIS,
-            CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-            DEFAULT_PITCH | FF_DONTCARE, L"Microsoft YaHei UI");
-        state->smallFont = CreateFontW(
-            -MulDiv(9, static_cast<int>(dpi), 72), 0, 0, 0, FW_NORMAL,
-            FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_TT_PRECIS,
-            CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-            DEFAULT_PITCH | FF_DONTCARE, L"Microsoft YaHei UI");
+        state->dpi = GetDpiForWindow(hwnd);
+        if (state->dpi == 0) state->dpi = 96;
         state->editBrush = CreateSolidBrush(kCardBg);
 
         state->edit = CreateWindowExW(
@@ -331,31 +438,33 @@ LRESULT CALLBACK PanelProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
 
         state->copySelected = CreateWindowExW(
             0, L"BUTTON", L"复制选中",
-            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW | BS_NOTIFY,
             0, 0, 0, 0, hwnd,
             reinterpret_cast<HMENU>(static_cast<INT_PTR>(kButtonCopySelected)),
             GetModuleHandleW(nullptr), nullptr);
 
         state->copyAll = CreateWindowExW(
             0, L"BUTTON", L"复制全部",
-            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW | BS_NOTIFY,
             0, 0, 0, 0, hwnd,
             reinterpret_cast<HMENU>(static_cast<INT_PTR>(kButtonCopyAll)),
             GetModuleHandleW(nullptr), nullptr);
 
         state->closeTop = CreateWindowExW(
             0, L"BUTTON", L"×",
-            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW | BS_NOTIFY,
             0, 0, 0, 0, hwnd,
             reinterpret_cast<HMENU>(static_cast<INT_PTR>(kButtonCloseTop)),
             GetModuleHandleW(nullptr), nullptr);
 
-        ApplyFont(state->edit, state->bodyFont);
-        ApplyFont(state->copySelected, state->bodyFont);
-        ApplyFont(state->copyAll, state->bodyFont);
-        ApplyFont(state->closeTop, state->titleFont);
+        RecreatePanelFonts(hwnd, state);
 
-        SendMessageW(state->edit, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN, MAKELPARAM(12, 12));
+        const int textMargin = Scale(state, 12);
+        SendMessageW(
+            state->edit,
+            EM_SETMARGINS,
+            EC_LEFTMARGIN | EC_RIGHTMARGIN,
+            MAKELPARAM(textMargin, textMargin));
         SetWindowSubclass(state->edit, PanelEditSubclassProc, kPanelEditSubclassId, 0);
         LayoutPanel(hwnd, state);
         SetFocus(state->edit);
@@ -370,8 +479,25 @@ LRESULT CALLBACK PanelProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
     case WM_SIZE:
         LayoutPanel(hwnd, state);
         return 0;
+    case WM_DPICHANGED: {
+        if (!state) return 0;
+        state->dpi = HIWORD(wParam);
+        if (state->dpi == 0) state->dpi = 96;
+        RecreatePanelFonts(hwnd, state);
+        const auto* suggested = reinterpret_cast<const RECT*>(lParam);
+        SetWindowPos(
+            hwnd,
+            HWND_TOPMOST,
+            suggested->left,
+            suggested->top,
+            suggested->right - suggested->left,
+            suggested->bottom - suggested->top,
+            SWP_NOACTIVATE);
+        LayoutPanel(hwnd, state);
+        return 0;
+    }
     case WM_DRAWITEM:
-        DrawOwnerButton(reinterpret_cast<const DRAWITEMSTRUCT*>(lParam));
+        DrawOwnerButton(reinterpret_cast<const DRAWITEMSTRUCT*>(lParam), state);
         return TRUE;
     case WM_CTLCOLORSTATIC:
     case WM_CTLCOLOREDIT:
@@ -387,11 +513,23 @@ LRESULT CALLBACK PanelProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
         if (base != HTCLIENT) return base;
         POINT point{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
         ScreenToClient(hwnd, &point);
-        if (point.y >= 0 && point.y < kHeaderHeight && point.x < kPanelWidth - 58) {
+        RECT client{};
+        GetClientRect(hwnd, &client);
+        if (point.y >= 0 && point.y < Scale(state, kHeaderHeight) &&
+            point.x < client.right - Scale(state, 58)) {
             return HTCAPTION;
         }
         return HTCLIENT;
     }
+    case WM_TIMER:
+        if (wParam == kCopiedTimerId && state) {
+            KillTimer(hwnd, kCopiedTimerId);
+            state->copiedButton = 0;
+            SetWindowTextW(state->copySelected, L"复制选中");
+            SetWindowTextW(state->copyAll, L"复制全部");
+            return 0;
+        }
+        break;
     case WM_COMMAND:
         if (!state) break;
         switch (LOWORD(wParam)) {
@@ -409,6 +547,8 @@ LRESULT CALLBACK PanelProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
                     L"复制失败：剪贴板被其他程序占用，请稍后重试。",
                     L"Snap-Lite · 提取文字",
                     MB_OK | MB_ICONWARNING);
+            } else {
+                MarkCopiedFeedback(hwnd, state, 1);
             }
             SetFocus(state->edit);
             return 0;
@@ -420,6 +560,8 @@ LRESULT CALLBACK PanelProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam
                     L"复制失败：剪贴板被其他程序占用，请稍后重试。",
                     L"Snap-Lite · 提取文字",
                     MB_OK | MB_ICONWARNING);
+            } else {
+                MarkCopiedFeedback(hwnd, state, 2);
             }
             SetFocus(state->edit);
             return 0;
@@ -473,7 +615,7 @@ bool EnsurePanelClass() {
 
     WNDCLASSEXW wc{};
     wc.cbSize = sizeof(wc);
-    wc.style = CS_HREDRAW | CS_VREDRAW;
+    wc.style = CS_HREDRAW | CS_VREDRAW | CS_DROPSHADOW;
     wc.lpfnWndProc = PanelProc;
     wc.hInstance = GetModuleHandleW(nullptr);
     wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
@@ -482,6 +624,25 @@ bool EnsurePanelClass() {
 
     registered = RegisterClassExW(&wc) != 0 || GetLastError() == ERROR_CLASS_ALREADY_EXISTS;
     return registered;
+}
+
+UINT MonitorDpiOrOwner(HMONITOR monitor, HWND owner) {
+    using GetDpiForMonitorFn = HRESULT(WINAPI*)(HMONITOR, int, UINT*, UINT*);
+    static GetDpiForMonitorFn getDpiForMonitor = []() -> GetDpiForMonitorFn {
+        HMODULE shcore = LoadLibraryW(L"shcore.dll");
+        if (!shcore) return nullptr;
+        return reinterpret_cast<GetDpiForMonitorFn>(
+            reinterpret_cast<void*>(GetProcAddress(shcore, "GetDpiForMonitor")));
+    }();
+    if (monitor && getDpiForMonitor) {
+        UINT dpiX = 0;
+        UINT dpiY = 0;
+        if (SUCCEEDED(getDpiForMonitor(monitor, 0, &dpiX, &dpiY)) && dpiX > 0) {
+            return dpiX;
+        }
+    }
+    const UINT ownerDpi = owner ? GetDpiForWindow(owner) : 0;
+    return ownerDpi ? ownerDpi : 96;
 }
 
 RECT PanelBounds(HWND owner, const RECT& selectionClientRect) {
@@ -496,21 +657,26 @@ RECT PanelBounds(HWND owner, const RECT& selectionClientRect) {
     info.cbSize = sizeof(info);
     GetMonitorInfoW(monitor, &info);
 
+    const UINT dpi = MonitorDpiOrOwner(monitor, owner);
     const int workLeft = static_cast<int>(info.rcWork.left);
     const int workTop = static_cast<int>(info.rcWork.top);
     const int workRight = static_cast<int>(info.rcWork.right);
     const int workBottom = static_cast<int>(info.rcWork.bottom);
 
-    int x = rightTop.x + 12;
-    if (x + kPanelWidth > workRight) {
-        x = leftTop.x - kPanelWidth - 12;
+    const int panelWidth = std::min(Scale(dpi, kPanelWidth), std::max(1, workRight - workLeft - Scale(dpi, 16)));
+    const int panelHeight = std::min(Scale(dpi, kPanelHeight), std::max(1, workBottom - workTop - Scale(dpi, 16)));
+    const int gap = Scale(dpi, 12);
+
+    int x = rightTop.x + gap;
+    if (x + panelWidth > workRight) {
+        x = leftTop.x - panelWidth - gap;
     }
-    x = std::clamp(x, workLeft, std::max(workLeft, workRight - kPanelWidth));
+    x = std::clamp(x, workLeft, std::max(workLeft, workRight - panelWidth));
 
     int y = rightTop.y;
-    y = std::clamp(y, workTop, std::max(workTop, workBottom - kPanelHeight));
+    y = std::clamp(y, workTop, std::max(workTop, workBottom - panelHeight));
 
-    return {x, y, x + kPanelWidth, y + kPanelHeight};
+    return {x, y, x + panelWidth, y + panelHeight};
 }
 
 }  // namespace

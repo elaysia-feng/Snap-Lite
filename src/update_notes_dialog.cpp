@@ -18,7 +18,6 @@ constexpr int kDialogHeight = 480;
 constexpr int kInstallButton = 101;
 constexpr int kLaterButton = 102;
 constexpr int kCloseButton = 103;
-constexpr COLORREF kUpdateSecondaryText = RGB(124, 107, 116);
 
 struct DialogState {
     HWND notes{};
@@ -205,14 +204,36 @@ void DrawDialog(HWND hwnd, DialogState* state) {
 
     SetBkMode(dc, TRANSPARENT);
     SetTextColor(dc, ui::kText);
-    if (state && state->titleFont) SelectObject(dc, state->titleFont);
-    RECT titleRect{Scale(state, 76), Scale(state, 19), client.right - Scale(state, 72), Scale(state, 48)};
-    DrawTextW(dc, L"发现新版本", -1, &titleRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    const HGDIOBJ oldFont = state && state->titleFont ? SelectObject(dc, state->titleFont) : nullptr;
+    constexpr wchar_t kHeading[] = L"发现新版本";
+    SIZE headingSize{};
+    GetTextExtentPoint32W(dc, kHeading, static_cast<int>(std::size(kHeading) - 1), &headingSize);
+    const int titleLeft = Scale(state, 76);
+    const int titleTop = Scale(state, 19);
+    const int titleBottom = Scale(state, 48);
+    RECT titleRect{titleLeft, titleTop, client.right - Scale(state, 72), titleBottom};
+    DrawTextW(dc, kHeading, -1, &titleRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
-    SetTextColor(dc, kUpdateSecondaryText);
     if (state && state->smallFont) SelectObject(dc, state->smallFont);
-    const std::wstring subtitle = L"v" + state->version + L"  ·  安装包已通过校验";
-    RECT subtitleRect{Scale(state, 76), Scale(state, 48), client.right - Scale(state, 70), Scale(state, 74)};
+    const std::wstring versionTag = L"v" + state->version;
+    SIZE badgeTextSize{};
+    GetTextExtentPoint32W(dc, versionTag.c_str(), static_cast<int>(versionTag.size()), &badgeTextSize);
+    const int badgeLeft = titleLeft + static_cast<int>(headingSize.cx) + Scale(state, 10);
+    const int badgeWidth = static_cast<int>(badgeTextSize.cx) + Scale(state, 18);
+    const int badgeRightLimit = client.right - Scale(state, 66);
+    if (badgeLeft + badgeWidth <= badgeRightLimit) {
+        const int badgeHeight = Scale(state, 22);
+        const int badgeTop = titleTop + (titleBottom - titleTop - badgeHeight) / 2;
+        RECT versionBadge{badgeLeft, badgeTop, badgeLeft + badgeWidth, badgeTop + badgeHeight};
+        ui::DrawAccentBadge(dc, versionBadge, Scale(state, 10), ui::kAccentStrong);
+        SetTextColor(dc, ui::kAccentAction);
+        DrawTextW(dc, versionTag.c_str(), -1, &versionBadge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
+
+    SetTextColor(dc, ui::kTextSecondary);
+    if (state && state->smallFont) SelectObject(dc, state->smallFont);
+    const std::wstring subtitle = L"安装包已通过完整性校验 · 可随时查看并安装";
+    RECT subtitleRect{titleLeft, Scale(state, 48), client.right - Scale(state, 70), Scale(state, 74)};
     DrawTextW(dc, subtitle.c_str(), -1, &subtitleRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 
     HPEN divider = CreatePen(PS_SOLID, 1, ui::kBorder);
@@ -228,7 +249,8 @@ void DrawDialog(HWND hwnd, DialogState* state) {
     DrawTextW(dc, L"更新内容", -1, &sectionRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     ui::FillRoundRect(dc, state->notesFrame, Scale(state, 12), ui::kCard, ui::kBorder);
 
-    SetTextColor(dc, kUpdateSecondaryText);
+    SetTextColor(dc, ui::kTextSecondary);
+    if (state && state->smallFont) SelectObject(dc, state->smallFont);
     RECT footerRect{margin, state->footerTop, client.right - margin * 2 - Scale(state, 124) * 2 - Scale(state, 10), state->footerTop + Scale(state, 30)};
     DrawTextW(
         dc,
@@ -236,6 +258,7 @@ void DrawDialog(HWND hwnd, DialogState* state) {
         -1,
         &footerRect,
         DT_LEFT | DT_VCENTER | DT_WORDBREAK);
+    if (oldFont) SelectObject(dc, oldFont);
 
     EndPaint(hwnd, &paint);
 }
@@ -269,9 +292,11 @@ void DrawButton(const DRAWITEMSTRUCT* draw, DialogState* state) {
     COLORREF outline = ui::kBorder;
     COLORREF textColor = ui::kText;
     if (primary) {
-        fill = pressed ? ui::kAccentStrong : ui::kAccent;
+        fill = pressed
+            ? ui::kAccentActionPressed
+            : (hot ? ui::kAccentStrong : ui::kAccentAction);
         outline = fill;
-        textColor = RGB(45, 40, 44);
+        textColor = RGB(255, 255, 255);
     } else if (pressed) {
         fill = ui::kPressed;
         outline = ui::kAccentStrong;
@@ -442,6 +467,7 @@ bool EnsureDialogClass(HINSTANCE instance) {
 
     WNDCLASSEXW windowClass{};
     windowClass.cbSize = sizeof(windowClass);
+    windowClass.style = CS_DROPSHADOW;
     windowClass.lpfnWndProc = DialogProc;
     windowClass.hInstance = instance;
     windowClass.hCursor = LoadCursorW(nullptr, IDC_ARROW);

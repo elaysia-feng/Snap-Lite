@@ -136,7 +136,7 @@ RECT MenuRowRect(int row) {
     HPEN outline = CreatePen(PS_SOLID, 1, ui::kBorder);
     const HGDIOBJ oldBrush = SelectObject(dc, hollow);
     const HGDIOBJ oldOutline = SelectObject(dc, outline);
-    RoundRect(dc, 0, 0, client.right, client.bottom, 18, 18);
+    RoundRect(dc, 0, 0, client.right, client.bottom, 20, 20);
     SelectObject(dc, oldOutline);
     SelectObject(dc, oldBrush);
     DeleteObject(outline);
@@ -148,17 +148,22 @@ RECT MenuRowRect(int row) {
 
     SetBkMode(dc, TRANSPARENT);
 
-    RECT accent{18, 18, 28, 28};
+    RECT accent{16, 17, 26, 27};
     ui::FillRoundRect(dc, accent, 4, ui::kAccent, ui::kAccent);
 
     HGDIOBJ oldFont = SelectObject(dc, titleFont);
     SetTextColor(dc, ui::kText);
-    RECT title{36, 9, kMenuWidth - 18, 39};
+    RECT title{34, 9, kMenuWidth - 88, 37};
     DrawTextW(dc, L"贴图设置", -1, &title, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
+    RECT pinBadge{kMenuWidth - 82, 13, kMenuWidth - 16, 33};
+    ui::DrawAccentBadge(dc, pinBadge, 10, ui::kAccentStrong);
     SelectObject(dc, smallFont);
+    SetTextColor(dc, ui::kAccentAction);
+    DrawTextW(dc, L"置顶贴图", -1, &pinBadge, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
     SetTextColor(dc, ui::kMutedText);
-    RECT subtitle{18, 34, kMenuWidth - 18, 56};
+    RECT subtitle{16, 34, kMenuWidth - 16, 54};
     DrawTextW(dc, L"滚轮缩放 · Ctrl+滚轮调透明度", -1, &subtitle,
               DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 
@@ -173,30 +178,66 @@ RECT MenuRowRect(int row) {
     const int percent = static_cast<int>((static_cast<int>(state->opacity) * 100 + 127) / 255);
     wchar_t percentText[32]{};
     swprintf_s(percentText, L"%d%%", percent);
-    SetTextColor(dc, ui::kMutedText);
-    RECT percentRect{kMenuWidth - 82, 62, kMenuWidth - 26, 87};
-    DrawTextW(dc, percentText, -1, &percentRect, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+    RECT percentPill{kMenuWidth - 76, 64, kMenuWidth - 24, 85};
+    ui::FillRoundRect(dc, percentPill, 10, ui::kCream, ui::kBorder);
+    SelectObject(dc, smallFont);
+    SetTextColor(dc, ui::kAccentAction);
+    DrawTextW(dc, percentText, -1, &percentPill, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
     const RECT slider = SliderRect();
     const int centerY = static_cast<int>((slider.top + slider.bottom) / 2);
     const int knobX = SliderXFromOpacity(state->opacity);
 
-    HPEN trackPen = CreatePen(PS_SOLID, 4, ui::kSliderTrack);
-    HPEN activePen = CreatePen(PS_SOLID, 4, ui::kAccent);
-    HGDIOBJ oldPen = SelectObject(dc, trackPen);
-    MoveToEx(dc, slider.left, centerY, nullptr);
-    LineTo(dc, slider.right, centerY);
-    SelectObject(dc, activePen);
-    MoveToEx(dc, slider.left, centerY, nullptr);
-    LineTo(dc, knobX, centerY);
-    SelectObject(dc, oldPen);
-    DeleteObject(trackPen);
-    DeleteObject(activePen);
+    {
+        Gdiplus::Graphics graphics(dc);
+        graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+        const auto toGdiColor = [](COLORREF c, BYTE alpha = 255) {
+            return Gdiplus::Color(alpha, GetRValue(c), GetGValue(c), GetBValue(c));
+        };
+        const auto fillPill = [&](float x, float y, float w, float h, float r, COLORREF c) {
+            const float d = r * 2.0f;
+            const float safeW = std::max(d, w);
+            const float safeH = std::max(d, h);
+            Gdiplus::GraphicsPath path;
+            path.AddArc(x, y, d, d, 180.0f, 90.0f);
+            path.AddArc(x + safeW - d, y, d, d, 270.0f, 90.0f);
+            path.AddArc(x + safeW - d, y + safeH - d, d, d, 0.0f, 90.0f);
+            path.AddArc(x, y + safeH - d, d, d, 90.0f, 90.0f);
+            path.CloseFigure();
+            Gdiplus::SolidBrush brush(toGdiColor(c));
+            graphics.FillPath(&brush, &path);
+        };
 
-    RECT knob{knobX - 7, centerY - 7, knobX + 7, centerY + 7};
-    ui::FillRoundRect(dc, knob, 14, ui::kCard, ui::kAccentStrong);
-    RECT knobInner{knobX - 3, centerY - 3, knobX + 3, centerY + 3};
-    ui::FillRoundRect(dc, knobInner, 6, ui::kAccent, ui::kAccent);
+        const float trackTop = static_cast<float>(centerY) - 2.5f;
+        fillPill(
+            static_cast<float>(slider.left),
+            trackTop,
+            static_cast<float>(slider.right - slider.left),
+            5.0f,
+            2.5f,
+            ui::kSliderTrack);
+        const float activeW = static_cast<float>(knobX - slider.left);
+        if (activeW > 1.0f) {
+            fillPill(
+                static_cast<float>(slider.left),
+                trackTop,
+                activeW,
+                5.0f,
+                2.5f,
+                ui::kAccent);
+        }
+
+        const float kx = static_cast<float>(knobX);
+        const float ky = static_cast<float>(centerY);
+        Gdiplus::SolidBrush haloBrush(toGdiColor(ui::kAccent, 52));
+        graphics.FillEllipse(&haloBrush, kx - 9.0f, ky - 9.0f, 18.0f, 18.0f);
+        Gdiplus::SolidBrush knobFill(toGdiColor(ui::kCard));
+        graphics.FillEllipse(&knobFill, kx - 6.5f, ky - 6.5f, 13.0f, 13.0f);
+        Gdiplus::Pen knobRing(toGdiColor(ui::kAccentStrong), 2.0f);
+        graphics.DrawEllipse(&knobRing, kx - 6.5f, ky - 6.5f, 13.0f, 13.0f);
+        Gdiplus::SolidBrush knobInner(toGdiColor(ui::kAccent));
+        graphics.FillEllipse(&knobInner, kx - 2.8f, ky - 2.8f, 5.6f, 5.6f);
+    }
 
     const wchar_t* labels[3] = {L"复制贴图", L"另存为...", L"关闭贴图"};
     for (int row = 0; row < 3; ++row) {
@@ -216,15 +257,55 @@ RECT MenuRowRect(int row) {
         ui::FillRoundRect(dc, rect, 10, fill, border);
 
         const int cy = static_cast<int>((rect.top + rect.bottom) / 2);
-        RECT dot{26, cy - 4, 34, cy + 4};
-        const COLORREF dotColor = danger ? ui::kDanger : ui::kAccent;
-        ui::FillRoundRect(dc, dot, 8, dotColor, dotColor);
+        const COLORREF iconTone = danger ? ui::kDanger : ui::kAccentAction;
+        RECT iconPlate{22, cy - 11, 44, cy + 11};
+        ui::FillRoundRect(
+            dc,
+            iconPlate,
+            7,
+            ui::BlendRatio(iconTone, ui::kCard, 1, 5),
+            ui::BlendRatio(iconTone, ui::kBorder, 2, 3));
 
+        {
+            Gdiplus::Graphics graphics(dc);
+            graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+            const float cx = 33.0f;
+            const float fcy = static_cast<float>(cy);
+            Gdiplus::Pen iconPen(
+                Gdiplus::Color(255, GetRValue(iconTone), GetGValue(iconTone), GetBValue(iconTone)),
+                1.45f);
+            iconPen.SetStartCap(Gdiplus::LineCapRound);
+            iconPen.SetEndCap(Gdiplus::LineCapRound);
+            iconPen.SetLineJoin(Gdiplus::LineJoinRound);
+            if (row == 0) {
+                graphics.DrawRectangle(&iconPen, cx - 2.0f, fcy - 2.0f, 6.5f, 6.5f);
+                graphics.DrawLine(&iconPen, cx - 4.5f, fcy + 1.5f, cx - 4.5f, fcy - 4.5f);
+                graphics.DrawLine(&iconPen, cx - 4.5f, fcy - 4.5f, cx + 1.5f, fcy - 4.5f);
+            } else if (row == 1) {
+                graphics.DrawLine(&iconPen, cx, fcy - 5.0f, cx, fcy + 2.0f);
+                graphics.DrawLine(&iconPen, cx - 3.0f, fcy - 1.0f, cx, fcy + 2.0f);
+                graphics.DrawLine(&iconPen, cx + 3.0f, fcy - 1.0f, cx, fcy + 2.0f);
+                graphics.DrawLine(&iconPen, cx - 4.5f, fcy + 4.8f, cx + 4.5f, fcy + 4.8f);
+            } else {
+                graphics.DrawLine(&iconPen, cx - 3.5f, fcy - 3.5f, cx + 3.5f, fcy + 3.5f);
+                graphics.DrawLine(&iconPen, cx + 3.5f, fcy - 3.5f, cx - 3.5f, fcy + 3.5f);
+            }
+        }
+
+        SelectObject(dc, bodyFont);
         SetTextColor(dc, danger ? ui::kDanger : ui::kText);
         RECT textRect = rect;
-        textRect.left = 44;
-        textRect.right -= 10;
+        textRect.left = 53;
+        textRect.right -= danger ? 72 : 12;
         DrawTextW(dc, labels[row], -1, &textRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
+        if (danger) {
+            SelectObject(dc, smallFont);
+            SetTextColor(dc, ui::kMutedText);
+            RECT hintRect = rect;
+            hintRect.right -= 12;
+            DrawTextW(dc, L"双击关闭", -1, &hintRect, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+        }
     }
 
     if (state->hasFocus) {
@@ -304,16 +385,17 @@ const COLORREF& kSecondaryBg = ui::kCream;
 const COLORREF& kSecondaryPressed = ui::kPressed;'''
     text = replace_once(text, old_colors, new_colors, "OCR shared palette")
     # 2. 保持角标形状统一，并保留选区对应显示器的定位方式。
-    text = replace_or_keep(
-        text,
-        "    const RECT dotRect{18, 18, 28, 28};\n"
-        "    HBRUSH accentBrush = CreateSolidBrush(kAccent);\n"
-        "    FillRect(dc, &dotRect, accentBrush);\n"
-        "    DeleteObject(accentBrush);",
-        "    const RECT dotRect{18, 18, 28, 28};\n"
-        "    ui::FillRoundRect(dc, dotRect, 4, kAccent, kAccent);",
-        "OCR rounded accent marker",
-    )
+    if "ui::FillRoundRect(dc, dotRect," not in text:
+        text = replace_or_keep(
+            text,
+            "    const RECT dotRect{18, 18, 28, 28};\n"
+            "    HBRUSH accentBrush = CreateSolidBrush(kAccent);\n"
+            "    FillRect(dc, &dotRect, accentBrush);\n"
+            "    DeleteObject(accentBrush);",
+            "    const RECT dotRect{18, 18, 28, 28};\n"
+            "    ui::FillRoundRect(dc, dotRect, 4, kAccent, kAccent);",
+            "OCR rounded accent marker",
+        )
     text = replace_or_keep(
         text,
         "    HMONITOR monitor = MonitorFromWindow(owner, MONITOR_DEFAULTTONEAREST);",

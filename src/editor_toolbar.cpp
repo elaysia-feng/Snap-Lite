@@ -896,16 +896,22 @@ private:
                 static_cast<float>(r.right - r.left), static_cast<float>(r.bottom - r.top));
             if (active || hovered) {
                 const COLORREF fill = pressed ? ui::kPressed : active ? ui::kHover : ui::kCard;
-                FillRoundRect(g, button, 8.0f, ToGdiColor(fill));
-                DrawRoundRectBorder(g, button, 8.0f,
-                                    active || pressed ? ui::kAccentStrong : ui::kBorder);
+                FillRoundRect(g, button, 10.0f, ToGdiColor(fill));
+                DrawRoundRectBorder(g, button, 10.0f,
+                                    active || pressed ? ui::kAccentStrong : ui::kAccent);
+                if (hovered && !active) {
+                    const Gdiplus::RectF innerGlow(
+                        button.X + 1.5f, button.Y + 1.5f,
+                        button.Width - 3.0f, button.Height - 3.0f);
+                    DrawRoundRectBorder(g, innerGlow, 8.5f, ui::Blend(ui::kHover, ui::kCard));
+                }
             }
             if (active) {
                 // 下沿强调当前工具；焦点描边提示截图窗口当前接收键盘快捷键。
                 FillRoundRect(g,
-                    Gdiplus::RectF(button.X + 15.0f, button.GetBottom() - 3.0f,
-                                   button.Width - 30.0f, 2.0f),
-                    1.0f, ToGdiColor(ui::kAccentStrong));
+                    Gdiplus::RectF(button.X + 13.0f, button.GetBottom() - 3.5f,
+                                   button.Width - 26.0f, 2.5f),
+                    1.25f, ToGdiColor(ui::kAccentStrong));
                 if (parentFocused) {
                     Gdiplus::Pen focus(ToGdiColor(ui::kAccent), 1.0f);
                     focus.SetDashStyle(Gdiplus::DashStyleDot);
@@ -913,7 +919,7 @@ private:
                                     button.Width - 6.0f, button.Height - 6.0f);
                 }
             }
-            SetTextColor(mem, active ? RGB(88, 55, 69) : RGB(82, 70, 78));
+            SetTextColor(mem, active ? ui::kAccentAction : ui::kText);
             toolbaricons_gdi::DrawTextOrIcon(mem, kToolLabels[i], -1, &r, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         }
 
@@ -927,13 +933,13 @@ private:
                     static_cast<float>(r.left), static_cast<float>(r.top),
                     static_cast<float>(r.right - r.left), static_cast<float>(r.bottom - r.top));
                 const COLORREF fill = cancel
-                    ? (pressed ? RGB(250, 220, 224) : ui::kDangerHover)
+                    ? (pressed ? ui::Blend(ui::kDangerHover, ui::kPressed) : ui::kDangerHover)
                     : (pressed ? ui::kPressed : ui::kHover);
-                FillRoundRect(g, button, 8.0f, ToGdiColor(fill));
-                DrawRoundRectBorder(g, button, 8.0f, cancel ? ui::kDanger : ui::kBorder);
+                FillRoundRect(g, button, 10.0f, ToGdiColor(fill));
+                DrawRoundRectBorder(g, button, 10.0f, cancel ? ui::kDanger : ui::kAccent);
             }
             SetTextColor(mem, static_cast<PrimaryAction>(i) == PrimaryAction::Cancel
-                                  ? ui::kDanger : RGB(82, 70, 78));
+                                  ? ui::kDanger : ui::kText);
             toolbaricons_gdi::DrawTextOrIcon(mem, kActionLabels[i], -1, &r, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         }
 
@@ -951,26 +957,35 @@ private:
                 const float cx = static_cast<float>(r.left + r.right) / 2.0f;
                 const float cy = static_cast<float>(r.top + r.bottom) / 2.0f;
                 if (selected || hovered) {
+                    const Gdiplus::RectF swatchCard(
+                        static_cast<float>(r.left + 1),
+                        static_cast<float>(r.top + 1),
+                        static_cast<float>(r.right - r.left - 2),
+                        static_cast<float>(r.bottom - r.top - 2));
                     FillRoundRect(
                         g,
-                        Gdiplus::RectF(
-                            static_cast<float>(r.left + 1),
-                            static_cast<float>(r.top + 1),
-                            static_cast<float>(r.right - r.left - 2),
-                            static_cast<float>(r.bottom - r.top - 2)),
+                        swatchCard,
                         10.0f,
                         ToGdiColor(pressed ? ui::kPressed : selected ? ui::kHover : ui::kCard));
+                    DrawRoundRectBorder(
+                        g,
+                        swatchCard,
+                        10.0f,
+                        selected || pressed ? ui::kAccentStrong : ui::kBorder);
                 }
 
+                if (selected || pressed) {
+                    Gdiplus::Pen outerRing(ToGdiColor(ui::kAccentStrong), 1.6f);
+                    g.DrawEllipse(&outerRing, cx - 9.0f, cy - 9.0f, 18.0f, 18.0f);
+                }
                 Gdiplus::SolidBrush halo(Gdiplus::Color(255, 255, 255, 255));
                 g.FillEllipse(&halo, cx - 8.0f, cy - 8.0f, 16.0f, 16.0f);
                 Gdiplus::SolidBrush swatch(Gdiplus::Color(
                     255, GetRValue(item.color), GetGValue(item.color), GetBValue(item.color)));
-                g.FillEllipse(&swatch, cx - 6.5f, cy - 6.5f, 13.0f, 13.0f);
+                g.FillEllipse(&swatch, cx - 6.2f, cy - 6.2f, 12.4f, 12.4f);
                 Gdiplus::Pen border(
-                    ToGdiColor(selected || pressed ? ui::kAccentStrong
-                                                   : hovered ? ui::kAccent : ui::kBorder),
-                    selected || pressed ? 1.8f : 1.0f);
+                    ToGdiColor(hovered && !selected ? ui::kAccent : ui::kBorder),
+                    1.0f);
                 g.DrawEllipse(&border, cx - 7.5f, cy - 7.5f, 15.0f, 15.0f);
                 continue;
             }
@@ -983,16 +998,33 @@ private:
                 DrawRoundRectBorder(g,
                     Gdiplus::RectF(static_cast<float>(r.left), static_cast<float>(r.top),
                                    static_cast<float>(r.right-r.left), static_cast<float>(r.bottom-r.top)),
-                    10.0f, selected || pressed ? ui::kAccentStrong : ui::kBorder);
+                    10.0f, selected || pressed ? ui::kAccentStrong : ui::kAccent);
             }
-            SetTextColor(mem, selected ? RGB(88, 55, 69) : RGB(82, 70, 78));
+            if (selected) {
+                const float midX = static_cast<float>(r.left + r.right) / 2.0f;
+                FillRoundRect(
+                    g,
+                    Gdiplus::RectF(midX - 5.0f, static_cast<float>(r.bottom) - 3.0f, 10.0f, 2.0f),
+                    1.0f,
+                    ToGdiColor(ui::kAccentStrong));
+            }
+            SetTextColor(mem, selected ? ui::kAccentAction : ui::kText);
             toolbaricons_gdi::DrawTextOrIcon(mem, item.label.c_str(), -1, &r,
                       DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
         }
 
         RECT hint{kPad, kPrimaryHeight + kSecondaryHeight, kToolbarWidth-kPad, kToolbarHeight};
+        const int hintCenterY = (hint.top + hint.bottom) / 2;
+        FillRoundRect(
+            g,
+            Gdiplus::RectF(static_cast<float>(hint.left + 2),
+                           static_cast<float>(hintCenterY - 3),
+                           6.0f, 6.0f),
+            3.0f, ToGdiColor(ui::kAccentStrong));
+        RECT hintTextRect = hint;
+        hintTextRect.left += 13;
         SetTextColor(mem, ui::kMutedText);
-        DrawTextW(mem, HintText().c_str(), -1, &hint,
+        DrawTextW(mem, HintText().c_str(), -1, &hintTextRect,
                   DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 
         SelectObject(mem, oldFont);

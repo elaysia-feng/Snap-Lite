@@ -249,4 +249,19 @@ inline COLORREF Blend(COLORREF a, COLORREF b) {
         (GetBValue(a) + GetBValue(b)) / 2);
 }
 
+inline COLORREF BlendRatio(COLORREF a, COLORREF b, int weightA, int weightB) {
+    const int total = weightA + weightB;
+    if (total <= 0) return a;
+    return RGB(
+        (GetRValue(a) * weightA + GetRValue(b) * weightB) / total,
+        (GetGValue(a) * weightA + GetGValue(b) * weightB) / total,
+        (GetBValue(a) * weightA + GetBValue(b) * weightB) / total);
+}
+
+inline void DrawAccentBadge(HDC dc, const RECT& rect, int radius, COLORREF accentColor) {
+    const COLORREF fill = BlendRatio(accentColor, kCard, 1, 5);
+    const COLORREF border = BlendRatio(accentColor, kBorder, 3, 2);
+    FillRoundRect(dc, rect, radius, fill, border);
+}
+
 }  // namespace snaplite::ui

@@ -740,7 +740,7 @@ inline void DrawAnimeDividers(
     int actionStart,
     int primaryHeight,
     int secondaryHeight) {
-    Gdiplus::Pen divider(Gdiplus::Color(255, 239, 226, 231), 1.0f);
+    Gdiplus::Pen divider(ToColor(snaplite::ui::kBorder, 185), 1.0f);
     if (height > primaryHeight) {
         graphics.DrawLine(
             &divider,
@@ -756,7 +756,7 @@ inline void DrawAnimeDividers(
 
     const int splitRight = std::min(width - 12, primaryWidth - 8);
     if (actionStart > 14 && actionStart < splitRight) {
-        Gdiplus::Pen split(Gdiplus::Color(255, 232, 214, 221), 1.0f);
+        Gdiplus::Pen split(ToColor(snaplite::ui::kBorder, 235), 1.0f);
         graphics.DrawLine(
             &split,
             static_cast<float>(actionStart),
@@ -782,8 +782,9 @@ inline void DrawAnimeBackdrop(
         12,
         std::min(right, primaryWidth > 0 ? primaryWidth - 2 : right));
     const RECT shadow{2, 4, right, std::max(7L, all.bottom - 1)};
+    const COLORREF shadowColor = snaplite::ui::Blend(snaplite::ui::kBorder, snaplite::ui::kSurface);
     snaplite::ui::FillRoundRect(
-        dc, shadow, 20, RGB(238, 222, 228), RGB(238, 222, 228));
+        dc, shadow, 20, shadowColor, shadowColor);
 
     if (all.bottom > primaryHeight) {
         const RECT secondary{
@@ -792,12 +793,20 @@ inline void DrawAnimeBackdrop(
             right,
             std::max(primaryHeight, static_cast<int>(all.bottom) - 2)};
         snaplite::ui::FillRoundRect(
-            dc, secondary, 18, RGB(255, 252, 250), snaplite::ui::kBorder);
+            dc,
+            secondary,
+            18,
+            snaplite::ui::Blend(snaplite::ui::kCream, snaplite::ui::kCard),
+            snaplite::ui::kBorder);
     }
 
     const RECT primary{3, 1, topRight, primaryHeight - 1};
     snaplite::ui::FillRoundRect(
-        dc, primary, 20, RGB(255, 253, 252), snaplite::ui::kBorder);
+        dc,
+        primary,
+        20,
+        snaplite::ui::Blend(snaplite::ui::kSurface, snaplite::ui::kCard),
+        snaplite::ui::kBorder);
 }
 
 inline int DrawTextOrIcon(HDC dc, LPCWSTR text, int count, LPRECT rect, UINT format) {

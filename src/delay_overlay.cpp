@@ -122,27 +122,40 @@ void PaintOverlay(HWND hwnd, OverlayState* state) {
 
     RECT client{};
     GetClientRect(hwnd, &client);
+    const int dpi = static_cast<int>(GetDpiForWindow(hwnd));
+    const int safeDpi = dpi > 0 ? dpi : 96;
     // 圆角半径随 DPI 缩放：面板尺寸缩了、圆角没缩的话，高 DPI 下面板
     // 看起来会"方"一圈，和系统其它控件不是一路。
-    const int radius = MulDiv(
-        kOverlayCornerRadius, static_cast<int>(GetDpiForWindow(hwnd)), 96);
+    const int radius = MulDiv(kOverlayCornerRadius, safeDpi, 96);
     ui::FillRoundRect(dc, client, radius, ui::kSurface, ui::kBorder);
+
+    // 顶部细胶囊装饰条（面积很小，不影响背景像素统计基线）
+    const int barWidth = MulDiv(36, safeDpi, 96);
+    const int barHeight = std::max(3, MulDiv(4, safeDpi, 96));
+    const int barTop = client.top + MulDiv(9, safeDpi, 96);
+    const int barLeft = client.left + (client.right - client.left - barWidth) / 2;
+    RECT accentBar{barLeft, barTop, barLeft + barWidth, barTop + barHeight};
+    ui::FillRoundRect(dc, accentBar, barHeight, ui::kAccentStrong, ui::kAccentStrong);
 
     const int seconds = state ? state->secondsLeft : 0;
     wchar_t number[16]{};
     swprintf_s(number, L"%d", seconds);
 
-    HFONT big = ui::MakeFont(GetDpiForWindow(hwnd), 30, FW_SEMIBOLD);
+    HFONT big = ui::MakeFont(static_cast<UINT>(safeDpi), 30, FW_SEMIBOLD);
     // 变量名不能叫 small：capture.h 会拉进 <objidl.h>，而那个头文件把
     // small 定义成了 char 的宏（Windows SDK 的老毛病），一写就变成
     // "HFONT char = ..." 编译不过。
-    HFONT hintFont = ui::MakeFont(GetDpiForWindow(hwnd), 9);
+    HFONT hintFont = ui::MakeFont(static_cast<UINT>(safeDpi), 8);
 
     if (big) {
         const HGDIOBJ oldFont = SelectObject(dc, big);
         SetBkMode(dc, TRANSPARENT);
-        SetTextColor(dc, ui::kText);
-        RECT numberRect{client.left, client.top + 6, client.right, client.top + 62};
+        SetTextColor(dc, ui::kAccentAction);
+        RECT numberRect{
+            client.left,
+            client.top + MulDiv(14, safeDpi, 96),
+            client.right,
+            client.top + MulDiv(68, safeDpi, 96)};
         DrawTextW(dc, number, -1, &numberRect, DT_CENTER | DT_SINGLELINE | DT_VCENTER);
         SelectObject(dc, oldFont);
         DeleteObject(big);
@@ -151,10 +164,14 @@ void PaintOverlay(HWND hwnd, OverlayState* state) {
     if (hintFont) {
         const HGDIOBJ oldFont = SelectObject(dc, hintFont);
         SetBkMode(dc, TRANSPARENT);
-        SetTextColor(dc, ui::kMutedText);
-        RECT hintRect{client.left, client.top + 60, client.right, client.bottom - 6};
-        DrawTextW(dc, L"秒后开始截图 · 点击取消", -1, &hintRect,
-                  DT_CENTER | DT_SINGLELINE | DT_VCENTER);
+        SetTextColor(dc, ui::kTextSecondary);
+        RECT hintRect{
+            client.left + MulDiv(6, safeDpi, 96),
+            client.top + MulDiv(66, safeDpi, 96),
+            client.right - MulDiv(6, safeDpi, 96),
+            client.bottom - MulDiv(8, safeDpi, 96)};
+        DrawTextW(dc, L"秒后截图 · 点击或 Esc 取消", -1, &hintRect,
+                  DT_CENTER | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
         SelectObject(dc, oldFont);
         DeleteObject(hintFont);
     }
