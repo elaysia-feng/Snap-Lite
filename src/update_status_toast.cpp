@@ -232,7 +232,9 @@ void PaintToast(HWND hwnd, ToastState* state) {
         const int pillWidth = static_cast<int>(versionSize.cx) + Scale(state, 14);
         const int pillHeight = Scale(state, 20);
         const int pillTop = Scale(state, 15);
-        versionLeft = std::max(margin + Scale(state, 128), state->closeRect.left - Scale(state, 8) - pillWidth);
+        versionLeft = std::max<int>(
+            margin + Scale(state, 128),
+            static_cast<int>(state->closeRect.left) - Scale(state, 8) - pillWidth);
         RECT versionPill{versionLeft, pillTop, versionLeft + pillWidth, pillTop + pillHeight};
         if (versionPill.right <= state->closeRect.left - Scale(state, 6)) {
             ui::FillRoundRect(dc, versionPill, Scale(state, 10), ui::kCream, ui::kBorder);
