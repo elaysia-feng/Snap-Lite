@@ -32,7 +32,9 @@ constexpr UINT WM_PIN_MENU_CLOSED = WM_APP + 105;
 
 constexpr int kMenuWidth = 244;
 constexpr int kMenuHeight = 196;
-constexpr BYTE kMinOpacity = 26;
+constexpr int kOpacityControlWidth = 148;
+constexpr int kOpacityControlHeight = 44;
+constexpr BYTE kMinOpacity = 0;
 constexpr UINT_PTR kPinHudTimerId = 1;
 constexpr SIZE_T kMaxClipboardPayloadBytes = 512ull * 1024ull * 1024ull;
 
@@ -51,7 +53,39 @@ struct PinMenuState {
     bool hasFocus{};
     int hoverRow{-1};
     int pressedRow{-1};
+    bool opacityControl{};
 };
+
+constexpr RECT kOpacityTrack{14, 26, kOpacityControlWidth - 14, 38};
+
+void PaintOpacityControl(HWND hwnd, BYTE opacity) {
+    PAINTSTRUCT ps{};
+    HDC dc = BeginPaint(hwnd, &ps);
+    RECT client{};
+    GetClientRect(hwnd, &client);
+    ui::FillRoundRect(dc, client, 12, ui::kSurface, ui::kBorder);
+
+    const int percent = MulDiv(opacity, 100, 255);
+    wchar_t label[32]{};
+    swprintf_s(label, L"透明度 %d%%", percent);
+    HFONT font = ui::MakeFont(GetDpiForWindow(hwnd), 9, FW_SEMIBOLD);
+    HGDIOBJ oldFont = font ? SelectObject(dc, font) : nullptr;
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, ui::kText);
+    RECT labelRect{0, 2, kOpacityControlWidth, 24};
+    DrawTextW(dc, label, -1, &labelRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+    const int knobX = kOpacityTrack.left +
+        MulDiv(percent, kOpacityTrack.right - kOpacityTrack.left, 100);
+    const int centerY = (kOpacityTrack.top + kOpacityTrack.bottom) / 2;
+    ui::FillSolid(dc, {kOpacityTrack.left, centerY - 2, kOpacityTrack.right, centerY + 2}, ui::kSliderTrack);
+    ui::FillSolid(dc, {kOpacityTrack.left, centerY - 2, knobX, centerY + 2}, ui::kAccent);
+    ui::FillRoundRect(dc, {knobX - 6, centerY - 6, knobX + 6, centerY + 6},
+                      12, ui::kCard, ui::kAccentStrong);
+    if (oldFont) SelectObject(dc, oldFont);
+    if (font) DeleteObject(font);
+    EndPaint(hwnd, &ps);
+}
 
 RECT SliderRect() {
     return {20, 48, kMenuWidth - 20, 64};
@@ -95,15 +129,19 @@ int SliderXFromOpacity(BYTE opacity) {
            static_cast<int>(ratio * (slider.right - slider.left));
 }
 
-void UpdateMenuOpacity(HWND hwnd, PinMenuState* state, int x) {
-    if (!state) {
-        return;
+void UpdateMenuOpacity(PinMenuState* state, int x) {
+    BYTE opacity{};
+    if (state->opacityControl) {
+        const int offset = std::clamp(x, static_cast<int>(kOpacityTrack.left),
+                                       static_cast<int>(kOpacityTrack.right)) - kOpacityTrack.left;
+        const int percent = MulDiv(offset, 100, kOpacityTrack.right - kOpacityTrack.left);
+        opacity = static_cast<BYTE>(MulDiv(percent, 255, 100));
+    } else {
+        opacity = OpacityFromX(x);
     }
-    state->opacity = OpacityFromX(x);
     if (state->owner && IsWindow(state->owner)) {
-        SendMessageW(state->owner, WM_PIN_SET_OPACITY, state->opacity, 0);
+        SendMessageW(state->owner, WM_PIN_SET_OPACITY, opacity, 0);
     }
-    InvalidateRect(hwnd, nullptr, FALSE);
 }
 
 void PaintPinMenu(HWND hwnd, PinMenuState* state) {
@@ -210,12 +248,16 @@ LRESULT CALLBACK PinMenuWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARA
 
     if (message == WM_NCCREATE) {
         auto* create = reinterpret_cast<CREATESTRUCTW*>(lParam);
-        state = static_cast<PinMenuState*>(create->lpCreateParams);
+        state = new PinMenuState(*static_cast<const PinMenuState*>(create->lpCreateParams));
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(state));
     }
 
     switch (message) {
     case WM_CREATE: {
+        if (state && state->opacityControl) {
+            ui::SetRoundedWindowRegion(hwnd, 12);
+            return 0;
+        }
         HRGN region = CreateRoundRectRgn(0, 0, kMenuWidth + 1, kMenuHeight + 1, 18, 18);
         if (region && SetWindowRgn(hwnd, region, TRUE) == 0) {
             DeleteObject(region);
@@ -223,8 +265,18 @@ LRESULT CALLBACK PinMenuWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARA
         return 0;
     }
     case WM_PAINT:
-        PaintPinMenu(hwnd, state);
+        if (state && state->opacityControl) {
+            PaintOpacityControl(hwnd, state->opacity);
+        } else {
+            PaintPinMenu(hwnd, state);
+        }
         return 0;
+    case WM_MOUSEWHEEL:
+    case WM_RBUTTONUP:
+        if (state && state->opacityControl) {
+            return SendMessageW(state->owner, message, wParam, lParam);
+        }
+        break;
     case WM_ERASEBKGND:
         return 1;
     case WM_SETFOCUS:
@@ -244,10 +296,10 @@ LRESULT CALLBACK PinMenuWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARA
         }
         POINT point{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
         if (state->dragging) {
-            UpdateMenuOpacity(hwnd, state, point.x);
+            UpdateMenuOpacity(state, point.x);
             return 0;
         }
-        const int hover = HitMenuRow(point);
+        const int hover = state->opacityControl ? -1 : HitMenuRow(point);
         if (hover != state->hoverRow) {
             state->hoverRow = hover;
             InvalidateRect(hwnd, nullptr, FALSE);
@@ -268,13 +320,16 @@ LRESULT CALLBACK PinMenuWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARA
             return 0;
         }
         POINT point{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
-        RECT slider = SliderRect();
-        InflateRect(&slider, 0, 8);
+        RECT slider = state->opacityControl ? kOpacityTrack : SliderRect();
+        InflateRect(&slider, state->opacityControl ? 8 : 0, state->opacityControl ? 4 : 8);
         if (PtInRect(&slider, point)) {
             state->dragging = true;
             SetCapture(hwnd);
-            UpdateMenuOpacity(hwnd, state, point.x);
+            UpdateMenuOpacity(state, point.x);
             return 0;
+        }
+        if (state->opacityControl) {
+            return SendMessageW(state->owner, WM_LBUTTONDOWN, wParam, lParam);
         }
 
         const int row = HitMenuRow(point);
@@ -302,20 +357,23 @@ LRESULT CALLBACK PinMenuWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARA
         }
         return 0;
     case WM_KEYDOWN:
+        if (state && state->opacityControl) {
+            return SendMessageW(state->owner, message, wParam, lParam);
+        }
         if (wParam == VK_ESCAPE) {
             DestroyWindow(hwnd);
             return 0;
         }
         break;
     case WM_ACTIVATE:
-        if (LOWORD(wParam) == WA_INACTIVE && state && !state->dragging) {
+        if (LOWORD(wParam) == WA_INACTIVE && state && !state->dragging && !state->opacityControl) {
             DestroyWindow(hwnd);
             return 0;
         }
         break;
     case WM_NCDESTROY:
         if (state) {
-            if (state->owner && IsWindow(state->owner)) {
+            if (!state->opacityControl && state->owner && IsWindow(state->owner)) {
                 PostMessageW(state->owner, WM_PIN_MENU_CLOSED, reinterpret_cast<WPARAM>(hwnd), 0);
             }
             delete state;
@@ -329,7 +387,7 @@ LRESULT CALLBACK PinMenuWindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARA
     return DefWindowProcW(hwnd, message, wParam, lParam);
 }
 
-HWND CreatePinMenu(HWND owner, BYTE opacity, POINT cursor) {
+HWND CreatePinMenu(HWND owner, BYTE opacity, POINT cursor, bool opacityControl = false) {
     MONITORINFO monitorInfo{};
     monitorInfo.cbSize = sizeof(monitorInfo);
     HMONITOR monitor = MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST);
@@ -337,18 +395,19 @@ HWND CreatePinMenu(HWND owner, BYTE opacity, POINT cursor) {
 
     int x = cursor.x;
     int y = cursor.y;
-    if (x + kMenuWidth > monitorInfo.rcWork.right) {
+    if (!opacityControl && x + kMenuWidth > monitorInfo.rcWork.right) {
         x = static_cast<int>(monitorInfo.rcWork.right) - kMenuWidth;
     }
-    if (y + kMenuHeight > monitorInfo.rcWork.bottom) {
+    if (!opacityControl && y + kMenuHeight > monitorInfo.rcWork.bottom) {
         y = static_cast<int>(monitorInfo.rcWork.bottom) - kMenuHeight;
     }
     x = std::max(x, static_cast<int>(monitorInfo.rcWork.left));
     y = std::max(y, static_cast<int>(monitorInfo.rcWork.top));
 
-    auto* state = new PinMenuState{};
-    state->owner = owner;
-    state->opacity = opacity;
+    PinMenuState state{};
+    state.owner = owner;
+    state.opacity = opacity;
+    state.opacityControl = opacityControl;
 
     const HINSTANCE hInst =
         reinterpret_cast<HINSTANCE>(GetWindowLongPtrW(owner, GWLP_HINSTANCE));
@@ -360,21 +419,18 @@ HWND CreatePinMenu(HWND owner, BYTE opacity, POINT cursor) {
         WS_POPUP,
         x,
         y,
-        kMenuWidth,
-        kMenuHeight,
+        opacityControl ? kOpacityControlWidth : kMenuWidth,
+        opacityControl ? kOpacityControlHeight : kMenuHeight,
         owner,
         nullptr,
         hInst,
-        state);
+        &state);
 
-    if (!hwnd) {
-        delete state;
-        return nullptr;
+    if (hwnd && !opacityControl) {
+        ShowWindow(hwnd, SW_SHOWNORMAL);
+        UpdateWindow(hwnd);
+        SetForegroundWindow(hwnd);
     }
-
-    ShowWindow(hwnd, SW_SHOWNORMAL);
-    UpdateWindow(hwnd);
-    SetForegroundWindow(hwnd);
     return hwnd;
 }
 
@@ -757,6 +813,11 @@ bool PinWindow::Create(HINSTANCE instance, HBITMAP bitmap) {
     }
     SetLayeredWindowAttributes(hwnd, 0, self->opacity_, LWA_ALPHA);
     ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+    self->opacityControl_ = CreatePinMenu(hwnd, self->opacity_, {x, y}, true);
+    if (self->opacityControl_) {
+        self->PositionOpacityControl();
+        ShowWindow(self->opacityControl_, SW_SHOWNOACTIVATE);
+    }
     UpdateWindow(hwnd);
     return true;
 }
@@ -883,42 +944,53 @@ void PinWindow::ResizeForZoom() {
     y = std::clamp(y, static_cast<int>(monitorInfo.rcWork.top),
                    std::max(static_cast<int>(monitorInfo.rcWork.top), static_cast<int>(monitorInfo.rcWork.bottom) - height));
 
-    SetWindowPos(hwnd_, HWND_TOPMOST, x, y, width, height, SWP_NOACTIVATE);
+    SetWindowPos(hwnd_, nullptr, x, y, width, height, SWP_NOACTIVATE | SWP_NOZORDER);
     InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
 void PinWindow::AdjustZoom(int wheelDelta) {
+    if (wheelDelta == 0) return;
     zoom_ *= wheelDelta > 0 ? 1.1 : (1.0 / 1.1);
-    zoom_ = std::clamp(zoom_, 0.1, 8.0);
+    ResizeForZoom();
     wchar_t buf[32]{};
     swprintf_s(buf, L"缩放 %d%%", static_cast<int>(zoom_ * 100.0 + 0.5));
     hudText_ = buf;
     hudExpireTick_ = GetTickCount64() + 900ull;
-    ResizeForZoom();
     if (hwnd_) {
         SetTimer(hwnd_, kPinHudTimerId, 900, nullptr);
     }
 }
 
 void PinWindow::SetOpacity(BYTE opacity) {
-    opacity_ = static_cast<BYTE>(std::clamp(static_cast<int>(opacity), static_cast<int>(kMinOpacity), 255));
-    if (hwnd_) {
-        SetLayeredWindowAttributes(hwnd_, 0, opacity_, LWA_ALPHA);
+    opacity_ = opacity;
+    SetLayeredWindowAttributes(hwnd_, 0, opacity_, LWA_ALPHA);
+    for (HWND control : {opacityControl_, contextMenu_}) {
+        if (control) {
+            auto* state = reinterpret_cast<PinMenuState*>(GetWindowLongPtrW(control, GWLP_USERDATA));
+            if (state) {
+                state->opacity = opacity_;
+                InvalidateRect(control, nullptr, FALSE);
+            }
+        }
     }
 }
 
-void PinWindow::AdjustOpacity(int wheelDelta) {
-    const int next = static_cast<int>(opacity_) + (wheelDelta > 0 ? 13 : -13);
-    SetOpacity(static_cast<BYTE>(std::clamp(next, static_cast<int>(kMinOpacity), 255)));
-    const int percent = (static_cast<int>(opacity_) * 100 + 127) / 255;
-    wchar_t buf[32]{};
-    swprintf_s(buf, L"透明度 %d%%", percent);
-    hudText_ = buf;
-    hudExpireTick_ = GetTickCount64() + 900ull;
-    if (hwnd_) {
-        SetTimer(hwnd_, kPinHudTimerId, 900, nullptr);
-        InvalidateRect(hwnd_, nullptr, FALSE);
+void PinWindow::PositionOpacityControl() {
+    if (!opacityControl_) return;
+
+    RECT bounds{};
+    GetWindowRect(hwnd_, &bounds);
+    int x = bounds.left + (bounds.right - bounds.left - kOpacityControlWidth) / 2;
+    int y = bounds.top + (bounds.bottom - bounds.top - kOpacityControlHeight) / 2;
+    MONITORINFO info{sizeof(info)};
+    if (GetMonitorInfoW(MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST), &info)) {
+        x = std::clamp(x, static_cast<int>(info.rcWork.left),
+                       static_cast<int>(std::max(info.rcWork.left, info.rcWork.right - kOpacityControlWidth)));
+        y = std::clamp(y, static_cast<int>(info.rcWork.top),
+                       static_cast<int>(std::max(info.rcWork.top, info.rcWork.bottom - kOpacityControlHeight)));
     }
+    SetWindowPos(opacityControl_, nullptr, x, y, 0, 0,
+                 SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
 }
 
 void PinWindow::ShowContextMenu() {
@@ -1092,12 +1164,12 @@ LRESULT PinWindow::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam) {
         break;
 
     case WM_MOUSEWHEEL:
-        if (GetKeyState(VK_CONTROL) & 0x8000) {
-            AdjustOpacity(GET_WHEEL_DELTA_WPARAM(wParam));
-        } else {
-            AdjustZoom(GET_WHEEL_DELTA_WPARAM(wParam));
-        }
+        AdjustZoom(GET_WHEEL_DELTA_WPARAM(wParam));
         return 0;
+
+    case WM_WINDOWPOSCHANGED:
+        PositionOpacityControl();
+        break;
 
     case WM_LBUTTONDOWN:
         if (contextMenu_ && IsWindow(contextMenu_)) {

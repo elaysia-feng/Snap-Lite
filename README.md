@@ -32,7 +32,7 @@ OCR 使用 Windows 系统能力，需安装对应语言包。识别在后台线�
 
 截图可保存为 PNG，并通过剪贴板提供图片和文件表示。能否直接粘贴到终端工具取决于该工具自身是否支持图片输入。
 
-贴图支持置顶、拖动、滚轮缩放和 `Ctrl + 滚轮` 调整透明度；双击或通过右键菜单关闭。托盘菜单可设置默认保存目录和当前用户开机启动。
+贴图支持置顶和拖动。鼠标滚轮上滑放大、下滑缩小。拖动贴图中央的滑块可将透明度调到 0–100%，其中 0% 隐藏图片，100% 完全显示。双击或通过右键菜单关闭贴图。托盘菜单可设置默认保存目录和当前用户开机启动。
 
 ## 自动更新
 
@@ -114,5 +114,5 @@ python scripts/verify_generated_sources.py build
 发布版本号解析（纯函数，可单测）：
 
 ```powershell
-python scripts/resolve_release_version.py --base-version 1.7.16
+python scripts/resolve_release_version.py --base-version 1.7.17
 ```

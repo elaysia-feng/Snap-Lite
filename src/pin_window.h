@@ -35,8 +35,8 @@ private:
     void ResizeForZoom();
     void RebuildScaledBitmap(int width, int height);
     void AdjustZoom(int wheelDelta);
-    void AdjustOpacity(int wheelDelta);
     void SetOpacity(BYTE opacity);
+    void PositionOpacityControl();
     void ShowContextMenu();
     void CopyPin();
     void SavePinAs();
@@ -44,6 +44,7 @@ private:
     HINSTANCE instance_{};
     HWND hwnd_{};
     HWND contextMenu_{};
+    HWND opacityControl_{};
     HBITMAP bitmap_{};
     // 按当前窗口尺寸预先缩放好的位图。贴图尺寸不变时重绘直接复用，
     // 不用每次都把整幅原图重新拉伸一遍。

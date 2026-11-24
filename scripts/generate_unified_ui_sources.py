@@ -170,7 +170,7 @@ RECT MenuRowRect(int row) {
 
     SetTextColor(dc, ui::kMutedText);
     RECT subtitle{16, 34, kMenuWidth - 16, 54};
-    DrawTextW(dc, L"滚轮缩放 · Ctrl+滚轮调透明度", -1, &subtitle,
+    DrawTextW(dc, L"滚轮上滑放大，下滑缩小", -1, &subtitle,
               DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 
     RECT opacityCard{14, 58, kMenuWidth - 14, 119};
